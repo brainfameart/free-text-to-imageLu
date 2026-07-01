@@ -19,6 +19,7 @@
 import { CAMERA } from "../../runtime/components/Camera.js";
 import { TRANSFORM } from "../../runtime/components/Transform.js";
 import { getCameraResolution } from "../../runtime/core/CameraUtils.js";
+import { getAllSpriteAssets } from "../../runtime/assets/AssetRegistry.js";
 import { editorState, pushLog } from "../state/EditorState.js";
 
 let playWin = null;
@@ -54,10 +55,20 @@ export function openPlayWindow(game) {
   const { width, height } = getCameraResolution(camera);
   const sceneData = game.getSceneData();
 
+  // The popup boots a completely separate JS module realm (its own
+  // <script type="module"> import graph), so AssetManager.js's texture
+  // cache there starts EMPTY — it never sees the textures the editor
+  // registered. sceneData only carries spriteKey strings, not pixels,
+  // so without this the popup falls back to the pink "missing texture"
+  // marker for every imported sprite. Bundling the imported assets'
+  // dataUrls here lets the popup rebuild real textures from the same
+  // source bytes before it loads the scene.
+  const spriteAssets = getAllSpriteAssets();
+
   // Hand the payload off through window.__ZENGINE_PLAY_PAYLOAD__ so the
   // popup (a separate document/context) can read it on load, regardless
   // of open/reuse timing.
-  window.__ZENGINE_PLAY_PAYLOAD__ = { sceneData, width, height };
+  window.__ZENGINE_PLAY_PAYLOAD__ = { sceneData, width, height, spriteAssets };
 
   if (isPlayWindowOpen()) {
     playWin.location.reload();

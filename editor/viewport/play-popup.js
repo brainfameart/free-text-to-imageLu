@@ -19,8 +19,42 @@
  */
 
 import { createGame } from "../../runtime/index.js";
+import { registerTexture } from "../../runtime/assets/AssetManager.js";
 
-function boot() {
+/**
+ * Rebuilds this popup's own AssetManager texture cache from the
+ * dataUrls handed over in the payload. Required because this popup is
+ * a separate module realm from the editor: its import of
+ * AssetManager.js gets a brand new, empty _textureCache, so any sprite
+ * imported in the editor is otherwise unknown here and falls back to
+ * the pink missing-texture marker.
+ * @param {Array<{key:string,dataUrl:string}>} spriteAssets
+ */
+function loadSpriteAssets(spriteAssets) {
+  const loads = (spriteAssets || []).map(
+    ({ key, dataUrl }) =>
+      new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const baseTexture = PIXI.BaseTexture.from(img);
+            registerTexture(key, new PIXI.Texture(baseTexture));
+          } catch (err) {
+            console.error("[play] Failed to register texture for", key, err);
+          }
+          resolve();
+        };
+        img.onerror = () => {
+          console.error("[play] Failed to decode image asset for", key);
+          resolve();
+        };
+        img.src = dataUrl;
+      })
+  );
+  return Promise.all(loads);
+}
+
+async function boot() {
   const payload = window.opener && window.opener.__ZENGINE_PLAY_PAYLOAD__;
   if (!payload) {
     document.body.innerHTML =
@@ -28,7 +62,12 @@ function boot() {
     return;
   }
 
-  const { sceneData, width, height } = payload;
+  const { sceneData, width, height, spriteAssets } = payload;
+
+  // Register real textures BEFORE the scene loads, so sprite entities
+  // resolve to the actual imported images on their very first frame
+  // instead of momentarily (or permanently) showing the missing marker.
+  await loadSpriteAssets(spriteAssets);
 
   const mount = document.getElementById("game-canvas");
   mount.style.width = width + "px";
