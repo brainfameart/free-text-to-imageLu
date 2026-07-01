@@ -21,6 +21,7 @@ import { drawSceneGrid } from "./SceneGrid.js";
 import { drawCameraGizmo } from "./CameraGizmo.js";
 import { TransformGizmo } from "./TransformGizmo.js";
 import { editorState, pushLog } from "../state/EditorState.js";
+import { attachPixiDiagnostics } from "../state/ConsoleCapture.js";
 import { TRANSFORM, Transform } from "../../runtime/components/Transform.js";
 import { SPRITE_RENDERER, SpriteRenderer } from "../../runtime/components/SpriteRenderer.js";
 import { getSpriteAsset } from "../../runtime/assets/AssetRegistry.js";
@@ -33,6 +34,7 @@ let cameraGizmoContainer = null;
 let transformGizmo = null;
 let game = null;
 let renderFn = null;
+let renderSystem = null;
 
 export function getGame() {
   return game;
@@ -52,10 +54,18 @@ function createViewport(mount, render) {
     resolution: window.devicePixelRatio || 1,
   });
   mount.appendChild(pixiApp.view);
+  attachPixiDiagnostics(pixiApp);
 
   game = createGame({ pixiApp });
   game.loadDefault();
   editorState.world = game.world;
+  // NOTE: game.loop is intentionally never started here — that would run
+  // PhysicsSystem every frame and things would fall/drift while just
+  // editing. Instead we sync ONLY the RenderSystem below (via
+  // syncSpriteRender(), called from mountOrUpdateSceneViewport on every
+  // editor render), so sprites show up immediately without simulating.
+  renderSystem = game.world.systems.find((s) => s.constructor.name === "RenderSystem") || null;
+  syncSpriteRender();
   if (!editorState.selectedId) {
     const mainCamera = game.world.findFirstByName("Main Camera");
     editorState.selectedId = mainCamera ? mainCamera.id : null;
@@ -141,6 +151,7 @@ function attachGizmoPointerEvents(mount) {
 
     const world = clientToWorld(e.clientX, e.clientY);
     transformGizmo.updateDrag(world.x, world.y, transform);
+    syncSpriteRender();
     refreshGizmos();
   });
 
@@ -195,8 +206,25 @@ function attachDropTarget(mount) {
     entity.addComponent(SPRITE_RENDERER, new SpriteRenderer({ spriteKey: asset.key }));
     editorState.selectedId = entity.id;
     pushLog("log", "Placed sprite '" + asset.name + "' in scene.");
+    syncSpriteRender();
     if (renderFn) renderFn();
   });
+}
+
+/**
+ * Runs ONLY RenderSystem.update() against the current world so any
+ * Transform/SpriteRenderer changes (placing a sprite, dragging it,
+ * editing Inspector fields) show up in the Scene view immediately —
+ * without calling game.loop.start(), which would also run PhysicsSystem
+ * and cause objects to fall/drift while just editing.
+ */
+function syncSpriteRender() {
+  if (!renderSystem || !editorState.world) return;
+  try {
+    renderSystem.update(editorState.world, 0);
+  } catch (err) {
+    pushLog("error", "Render sync failed: " + (err && err.message ? err.message : err));
+  }
 }
 
 /**
@@ -229,6 +257,7 @@ export function mountOrUpdateSceneViewport(render) {
     viewportCamera.updateCursor();
   }
 
+  syncSpriteRender();
   refreshGizmos();
 }
 

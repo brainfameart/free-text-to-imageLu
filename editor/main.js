@@ -21,6 +21,11 @@ import { mountOrUpdateSceneViewport, getGame } from "./viewport/SceneViewport.js
 import { openPlayWindow, closePlayWindow, isPlayWindowOpen } from "./viewport/PlayWindow.js";
 import { attachEditorEvents } from "./state/EditorEvents.js";
 import { editorState } from "./state/EditorState.js";
+import { installConsoleCapture } from "./state/ConsoleCapture.js";
+
+// Installed first, before anything else boots, so PIXI's own boot-time
+// warnings/errors and any early uncaught exceptions are captured too.
+installConsoleCapture();
 
 function render() {
   // reflect the popup being closed manually (e.g. the user clicked its
