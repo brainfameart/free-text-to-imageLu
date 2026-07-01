@@ -45,6 +45,38 @@ export function loadImageAssetFromFile(key, file) {
   });
 }
 
+/**
+ * Builds the "missing texture" placeholder: a magenta/black checker
+ * square, the standard game-engine convention for "no texture assigned"
+ * (same idea as Unity/Unreal's pink checker). Using this instead of a
+ * plain white texture means a missing/null spriteKey is immediately
+ * obvious in the viewport rather than silently rendering as a blank
+ * white square that's easy to mistake for "the engine is broken".
+ */
+function buildMissingTexture() {
+  const g = new PIXI.Graphics();
+  const half = 16;
+  g.beginFill(0x000000);
+  g.drawRect(-half, -half, half, half);
+  g.drawRect(0, 0, half, half);
+  g.endFill();
+  g.beginFill(0xff00ff);
+  g.drawRect(0, -half, half, half);
+  g.drawRect(-half, 0, half, half);
+  g.endFill();
+  return g;
+}
+
+function generateTextureFromGraphics(graphics, fallback) {
+  try {
+    if (!window.__zenginePixiApp) return fallback;
+    const generated = window.__zenginePixiApp.renderer.generateTexture(graphics);
+    return generated || fallback;
+  } catch (err) {
+    return fallback;
+  }
+}
+
 function buildPlaceholderTexture(key) {
   const g = new PIXI.Graphics();
   g.beginFill(0xffffff);
@@ -55,15 +87,7 @@ function buildPlaceholderTexture(key) {
     g.drawRect(-16, -16, 32, 32);
   }
   g.endFill();
-
-  const renderer = PIXI.autoDetectRenderer
-    ? PIXI.autoDetectRenderer({ width: 64, height: 64 })
-    : null;
-
-  // Prefer using an Application-less generator when available (PIXI v7/v8 both
-  // expose this on a renderer instance created elsewhere); fall back to a
-  // RenderTexture pipeline lazily created the first time a viewport exists.
-  return g; // RenderSystem accepts a Graphics object as a texture source via PIXI.Texture.from below
+  return g;
 }
 
 /**
@@ -77,33 +101,41 @@ export function registerTexture(key, texture) {
 
 /**
  * Resolve a spriteKey to a PIXI.Texture, generating a placeholder shape
- * texture the first time an unknown built-in key is requested.
+ * texture the first time an unknown built-in key is requested. A null
+ * key or any key that isn't a known built-in / imported asset resolves
+ * to a visible magenta "missing texture" marker rather than a blank
+ * white square, so gaps are obvious instead of silently invisible.
  * @param {string|null} key
  * @returns {PIXI.Texture}
  */
 export function resolveTexture(key) {
-  if (!key) return PIXI.Texture.WHITE;
+  if (!key) return resolveMissingTexture();
 
   if (_textureCache.has(key)) return _textureCache.get(key);
 
   if (key === "square" || key === "capsule") {
     const graphics = buildPlaceholderTexture(key);
-    const texture = PIXI.Texture.WHITE; // safe default; real generation below
-    try {
-      const generated = window.__zenginePixiApp
-        ? window.__zenginePixiApp.renderer.generateTexture(graphics)
-        : texture;
-      _textureCache.set(key, generated);
-      return generated;
-    } catch (err) {
-      _textureCache.set(key, texture);
-      return texture;
-    }
+    const generated = generateTextureFromGraphics(graphics, PIXI.Texture.WHITE);
+    _textureCache.set(key, generated);
+    return generated;
   }
 
-  return PIXI.Texture.WHITE;
+  // Unknown key: not a built-in placeholder and not a registered
+  // imported asset (e.g. scene references a sprite that hasn't loaded
+  // yet, or was deleted). Show the missing-texture marker rather than
+  // failing silently.
+  return resolveMissingTexture();
+}
+
+let _missingTextureCache = null;
+function resolveMissingTexture() {
+  if (_missingTextureCache) return _missingTextureCache;
+  const graphics = buildMissingTexture();
+  _missingTextureCache = generateTextureFromGraphics(graphics, PIXI.Texture.WHITE);
+  return _missingTextureCache;
 }
 
 export function clearTextureCache() {
   _textureCache.clear();
+  _missingTextureCache = null;
 }
