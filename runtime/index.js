@@ -26,6 +26,11 @@ import { getCameraResolution, getCameraWorldRect } from "./core/CameraUtils.js";
  *
  * @param {object} opts
  * @param {PIXI.Application} opts.pixiApp an already-created PIXI Application
+ * @param {boolean} [opts.followMainCamera=false] pass true when pixiApp's
+ *   stage IS the actual game screen (play-mode popup, standalone player)
+ *   so RenderSystem offsets the world by the Main Camera's position.
+ *   Leave false/omitted for the editor's Scene viewport, which drives its
+ *   own free-roam pan/zoom over the same stage instead.
  * @returns {{
  *   world: World,
  *   loop: GameLoop,
@@ -37,11 +42,11 @@ import { getCameraResolution, getCameraWorldRect } from "./core/CameraUtils.js";
  *   validate: () => { ok: boolean, errors: string[] },
  * }}
  */
-export function createGame({ pixiApp }) {
+export function createGame({ pixiApp, followMainCamera = false }) {
   window.__zenginePixiApp = pixiApp; // used by AssetManager for placeholder texture generation
 
   const world = new World();
-  const renderSystem = new RenderSystem(pixiApp.stage);
+  const renderSystem = new RenderSystem(pixiApp.stage, { followMainCamera });
   world.addSystem(new PhysicsSystem());
   world.addSystem(renderSystem);
 

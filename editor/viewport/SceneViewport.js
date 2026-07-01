@@ -186,6 +186,28 @@ function hitTestEntities(worldX, worldY) {
   return null;
 }
 
+/**
+ * Uploaded sprite images can be any native pixel size (a phone photo
+ * might be 3000x4000). Placing them at scale 1:1 would make them cover
+ * the entire scene and read as a giant black/blown-out rectangle rather
+ * than a sprite. This computes a proportional scale so the sprite's
+ * longest side lands at SPRITE_FIT_SIZE px in world space by default —
+ * small enough to see the whole scene around it, still clearly visible.
+ * Small source images (icons, pixel art) are left at 1:1 or upscaled
+ * only up to a modest ceiling, so tiny art doesn't get shrunk further.
+ */
+const SPRITE_FIT_SIZE = 96;
+const SPRITE_MAX_UPSCALE = 2;
+
+function fitSpriteScale(width, height) {
+  if (!width || !height) return { scaleX: 1, scaleY: 1 };
+  const longest = Math.max(width, height);
+  let scale = SPRITE_FIT_SIZE / longest;
+  scale = Math.min(scale, SPRITE_MAX_UPSCALE);
+  scale = Math.round(scale * 1000) / 1000; // avoid ugly float noise in Inspector fields
+  return { scaleX: scale, scaleY: scale };
+}
+
 function attachDropTarget(mount) {
   const el = pixiApp.view;
   el.addEventListener("dragover", (e) => {
@@ -201,8 +223,12 @@ function attachDropTarget(mount) {
     if (!asset) return;
 
     const world = clientToWorld(e.clientX, e.clientY);
+    const { scaleX, scaleY } = fitSpriteScale(asset.width, asset.height);
     const entity = editorState.world.createEntity(asset.name || "Sprite");
-    entity.addComponent(TRANSFORM, new Transform({ x: Math.round(world.x), y: Math.round(world.y) }));
+    entity.addComponent(
+      TRANSFORM,
+      new Transform({ x: Math.round(world.x), y: Math.round(world.y), scaleX, scaleY })
+    );
     entity.addComponent(SPRITE_RENDERER, new SpriteRenderer({ spriteKey: asset.key }));
     editorState.selectedId = entity.id;
     pushLog("log", "Placed sprite '" + asset.name + "' in scene.");

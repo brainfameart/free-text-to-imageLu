@@ -21,7 +21,7 @@ async function boot() {
   });
   mount.appendChild(pixiApp.view);
 
-  const game = createGame({ pixiApp });
+  const game = createGame({ pixiApp, followMainCamera: true });
 
   // Load a scene shipped alongside the game, falling back to the default
   // starter scene if none is found (e.g. running this template directly).

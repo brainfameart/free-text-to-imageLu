@@ -44,7 +44,7 @@ function boot() {
   });
   mount.appendChild(pixiApp.view);
 
-  const game = createGame({ pixiApp });
+  const game = createGame({ pixiApp, followMainCamera: true });
   game.loadFromData(sceneData);
 
   const validation = game.validate();
