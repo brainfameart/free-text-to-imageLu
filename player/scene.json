@@ -1,0 +1,53 @@
+{
+  "sceneName": "Main Scene",
+  "entities": [
+    {
+      "name": "Main Camera",
+      "tag": "MainCamera",
+      "active": true,
+      "components": {
+        "Transform": { "x": 0, "y": 0 },
+        "Camera": { "isMain": true, "backgroundColor": "#314D79" }
+      }
+    },
+    {
+      "name": "Player",
+      "tag": "Player",
+      "active": true,
+      "components": {
+        "Transform": { "x": 0, "y": -100 },
+        "SpriteRenderer": { "spriteKey": "square", "color": "#ffffff" },
+        "Rigidbody2D": { "bodyType": "Dynamic", "mass": 1, "gravityScale": 1 }
+      }
+    },
+    {
+      "name": "Ground",
+      "tag": "Untagged",
+      "active": true,
+      "components": {
+        "Transform": { "x": 0, "y": 200, "scaleX": 10, "scaleY": 1 },
+        "SpriteRenderer": { "spriteKey": "square", "color": "#888888" },
+        "Rigidbody2D": { "bodyType": "Static", "simulated": true }
+      }
+    },
+    {
+      "name": "Enemy",
+      "tag": "Enemy",
+      "active": true,
+      "components": {
+        "Transform": { "x": 150, "y": -100 },
+        "SpriteRenderer": { "spriteKey": "capsule", "color": "#ff5555" },
+        "Rigidbody2D": { "bodyType": "Dynamic", "mass": 1, "gravityScale": 1 }
+      }
+    },
+    {
+      "name": "Light (Point)",
+      "tag": "Untagged",
+      "active": true,
+      "components": {
+        "Transform": { "x": 0, "y": -50 },
+        "Light": { "type": "point", "color": "#ffffff", "intensity": 1, "radius": 200 }
+      }
+    }
+  ]
+}

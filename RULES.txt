@@ -1,0 +1,173 @@
+================================================================================
+ZENGINE — RULES.txt
+READ THIS FILE COMPLETELY BEFORE TOUCHING ANY FILE OR ADDING ANY FEATURE.
+================================================================================
+
+This file is the contract for how this codebase is organized. Any AI
+assistant (or human) working on this project must read this file first,
+every session, before editing existing files or adding new ones. If a
+change would violate a rule below, stop and ask, or follow the rule
+instead of the user's literal phrasing if the two conflict.
+
+--------------------------------------------------------------------------------
+1. THE CORE RULE: RUNTIME NEVER DEPENDS ON EDITOR
+--------------------------------------------------------------------------------
+
+/runtime  = the actual game engine. This is what ships with the game.
+/editor   = the Unity-style level editor UI. This is a development tool only.
+/player   = the standalone game shell (play.html + main.js). Imports ONLY
+            from /runtime.
+
+HARD RULE: No file under /runtime may ever import, reference, or depend
+on anything under /editor. Not for debugging, not "temporarily," not
+ever. You must be able to delete the /editor folder entirely and the
+game (/player/play.html) keeps working with zero changes.
+
+/editor MAY import from /runtime. That direction is allowed and expected
+— the editor is built on top of the engine, not the other way around.
+
+Before adding any import, ask: "is this file under /runtime importing
+something from /editor?" If yes, stop. Refactor instead: either move the
+shared logic into /runtime so both sides can use it, or keep the
+editor-only piece in /editor and have it call into a public runtime API
+function instead of reaching into editor internals.
+
+--------------------------------------------------------------------------------
+2. FOLDER MAP — WHERE NEW CODE GOES
+--------------------------------------------------------------------------------
+
+runtime/
+  index.js              <- PUBLIC ENTRY POINT. The only file outside
+                           /runtime should import from. Exposes
+                           createGame() and re-exports World/GameLoop/etc.
+  core/                 <- ECS primitives: Entity, World, System, GameLoop.
+                           Add new ECS-level concepts here (e.g. a Prefab
+                           system, an Event bus) as their own new file.
+  components/           <- One file per component type (plain data only,
+                           no PIXI objects, no DOM). New component =
+                           new file here, e.g. components/Collider2D.js.
+  systems/               <- One file per system (behavior over components).
+                           New gameplay/rendering/physics behavior = new
+                           file here, e.g. systems/AnimationSystem.js.
+  assets/                <- Asset loading/resolution (textures, audio,
+                           etc). New asset type = new file here, e.g.
+                           assets/AudioManager.js.
+  scene/                 <- Scene (de)serialization and loading helpers.
+  scripting/             <- The user-facing scripting API surface
+                           (ScriptAPI.js) exposed to game scripts. New
+                           scripting capabilities (forever(), globalVar,
+                           dontDestroyOnLoad(), etc) get added here, as
+                           new methods or new files in this folder — not
+                           bolted onto World/Entity directly.
+
+editor/
+  main.js                <- Editor entry point / root render() loop.
+  panels/                 <- One file per UI panel (Toolbar, Hierarchy,
+                           Inspector, BottomPanel, AnimationWindow,
+                           StatusBar, Viewport, UIComponents). New panel
+                           = new file here.
+  viewport/               <- Scene/Game viewport internals: camera pan/
+                           zoom (ViewportCamera.js), grid + gizmo drawing
+                           (SceneGrid.js), and the bridge to the runtime
+                           (SceneViewport.js). SceneViewport.js is the
+                           ONLY viewport file allowed to import /runtime.
+  state/                  <- EditorState.js (UI-only state) and
+                           EditorEvents.js (DOM event delegation that
+                           writes into the live World). Do not put scene
+                           data here — scene data lives in the runtime's
+                           World, reached via editorState.world.
+  icons/                  <- IconLibrary.js (inline SVG icons).
+  styles/                 <- editor.css and any future editor-only
+                           stylesheets.
+
+player/
+  play.html, main.js, scene.json  <- the standalone shipped game shell.
+                           Imports ONLY from /runtime. Do not add any
+                           editor-only code, CSS, or markup here.
+
+--------------------------------------------------------------------------------
+3. RULE: ONE FEATURE = NEW FILE(S), NOT A GROWING OLD FILE
+--------------------------------------------------------------------------------
+
+When adding a new feature (a new component, a new system, a new editor
+panel, a new scripting API, a new asset type), create a NEW file in the
+appropriate subfolder from the map above. Do not keep appending unrelated
+functionality into an existing file just because it's nearby or already
+open.
+
+If a feature doesn't fit any existing subfolder, create a new subfolder
+under /runtime or /editor (matching the existing naming style:
+lowercase, plural where the existing ones are plural) rather than
+dumping it into an unrelated folder.
+
+Examples:
+  - Adding inventory items?       -> runtime/components/Inventory.js
+                                      runtime/systems/InventorySystem.js
+  - Adding a new editor panel
+    for layers?                   -> editor/panels/LayersPanel.js
+  - Adding audio playback?        -> runtime/assets/AudioManager.js
+                                      runtime/components/AudioSource.js
+                                      runtime/systems/AudioSystem.js
+  - Adding a save/load UI button? -> editor panel calls a function
+                                      already exported from
+                                      runtime/scene/SceneSerializer.js —
+                                      do not duplicate serialization
+                                      logic in the editor.
+
+--------------------------------------------------------------------------------
+4. COMPONENTS STAY PLAIN DATA
+--------------------------------------------------------------------------------
+
+Files under runtime/components/ must hold only plain serializable data
+(numbers, strings, booleans). No PIXI objects, no DOM references, no
+behavior/update logic. Behavior belongs in runtime/systems/. This is what
+keeps SceneSerializer.js able to save/load any component generically.
+
+--------------------------------------------------------------------------------
+5. RENDERING IS CENTRALIZED
+--------------------------------------------------------------------------------
+
+runtime/systems/RenderSystem.js is the only place that creates/updates
+PIXI display objects from entity data. Both the editor's viewport and the
+standalone player use it, so visuals never drift between edit mode and
+play mode. Do not create a second, separate rendering path in /editor —
+extend RenderSystem.js (or add a new System alongside it) instead.
+
+editor/viewport/SceneGrid.js may draw EDITOR-ONLY chrome (grid lines,
+selection gizmos) in its own separate PIXI container layered on top of
+the runtime's render output. That chrome must never be visible in
+/player.
+
+--------------------------------------------------------------------------------
+6. SCENE DATA FLOWS THROUGH THE RUNTIME'S PUBLIC API ONLY
+--------------------------------------------------------------------------------
+
+The editor never invents its own scene format or its own copy of scene
+state. The single source of truth is the live World instance
+(editorState.world), and the single way to read/write its persisted form
+is runtime/scene/SceneSerializer.js (serializeScene / deserializeScene).
+If the editor needs new scene-level functionality (undo, multi-scene,
+prefabs), extend the runtime's scene/ folder, not the editor's state/
+folder.
+
+--------------------------------------------------------------------------------
+7. BEFORE YOU START EDITING, DO THIS CHECKLIST
+--------------------------------------------------------------------------------
+
+[ ] Read this file (you just did).
+[ ] Identify: is this change a runtime feature, an editor feature, or
+    both? Place files accordingly using the folder map in section 2.
+[ ] If touching an existing file, confirm the change doesn't pull an
+    /editor import into /runtime.
+[ ] If it's a new feature, create new file(s) — don't grow an unrelated
+    existing file.
+[ ] If it's a new component, keep it plain data; put behavior in a
+    system.
+[ ] If it touches rendering, route it through RenderSystem.js (or a new
+    System), not a second rendering path.
+[ ] If it touches saved scene data, route it through
+    SceneSerializer.js/SceneLoader.js.
+[ ] After changes, mentally check: "could I delete /editor right now and
+    would /player/play.html still run?" If no, fix it before finishing.
+
+================================================================================

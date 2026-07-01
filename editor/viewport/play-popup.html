@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>ZenEngine — Play</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.2/pixi.min.js"></script>
+<style>
+  html, body { height: 100%; margin: 0; padding: 0; background: #000; overflow: hidden; }
+  /* letterbox wrapper: centers the fixed-resolution game canvas and pads
+     with black bars when the popup window doesn't exactly match the
+     camera's aspect ratio (AspectFit) */
+  #letterbox { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+  #game-canvas canvas { display: block; }
+</style>
+</head>
+<body>
+  <div id="letterbox"><div id="game-canvas"></div></div>
+  <script type="module" src="./play-popup.js"></script>
+</body>
+</html>
