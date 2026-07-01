@@ -12,6 +12,7 @@ import { Transform, TRANSFORM } from "../components/Transform.js";
 import { Camera, CAMERA } from "../components/Camera.js";
 import { SpriteRenderer, SPRITE_RENDERER } from "../components/SpriteRenderer.js";
 import { Rigidbody2D, RIGIDBODY_2D } from "../components/Rigidbody2D.js";
+import { Collider2D, COLLIDER_2D } from "../components/Collider2D.js";
 import { Light, LIGHT } from "../components/Light.js";
 
 const COMPONENT_REGISTRY = {
@@ -19,6 +20,7 @@ const COMPONENT_REGISTRY = {
   [CAMERA]: Camera,
   [SPRITE_RENDERER]: SpriteRenderer,
   [RIGIDBODY_2D]: Rigidbody2D,
+  [COLLIDER_2D]: Collider2D,
   [LIGHT]: Light,
 };
 

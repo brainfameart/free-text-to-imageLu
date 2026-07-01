@@ -18,7 +18,8 @@ export const editorState = {
   isPaused: false,
   hierarchyFilter: "",
   bottomTab: "project",
-  sectionsOpen: { transform: true, camera: true, sprite: true, rigidbody: true },
+  sectionsOpen: { transform: true, camera: true, sprite: true, rigidbody: true, collider: true },
+  addComponentMenuOpen: false,
   logs: [{ type: "log", msg: "Editor initialized successfully." }],
 };
 

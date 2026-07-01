@@ -11,7 +11,8 @@ import { editorState, pushLog } from "./EditorState.js";
 import { Transform, TRANSFORM } from "../../runtime/components/Transform.js";
 import { CAMERA } from "../../runtime/components/Camera.js";
 import { SPRITE_RENDERER } from "../../runtime/components/SpriteRenderer.js";
-import { RIGIDBODY_2D } from "../../runtime/components/Rigidbody2D.js";
+import { RIGIDBODY_2D, Rigidbody2D } from "../../runtime/components/Rigidbody2D.js";
+import { COLLIDER_2D, Collider2D } from "../../runtime/components/Collider2D.js";
 import { importSpriteFiles } from "../../runtime/assets/AssetRegistry.js";
 
 const COMPONENT_TYPE_MAP = {
@@ -19,6 +20,7 @@ const COMPONENT_TYPE_MAP = {
   Camera: CAMERA,
   SpriteRenderer: SPRITE_RENDERER,
   Rigidbody2D: RIGIDBODY_2D,
+  Collider2D: COLLIDER_2D,
 };
 
 /**
@@ -92,6 +94,39 @@ export function attachEditorEvents(render, onTogglePlay) {
       case "toggle-entity-active": {
         const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
         if (entity) entity.active = !entity.active;
+        render();
+        break;
+      }
+      case "add-component": {
+        editorState.addComponentMenuOpen = !editorState.addComponentMenuOpen;
+        render();
+        break;
+      }
+      case "add-component-choice": {
+        const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
+        editorState.addComponentMenuOpen = false;
+        if (!entity) break;
+
+        const componentName = t.dataset.component;
+        if (componentName === "Rigidbody2D") {
+          if (!entity.hasComponent(RIGIDBODY_2D)) {
+            entity.addComponent(RIGIDBODY_2D, new Rigidbody2D());
+            pushLog("log", "Added Rigidbody2D to '" + entity.name + "'.");
+          }
+        } else if (componentName === "Collider2D") {
+          if (!entity.hasComponent(COLLIDER_2D)) {
+            entity.addComponent(COLLIDER_2D, new Collider2D());
+            pushLog("log", "Added Collider2D to '" + entity.name + "'.");
+          }
+        }
+        render();
+        break;
+      }
+      case "remove-component": {
+        const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
+        if (!entity) break;
+        const componentType = COMPONENT_TYPE_MAP[t.dataset.component];
+        if (componentType) entity.removeComponent(componentType);
         render();
         break;
       }
