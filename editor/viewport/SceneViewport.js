@@ -19,6 +19,7 @@ import { createGame } from "../../runtime/index.js";
 import { ViewportCamera } from "./ViewportCamera.js";
 import { drawSceneGrid } from "./SceneGrid.js";
 import { drawCameraGizmo } from "./CameraGizmo.js";
+import { drawColliderGizmo } from "./ColliderGizmo.js";
 import { TransformGizmo } from "./TransformGizmo.js";
 import { editorState, pushLog } from "../state/EditorState.js";
 import { attachPixiDiagnostics } from "../state/ConsoleCapture.js";
@@ -31,6 +32,7 @@ let viewportCamera = null;
 let gridContainer = null;
 let gizmoContainer = null;
 let cameraGizmoContainer = null;
+let colliderGizmoContainer = null;
 let transformGizmo = null;
 let game = null;
 let renderFn = null;
@@ -74,9 +76,11 @@ function createViewport(mount, render) {
   // editor-only chrome containers, drawn around the runtime's own stage content
   gridContainer = new PIXI.Container();
   cameraGizmoContainer = new PIXI.Container();
+  colliderGizmoContainer = new PIXI.Container();
   gizmoContainer = new PIXI.Container();
   pixiApp.stage.addChildAt(gridContainer, 0); // grid behind everything
   pixiApp.stage.addChild(cameraGizmoContainer); // camera frame above scene content
+  pixiApp.stage.addChild(colliderGizmoContainer); // collider outlines above camera frame dimming
   pixiApp.stage.addChild(gizmoContainer); // selection/transform gizmo above everything
   drawSceneGrid(gridContainer);
 
@@ -261,6 +265,7 @@ function refreshGizmos() {
   const selected = editorState.world ? editorState.world.getEntity(editorState.selectedId) : null;
   transformGizmo.draw(selected);
   drawCameraGizmo(cameraGizmoContainer, editorState.world);
+  drawColliderGizmo(colliderGizmoContainer, editorState.world, editorState.selectedId);
 }
 
 /**
