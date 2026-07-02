@@ -11,10 +11,13 @@
  * detection and resolution.
  *
  * Units: this engine is 1 world-unit = 1 pixel everywhere (Transform,
- * Camera resolution, etc — see runtime/core/CameraUtils.js), so Rapier
- * is driven directly in pixel-scale units too (pixel-scale gravity,
- * pixel-scale collider sizes) rather than introducing a meters<->pixels
- * conversion layer that the rest of the engine doesn't have.
+ * Camera resolution, etc — see runtime/core/CameraUtils.js). Every
+ * position/size passed to Rapier below stays in that same pixel space —
+ * there is NO coordinate conversion layer, and nothing outside this
+ * file needs to know Rapier is involved at all. The only physics-scale
+ * concern is Rapier's internal SOLVER TOLERANCES (contact/penetration/
+ * sleep thresholds), which assume ~1-unit objects by default; that is
+ * handled once, below, via World.lengthUnit — see the comment there.
  *
  * RUNTIME-ONLY FILE.
  */
@@ -22,9 +25,23 @@
 import { TRANSFORM } from "../components/Transform.js";
 import { RIGIDBODY_2D, BodyType } from "../components/Rigidbody2D.js";
 import { COLLIDER_2D, ColliderShape } from "../components/Collider2D.js";
+import { getColliderWorldGeometry } from "./ColliderGeometry.js";
 import { loadRapier } from "./RapierLoader.js";
 
 const GRAVITY_Y = 980; // px/s^2 downward — same constant the old stub integrator used
+
+// Rapier's solver internally assumes "human scale" objects are ~1 unit
+// (1 meter) — its contact/penetration/sleep tolerances are all derived
+// from that assumption. This engine works entirely in pixels (1 unit =
+// 1 pixel), where a typical object is ~100 units, i.e. ~100x too big
+// for those tolerances. Rather than rewriting every position/size in
+// the engine into meters, Rapier's World.lengthUnit tells the solver
+// "100 of your units = 1 of my meters" so it rescales its internal
+// thresholds to match — this is Rapier's own documented fix for
+// exactly this pixel-scale mismatch, and it requires no coordinate
+// conversion anywhere else: Transform, the Collider2D gizmo, and scene
+// files all keep using plain pixels, unaffected.
+const LENGTH_UNIT_PX_PER_METER = 100;
 
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
@@ -55,6 +72,7 @@ export class PhysicsWorld {
     this._readyPromise = loadRapier().then((RAPIER) => {
       this.RAPIER = RAPIER;
       this.rapierWorld = new RAPIER.World({ x: 0, y: GRAVITY_Y });
+      this.rapierWorld.lengthUnit = LENGTH_UNIT_PX_PER_METER;
       this.ready = true;
     });
   }
@@ -184,16 +202,23 @@ export class PhysicsWorld {
       }
     }
 
-    this._syncCollider(handle, collider);
+    this._syncCollider(handle, collider, transform);
   }
 
   /**
    * Creates/recreates the Rapier collider attached to `handle.body` to
-   * match the Collider2D component. A signature string lets us skip
-   * the (relatively expensive) recreate when nothing shape-related
-   * actually changed.
+   * match the Collider2D component. Uses the SAME
+   * getColliderWorldGeometry() helper the editor's red gizmo outline
+   * uses, so the shape Rapier actually collides with is guaranteed to
+   * be the shape drawn on screen — including the entity's Transform
+   * scale, which earlier only the gizmo accounted for (Rapier colliders
+   * don't auto-scale with non-uniform Transform scale the way a Pixi
+   * sprite does, so the effective size must be baked in here).
+   *
+   * A signature string lets us skip the (relatively expensive)
+   * recreate when nothing shape-affecting actually changed.
    */
-  _syncCollider(handle, collider) {
+  _syncCollider(handle, collider, transform) {
     const RAPIER = this.RAPIER;
 
     if (!collider) {
@@ -205,17 +230,21 @@ export class PhysicsWorld {
       return;
     }
 
+    const geo = getColliderWorldGeometry(collider, transform);
+
     const sig = JSON.stringify([
-      collider.shape,
-      collider.width,
-      collider.height,
-      collider.radius,
+      geo.shape,
+      geo.halfWidth,
+      geo.halfHeight,
+      geo.radius,
       collider.offsetX,
       collider.offsetY,
       collider.isTrigger,
       collider.friction,
       collider.restitution,
       collider.density,
+      transform.scaleX,
+      transform.scaleY,
     ]);
 
     if (handle.colliderSig === sig) return; // unchanged, skip rebuild
@@ -225,18 +254,20 @@ export class PhysicsWorld {
       handle.collider = null;
     }
 
+    // Collider offset is attached in the BODY's local frame, so we pass
+    // the raw (unscaled) offset here — Rapier rotates it with the body
+    // automatically. Size, however, must be the already-scaled
+    // half-extents from getColliderWorldGeometry, since Rapier shapes
+    // don't respond to Transform scale on their own.
     let desc;
-    if (collider.shape === ColliderShape.CIRCLE) {
-      desc = RAPIER.ColliderDesc.ball(Math.max(0.01, collider.radius));
+    if (geo.shape === ColliderShape.CIRCLE) {
+      desc = RAPIER.ColliderDesc.ball(Math.max(0.01, geo.radius));
     } else {
-      desc = RAPIER.ColliderDesc.cuboid(
-        Math.max(0.01, collider.width / 2),
-        Math.max(0.01, collider.height / 2)
-      );
+      desc = RAPIER.ColliderDesc.cuboid(Math.max(0.01, geo.halfWidth), Math.max(0.01, geo.halfHeight));
     }
 
     desc
-      .setTranslation(collider.offsetX, collider.offsetY)
+      .setTranslation(collider.offsetX * transform.scaleX, collider.offsetY * transform.scaleY)
       .setSensor(!!collider.isTrigger)
       .setFriction(collider.friction)
       .setRestitution(collider.restitution)
