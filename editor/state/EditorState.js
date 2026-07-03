@@ -11,6 +11,9 @@ export const editorState = {
   /** @type {import('../../runtime/core/World.js').World|null} set during editor boot */
   world: null,
 
+  /** @type {ReturnType<import('../../runtime/index.js').createGame>|null} set during editor boot */
+  game: null,
+
   activeTool: "translate",
   selectedId: null,
   animOpen: false,
@@ -21,6 +24,9 @@ export const editorState = {
   sectionsOpen: { transform: true, camera: true, sprite: true, rigidbody: true, collider: true },
   addComponentMenuOpen: false,
   logs: [{ type: "log", msg: "Editor initialized successfully." }],
+
+  /** @type {string|null} id of the scene tab currently mid-inline-rename, or null */
+  renamingSceneId: null,
 };
 
 export function pushLog(type, msg) {

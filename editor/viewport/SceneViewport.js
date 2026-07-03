@@ -45,6 +45,28 @@ export function getGame() {
 }
 
 /**
+ * Switches the live World over to a different scene (see
+ * runtime/scene/SceneManager.js): saves the current scene's edits into
+ * its slot, loads the target scene's data in, then resets editor
+ * selection/gizmos so nothing stale from the old scene lingers (e.g. a
+ * selected entity id that no longer exists once ids are reset).
+ * @param {string} sceneId
+ */
+export function switchScene(sceneId) {
+  if (!game) return false;
+  const switched = game.switchToScene(sceneId);
+  if (!switched) return false;
+
+  editorState.selectedId = null;
+  const mainCamera = game.world.findFirstByName("Main Camera");
+  editorState.selectedId = mainCamera ? mainCamera.id : null;
+
+  syncSpriteRender();
+  refreshGizmos();
+  return true;
+}
+
+/**
  * Lightweight, DOM-safe live update: re-applies the Main Camera's
  * current backgroundColor to the Scene viewport's canvas. Exported
  * specifically so EditorEvents.js can call it on every "input" tick of
@@ -74,8 +96,9 @@ function createViewport(mount, render) {
   attachPixiDiagnostics(pixiApp);
 
   game = createGame({ pixiApp });
-  game.loadDefault();
+  game.initScenes();
   editorState.world = game.world;
+  editorState.game = game;
   // NOTE: game.loop is intentionally never started here — that would run
   // PhysicsSystem every frame and things would fall/drift while just
   // editing. Instead we sync ONLY the RenderSystem below (via

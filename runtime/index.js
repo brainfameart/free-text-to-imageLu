@@ -16,6 +16,16 @@ import { PhysicsSystem } from "./systems/PhysicsSystem.js";
 import { RenderSystem } from "./systems/RenderSystem.js";
 import { loadSceneFromUrl, loadDefaultScene, validateScene } from "./scene/SceneLoader.js";
 import { serializeScene, deserializeScene } from "./scene/SceneSerializer.js";
+import {
+  initSceneManager,
+  getSceneList,
+  getActiveSceneId,
+  createScene,
+  saveActiveScene,
+  switchToScene,
+  renameScene,
+  deleteScene,
+} from "./scene/SceneManager.js";
 import { ScriptAPI } from "./scripting/ScriptAPI.js";
 import { importSpriteFiles, getAllSpriteAssets, getSpriteAsset } from "./assets/AssetRegistry.js";
 import { getCameraResolution, getCameraWorldRect } from "./core/CameraUtils.js";
@@ -63,6 +73,19 @@ export function createGame({ pixiApp, followMainCamera = false }) {
     getSceneData: () => serializeScene(world),
     validate: () => validateScene(world),
     destroyRenderer: () => renderSystem.destroy(),
+
+    // Multi-scene project management (see scene/SceneManager.js). Sprite
+    // assets are NOT scoped per-scene — AssetRegistry.js is one shared
+    // catalogue for the whole project, same as loadFromData/getSceneData
+    // above never touch it.
+    initScenes: () => initSceneManager(world),
+    getSceneList: () => getSceneList(),
+    getActiveSceneId: () => getActiveSceneId(),
+    createScene: (name) => createScene(name),
+    saveActiveScene: () => saveActiveScene(world),
+    switchToScene: (sceneId) => switchToScene(world, sceneId),
+    renameScene: (sceneId, name) => renameScene(world, sceneId, name),
+    deleteScene: (sceneId) => deleteScene(world, sceneId),
   };
 }
 

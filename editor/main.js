@@ -57,6 +57,8 @@ function render() {
   const caret = wasSearchFocused ? active.selectionStart : null;
   const wasNameFocused = active && active.dataset && active.dataset.action === "rename-entity";
   const nameCaret = wasNameFocused ? active.selectionStart : null;
+  const wasSceneRenameFocused = active && active.dataset && active.dataset.action === "rename-scene-input";
+  const sceneRenameCaret = wasSceneRenameFocused ? active.selectionStart : null;
 
   app.innerHTML = html;
 
@@ -72,6 +74,15 @@ function render() {
     if (el) {
       el.focus();
       if (nameCaret !== null) el.setSelectionRange(nameCaret, nameCaret);
+    }
+  }
+  const sceneRenameEl = document.querySelector('[data-action="rename-scene-input"]');
+  if (sceneRenameEl) {
+    sceneRenameEl.focus();
+    if (wasSceneRenameFocused && sceneRenameCaret !== null) {
+      sceneRenameEl.setSelectionRange(sceneRenameCaret, sceneRenameCaret);
+    } else {
+      sceneRenameEl.select(); // first appearance (just double-clicked, or a brand-new scene) — select all for easy overtyping
     }
   }
 

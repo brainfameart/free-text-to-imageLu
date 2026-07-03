@@ -14,7 +14,7 @@ import { SPRITE_RENDERER } from "../../runtime/components/SpriteRenderer.js";
 import { RIGIDBODY_2D, Rigidbody2D } from "../../runtime/components/Rigidbody2D.js";
 import { COLLIDER_2D, Collider2D } from "../../runtime/components/Collider2D.js";
 import { importSpriteFiles } from "../../runtime/assets/AssetRegistry.js";
-import { syncBackgroundColorLive } from "../viewport/SceneViewport.js";
+import { syncBackgroundColorLive, switchScene } from "../viewport/SceneViewport.js";
 
 const COMPONENT_TYPE_MAP = {
   Transform: TRANSFORM,
@@ -131,6 +131,52 @@ export function attachEditorEvents(render, onTogglePlay) {
         render();
         break;
       }
+      case "switch-scene": {
+        const sceneId = t.dataset.sceneId;
+        if (sceneId) switchScene(sceneId);
+        render();
+        break;
+      }
+      case "add-scene": {
+        if (!editorState.game) break;
+        const created = editorState.game.createScene();
+        switchScene(created.id);
+        editorState.renamingSceneId = created.id;
+        pushLog("log", "Created scene '" + created.name + "'.");
+        render();
+        break;
+      }
+    }
+  });
+
+  document.addEventListener("dblclick", (e) => {
+    const t = e.target.closest("[data-dblclick-action]");
+    if (!t) return;
+    const action = t.dataset.dblclickAction;
+    if (action === "rename-scene-start") {
+      editorState.renamingSceneId = t.dataset.sceneId;
+      render();
+    }
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.target.dataset && e.target.dataset.action === "rename-scene-input") {
+      if (e.key === "Enter") {
+        e.target.blur(); // triggers the focusout handler below, which commits + re-renders
+      } else if (e.key === "Escape") {
+        editorState.renamingSceneId = null;
+        render();
+      }
+    }
+  });
+
+  document.addEventListener("focusout", (e) => {
+    if (e.target.dataset && e.target.dataset.action === "rename-scene-input") {
+      const sceneId = e.target.dataset.sceneId;
+      const value = e.target.dataset.pendingValue !== undefined ? e.target.dataset.pendingValue : e.target.value;
+      if (editorState.game && sceneId) editorState.game.renameScene(sceneId, value);
+      editorState.renamingSceneId = null;
+      render();
     }
   });
 
@@ -154,6 +200,13 @@ export function attachEditorEvents(render, onTogglePlay) {
       const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
       if (entity) entity.name = e.target.value;
       return; // don't re-render mid-keystroke; avoids losing caret position
+    }
+
+    if (e.target.dataset.action === "rename-scene-input") {
+      // live-buffer only; committed on blur/Enter (see below) so a
+      // full render() doesn't blow away the input mid-keystroke
+      e.target.dataset.pendingValue = e.target.value;
+      return;
     }
 
     const field = e.target.dataset.field;

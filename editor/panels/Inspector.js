@@ -118,10 +118,7 @@ export function renderInspector() {
           '<input type="checkbox" data-field="Camera.enablePseudo3D" style="accent-color:#2C5D87;margin:0;"' +
             (camera.enablePseudo3D ? " checked" : "") +
             "/>"
-        ) +
-        '<div class="pseudo3d-note" style="padding:2px 4px 4px;color:#8a93a0;font-size:11px;">' +
-        "When on, an object's Z position also scales its size (negative Z = farther = smaller). When off, Z only controls draw order." +
-        "</div>"
+        )
     );
   }
 
