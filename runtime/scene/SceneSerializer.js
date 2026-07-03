@@ -14,6 +14,7 @@ import { SpriteRenderer, SPRITE_RENDERER } from "../components/SpriteRenderer.js
 import { Rigidbody2D, RIGIDBODY_2D } from "../components/Rigidbody2D.js";
 import { Collider2D, COLLIDER_2D } from "../components/Collider2D.js";
 import { Light, LIGHT } from "../components/Light.js";
+import { CharacterController, CHARACTER_CONTROLLER } from "../components/CharacterController.js";
 
 const COMPONENT_REGISTRY = {
   [TRANSFORM]: Transform,
@@ -22,6 +23,7 @@ const COMPONENT_REGISTRY = {
   [RIGIDBODY_2D]: Rigidbody2D,
   [COLLIDER_2D]: Collider2D,
   [LIGHT]: Light,
+  [CHARACTER_CONTROLLER]: CharacterController,
 };
 
 /**

@@ -4,6 +4,13 @@
  * Scene hierarchy tree. Reads entities live from editorState.world
  * (the runtime's World) instead of a static array — this is the panel
  * that was hardest-coupled to fake data in the original mockup.
+ *
+ * Scenes themselves are no longer switched from a tab strip at the top
+ * of this panel — they live as file-like items in the Project panel's
+ * "Scenes" folder (see BottomPanel.js), opened by clicking/double-
+ * clicking them there, same as any other asset. This panel only shows
+ * the hierarchy of whichever scene is currently open, named in the
+ * "scene-root" header below.
  */
 
 import { icon } from "../icons/IconLibrary.js";
@@ -15,22 +22,16 @@ import { LIGHT } from "../../runtime/components/Light.js";
 
 export function renderHierarchy() {
   const world = editorState.world;
-  const game = editorState.game;
   const allEntities = world ? world.getAllEntities() : [];
   const filtered = allEntities.filter((e) =>
     e.name.toLowerCase().includes(editorState.hierarchyFilter.toLowerCase())
   );
-
-  const sceneList = game ? game.getSceneList() : [];
-  const activeSceneId = game ? game.getActiveSceneId() : null;
-  const renamingSceneId = editorState.renamingSceneId;
 
   return (
     '<div class="hierarchy-panel">' +
     '<div class="tabbar">' +
     tabBtn(true, "Hierarchy", "listtree") +
     "</div>" +
-    renderSceneSwitcher(sceneList, activeSceneId, renamingSceneId) +
     '<div class="hierarchy-toolbar">' +
     '<button class="hierarchy-add-btn" data-action="add-entity">' +
     icon("plus", 12) +
@@ -73,45 +74,6 @@ export function renderHierarchy() {
       })
       .join("") +
     "</div>" +
-    "</div>"
-  );
-}
-
-/**
- * Scene tab strip: every scene in the project is a tab. Click switches
- * to it (saving the current scene's live edits first — see
- * SceneViewport.js switchScene()); double-click starts an inline rename;
- * the + button creates a new empty scene and switches to it.
- */
-function renderSceneSwitcher(sceneList, activeSceneId, renamingSceneId) {
-  return (
-    '<div class="scene-switcher">' +
-    sceneList
-      .map((s) => {
-        const isActive = s.id === activeSceneId;
-        const isRenaming = s.id === renamingSceneId;
-        return (
-          '<div class="scene-tab' +
-          (isActive ? " active" : "") +
-          '"' +
-          (isRenaming ? "" : ' data-action="switch-scene"') +
-          ' data-scene-id="' +
-          s.id +
-          '" data-dblclick-action="rename-scene-start">' +
-          (isRenaming
-            ? '<input type="text" class="scene-tab-rename-input" data-action="rename-scene-input" data-scene-id="' +
-              s.id +
-              '" value="' +
-              s.name +
-              '" />'
-            : '<span class="scene-tab-name">' + s.name + "</span>") +
-          "</div>"
-        );
-      })
-      .join("") +
-    '<button class="scene-tab-add" data-action="add-scene" title="New Scene">' +
-    icon("plus", 12) +
-    "</button>" +
     "</div>"
   );
 }

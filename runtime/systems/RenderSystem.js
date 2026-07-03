@@ -14,8 +14,8 @@
  *
  * Fake-3D depth (Camera.enablePseudo3D, a scene-wide toggle): when the
  * Main Camera has this on, Transform.z ALSO scales an object's rendered
- * size — negative z (father from camera) shrinks it, positive z (closer
- * to camera) enlarges it, on top of z still controlling draw order.
+ * size — positive z (closer to camera) enlarges it, negative z (farther
+ * from camera) shrinks it, on top of z still controlling draw order.
  * When off, z affects draw order only and never touches visual size,
  * exactly matching the checked/unchecked behavior requested.
  *
@@ -34,13 +34,13 @@ import { resolveTexture } from "../assets/AssetManager.js";
 import { getCameraResolution } from "../core/CameraUtils.js";
 
 // Reference "camera distance" used by the pseudo-3D depth-scale formula
-// below: visualScale = DEPTH_REFERENCE / (DEPTH_REFERENCE + z). At
+// below: visualScale = DEPTH_REFERENCE / (DEPTH_REFERENCE - z). At
 // z = 0 (the default for every new object) this is exactly 1 — neutral,
 // no visual change — so turning enablePseudo3D on never resizes objects
 // that haven't been moved in Z yet. Bigger DEPTH_REFERENCE = more
 // gradual/subtle size falloff per unit of Z; smaller = more dramatic.
 const DEPTH_REFERENCE = 500;
-const MIN_DEPTH_SCALE = 0.02; // guards against z <= -DEPTH_REFERENCE going negative/infinite
+const MIN_DEPTH_SCALE = 0.02; // guards against z >= DEPTH_REFERENCE going negative/infinite
 
 export class RenderSystem extends System {
   /**
@@ -153,14 +153,15 @@ export class RenderSystem extends System {
   }
 
   /**
-   * Cheap perspective-style falloff: 1 at z=0, shrinks toward 0 as z
-   * goes more negative ("farther" from camera), grows above 1 as z goes
-   * positive ("closer" to camera) — matches the requested "negative
-   * numbers are far from the screen so it decreases size" behavior.
+   * Cheap perspective-style falloff: 1 at z=0, grows above 1 as z goes
+   * positive ("closer" to camera / bigger), shrinks toward 0 as z goes
+   * more negative ("farther" from camera / smaller) — matches the
+   * requested "positive numbers scale up, negative numbers scale down"
+   * behavior.
    * @param {number} z
    */
   _depthScaleFor(z) {
-    return Math.max(MIN_DEPTH_SCALE, DEPTH_REFERENCE / (DEPTH_REFERENCE + z));
+    return Math.max(MIN_DEPTH_SCALE, DEPTH_REFERENCE / (DEPTH_REFERENCE - z));
   }
 
   /**

@@ -196,6 +196,30 @@ export class PhysicsWorld {
         handle.body.setAngularDamping(rb.angularDamping);
         handle.body.lockRotations(!!rb.lockRotation, true);
         handle.body.setAdditionalMass(Math.max(0.0001, rb.mass), true);
+
+        // A CharacterController (runtime/systems/ControllerSystem.js)
+        // may request a specific horizontal speed and/or override Y
+        // (a jump kick, or continuous Y drive for Top-Down) this frame
+        // WITHOUT taking over the whole body: X is set directly (so
+        // movement feels responsive instead of force-accelerated), Y is
+        // left to Rapier's own gravity/solver integration unless a
+        // controller explicitly requested a Y override. This is still
+        // 100% Rapier's solver doing the actual moving/colliding — this
+        // just seeds its linear velocity, the same primitive the
+        // Inspector's own Kinematic velocity fields use.
+        if (rb.driveVelocityX !== null || rb.driveVelocityY !== null) {
+          const current = handle.body.linvel();
+          const nextX = rb.driveVelocityX !== null ? rb.driveVelocityX : current.x;
+          const nextY = rb.driveVelocityY !== null ? rb.driveVelocityY : current.y;
+          handle.body.setLinvel({ x: nextX, y: nextY }, true);
+          handle.body.wakeUp();
+        }
+        // These are one-shot, transient requests — clear them now that
+        // they've been applied so a controller-less frame (or a
+        // Free-type controller mid-script-drive) doesn't keep re-seeding
+        // stale velocity forever.
+        rb.driveVelocityX = null;
+        rb.driveVelocityY = null;
       } else if (effectiveBodyType === BodyType.KINEMATIC) {
         handle.body.setLinvel({ x: rb.velocityX, y: rb.velocityY }, true);
         handle.body.setAngvel(rb.lockRotation ? 0 : rb.angularVelocity, true);

@@ -13,6 +13,7 @@ import { CAMERA } from "../../runtime/components/Camera.js";
 import { SPRITE_RENDERER } from "../../runtime/components/SpriteRenderer.js";
 import { RIGIDBODY_2D, Rigidbody2D } from "../../runtime/components/Rigidbody2D.js";
 import { COLLIDER_2D, Collider2D } from "../../runtime/components/Collider2D.js";
+import { CHARACTER_CONTROLLER, CharacterController } from "../../runtime/components/CharacterController.js";
 import { importSpriteFiles } from "../../runtime/assets/AssetRegistry.js";
 import { syncBackgroundColorLive, switchScene } from "../viewport/SceneViewport.js";
 
@@ -22,6 +23,7 @@ const COMPONENT_TYPE_MAP = {
   SpriteRenderer: SPRITE_RENDERER,
   Rigidbody2D: RIGIDBODY_2D,
   Collider2D: COLLIDER_2D,
+  CharacterController: CHARACTER_CONTROLLER,
 };
 
 /**
@@ -119,6 +121,11 @@ export function attachEditorEvents(render, onTogglePlay) {
             entity.addComponent(COLLIDER_2D, new Collider2D());
             pushLog("log", "Added Collider2D to '" + entity.name + "'.");
           }
+        } else if (componentName === "CharacterController") {
+          if (!entity.hasComponent(CHARACTER_CONTROLLER)) {
+            entity.addComponent(CHARACTER_CONTROLLER, new CharacterController());
+            pushLog("log", "Added Movement Type (CharacterController) to '" + entity.name + "'.");
+          }
         }
         render();
         break;
@@ -140,9 +147,20 @@ export function attachEditorEvents(render, onTogglePlay) {
       case "add-scene": {
         if (!editorState.game) break;
         const created = editorState.game.createScene();
+        editorState.projectFolder = "scenes";
         switchScene(created.id);
         editorState.renamingSceneId = created.id;
         pushLog("log", "Created scene '" + created.name + "'.");
+        render();
+        break;
+      }
+      case "select-project-folder": {
+        editorState.projectFolder = t.dataset.folder;
+        render();
+        break;
+      }
+      case "select-scene-file": {
+        editorState.selectedSceneFileId = t.dataset.sceneId;
         render();
         break;
       }
@@ -155,6 +173,14 @@ export function attachEditorEvents(render, onTogglePlay) {
     const action = t.dataset.dblclickAction;
     if (action === "rename-scene-start") {
       editorState.renamingSceneId = t.dataset.sceneId;
+      render();
+    } else if (action === "open-scene-file") {
+      const sceneId = t.dataset.sceneId;
+      if (sceneId) {
+        const scene = editorState.game && editorState.game.getSceneList().find((s) => s.id === sceneId);
+        switchScene(sceneId);
+        if (scene) pushLog("log", "Opened scene '" + scene.name + "'.");
+      }
       render();
     }
   });

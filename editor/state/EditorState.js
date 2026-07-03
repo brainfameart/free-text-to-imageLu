@@ -21,12 +21,19 @@ export const editorState = {
   isPaused: false,
   hierarchyFilter: "",
   bottomTab: "project",
-  sectionsOpen: { transform: true, camera: true, sprite: true, rigidbody: true, collider: true },
+  /** @type {"scenes"|"sprites"|"scripts"} which Project > Assets folder is open in the bottom panel */
+  projectFolder: "scenes",
+  sectionsOpen: { transform: true, camera: true, sprite: true, rigidbody: true, collider: true, movement: true },
   addComponentMenuOpen: false,
   logs: [{ type: "log", msg: "Editor initialized successfully." }],
 
-  /** @type {string|null} id of the scene tab currently mid-inline-rename, or null */
+  /** @type {string|null} id of the scene file currently mid-inline-rename (in the
+   *   Project > Scenes folder grid), or null */
   renamingSceneId: null,
+
+  /** @type {string|null} id of the scene file single-click-selected (but not
+   *   yet opened) in the Project > Scenes folder grid, or null */
+  selectedSceneFileId: null,
 };
 
 export function pushLog(type, msg) {

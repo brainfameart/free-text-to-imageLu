@@ -15,6 +15,7 @@ import { CAMERA, CameraAspectMode } from "../../runtime/components/Camera.js";
 import { SPRITE_RENDERER } from "../../runtime/components/SpriteRenderer.js";
 import { RIGIDBODY_2D, BodyType } from "../../runtime/components/Rigidbody2D.js";
 import { COLLIDER_2D, ColliderShape } from "../../runtime/components/Collider2D.js";
+import { CHARACTER_CONTROLLER, ControllerType } from "../../runtime/components/CharacterController.js";
 import { getCameraResolution } from "../../runtime/core/CameraUtils.js";
 import { getSpriteAsset } from "../../runtime/assets/AssetRegistry.js";
 
@@ -257,9 +258,82 @@ export function renderInspector() {
     );
   }
 
+  const controller = entity.getComponent(CHARACTER_CONTROLLER);
+  if (controller) {
+    const isPlatformer = controller.controllerType === ControllerType.PLATFORMER;
+    const isFree = controller.controllerType === ControllerType.FREE;
+    const isCharacter = controller.controllerType === ControllerType.CHARACTER;
+    const jumpCapable = (isCharacter || isPlatformer) && controller.canJump;
+
+    let typeSpecificHtml = "";
+    if (isFree) {
+      typeSpecificHtml =
+        '<div class="static-body-note" style="padding:6px 4px;color:#8a93a0;font-size:11px;">' +
+        "Free: no built-in input mapping. A script drives Rigidbody2D directly; the tunables below are still readable from script." +
+        "</div>";
+    } else {
+      typeSpecificHtml =
+        row("Move Speed", numInput("", controller.moveSpeed, "CharacterController.moveSpeed")) +
+        row("Acceleration", numInput("", controller.acceleration, "CharacterController.acceleration"));
+
+      if (isPlatformer) {
+        typeSpecificHtml += row("Air Control", numInput("", controller.airControl, "CharacterController.airControl"));
+      }
+
+      if (isCharacter) {
+        typeSpecificHtml += row(
+          "Use Gravity",
+          '<input type="checkbox" data-field="CharacterController.useGravity" style="accent-color:#2C5D87;margin:0;"' +
+            (controller.useGravity ? " checked" : "") +
+            "/>"
+        );
+      }
+
+      if (isCharacter || isPlatformer) {
+        typeSpecificHtml +=
+          row(
+            "Can Jump",
+            '<input type="checkbox" data-field="CharacterController.canJump" style="accent-color:#2C5D87;margin:0;"' +
+              (controller.canJump ? " checked" : "") +
+              "/>"
+          ) +
+          (jumpCapable
+            ? row("Jump Force", numInput("", controller.jumpForce, "CharacterController.jumpForce")) +
+              row("Max Jumps", numInput("", controller.maxJumps, "CharacterController.maxJumps"))
+            : "");
+      }
+    }
+
+    body += section(
+      editorState.sectionsOpen,
+      "movement",
+      "Movement Type",
+      "move",
+      row("Controller Type", dropdownInput(Object.values(ControllerType), controller.controllerType, "CharacterController.controllerType")) +
+        row(
+          "Use Default Input",
+          '<input type="checkbox" data-field="CharacterController.useDefaultInput" style="accent-color:#2C5D87;margin:0;"' +
+            (controller.useDefaultInput ? " checked" : "") +
+            "/>"
+        ) +
+        typeSpecificHtml +
+        (rigidbody && rigidbody.bodyType === BodyType.STATIC
+          ? '<div class="static-body-note" style="padding:6px 4px;color:#c0863a;font-size:11px;">' +
+            "This entity's Rigidbody2D Body Type is Static — a Static body never moves. Set Body Type to Dynamic (recommended — gets real collision push-back/landing from Rapier) or Kinematic above for this movement type to take effect." +
+            "</div>"
+          : !rigidbody
+          ? '<div class="static-body-note" style="padding:6px 4px;color:#c0863a;font-size:11px;">' +
+            "Add a Rigidbody2D for this movement type to actually move the object — Dynamic is recommended for the most realistic collision response (pushback, landing on slopes), or use Kinematic for a controller that ignores physics forces. Physics itself is still handled entirely by Rapier either way." +
+            "</div>"
+          : "") +
+        '<button class="removecomp-btn" data-action="remove-component" data-component="CharacterController" style="margin-top:6px;">Remove Component</button>'
+    );
+  }
+
   const availableToAdd = [
     !rigidbody && { name: "Rigidbody2D", label: "Rigidbody 2D" },
     !collider && { name: "Collider2D", label: "Collider 2D" },
+    !controller && { name: "CharacterController", label: "Movement Type" },
   ].filter(Boolean);
 
   body +=
