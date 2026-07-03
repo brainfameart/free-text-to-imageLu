@@ -138,12 +138,6 @@ export function attachEditorEvents(render, onTogglePlay) {
         render();
         break;
       }
-      case "switch-scene": {
-        const sceneId = t.dataset.sceneId;
-        if (sceneId) switchScene(sceneId);
-        render();
-        break;
-      }
       case "add-scene": {
         if (!editorState.game) break;
         const created = editorState.game.createScene();
@@ -160,7 +154,17 @@ export function attachEditorEvents(render, onTogglePlay) {
         break;
       }
       case "select-scene-file": {
+        // Click switches straight to the scene (matches how every other
+        // asset-browser click works — this used to only "select" the
+        // item without opening it, which read as "clicking does
+        // nothing"). Double-clicking the label still starts a rename
+        // (see the dblclick listener below) and takes priority when it
+        // fires, since renaming is the less-common action.
         editorState.selectedSceneFileId = t.dataset.sceneId;
+        const sceneId = t.dataset.sceneId;
+        if (sceneId && editorState.game && sceneId !== editorState.game.getActiveSceneId()) {
+          switchScene(sceneId);
+        }
         render();
         break;
       }
@@ -173,14 +177,6 @@ export function attachEditorEvents(render, onTogglePlay) {
     const action = t.dataset.dblclickAction;
     if (action === "rename-scene-start") {
       editorState.renamingSceneId = t.dataset.sceneId;
-      render();
-    } else if (action === "open-scene-file") {
-      const sceneId = t.dataset.sceneId;
-      if (sceneId) {
-        const scene = editorState.game && editorState.game.getSceneList().find((s) => s.id === sceneId);
-        switchScene(sceneId);
-        if (scene) pushLog("log", "Opened scene '" + scene.name + "'.");
-      }
       render();
     }
   });

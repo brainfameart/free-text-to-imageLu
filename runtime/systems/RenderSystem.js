@@ -200,6 +200,28 @@ export class RenderSystem extends System {
     pixiApp.renderer.background.color = hex;
   }
 
+  /**
+   * Real, post-scale/post-depthScale world-space bounding half-extents
+   * for an entity's rendered sprite, read straight from the live PIXI
+   * sprite this system is already tracking. Used by
+   * editor/viewport/SceneViewport.js for accurate click-to-select
+   * hit-testing — previously that hit-test used a hardcoded 40px
+   * half-extent for every entity regardless of actual sprite size,
+   * which made clicks miss on sprites bigger/smaller than that guess.
+   * @param {string} entityId
+   * @returns {{halfWidth: number, halfHeight: number}|null} null if this
+   *   entity has no tracked sprite (not rendered, or SpriteRenderer-less)
+   */
+  getSpriteWorldHalfExtents(entityId) {
+    const sprite = this._sprites.get(entityId);
+    if (!sprite) return null;
+    // sprite.width/height already include texture size * abs(scale) —
+    // PIXI computes these from the local bounds * worldTransform scale,
+    // so this stays correct through flipX/flipY (negative scale) and
+    // the pseudo-3D depthScale multiplier applied in update() above.
+    return { halfWidth: Math.abs(sprite.width) / 2, halfHeight: Math.abs(sprite.height) / 2 };
+  }
+
   destroy() {
     for (const sprite of this._sprites.values()) {
       this.worldContainer.removeChild(sprite);

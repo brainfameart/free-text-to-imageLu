@@ -295,7 +295,19 @@ export class PhysicsWorld {
       .setSensor(!!collider.isTrigger)
       .setFriction(collider.friction)
       .setRestitution(collider.restitution)
-      .setDensity(collider.density);
+      .setDensity(collider.density)
+      // Rapier's DEFAULT active-collision-types only computes contacts
+      // for pairs involving at least one Dynamic body — Kinematic-vs-
+      // Static and Kinematic-vs-Kinematic pairs are silently skipped
+      // unless explicitly opted in. A Kinematic-body character
+      // controller (see components/CharacterController.js) needs to be
+      // stopped by static walls/floors and by other kinematic bodies
+      // just like it's stopped by dynamic ones, so every collider here
+      // opts into ALL pairings — this is a one-time collider setting,
+      // not a per-frame cost, and Static-vs-Static (the one pairing that
+      // can never produce meaningful contact info since neither side can
+      // move) is the only combination Rapier still always skips.
+      .setActiveCollisionTypes(RAPIER.ActiveCollisionTypes.ALL);
 
     handle.collider = this.rapierWorld.createCollider(desc, handle.body);
     handle.colliderSig = sig;

@@ -194,7 +194,7 @@ function renderSceneFileGrid() {
         (isActive ? " active" : "") +
         '" data-action="select-scene-file" data-scene-id="' +
         s.id +
-        '" data-dblclick-action="open-scene-file" title="Double-click to open">' +
+        '" title="Click to open">' +
         '<div class="asset-thumb">' +
         icon("box", 22) +
         '<div class="asset-ext">SCN</div>' +
@@ -207,7 +207,7 @@ function renderSceneFileGrid() {
             '" />'
           : '<span class="asset-label" data-dblclick-action="rename-scene-start" data-scene-id="' +
             s.id +
-            '">' +
+            '" title="Double-click to rename">' +
             s.name +
             (isActive ? " (open)" : "") +
             "</span>") +

@@ -159,25 +159,34 @@ function attachGizmoPointerEvents(mount) {
 
   el.addEventListener("pointerdown", (e) => {
     const tool = editorState.activeTool;
-    if (tool !== "translate" && tool !== "scale" && tool !== "rotate") return;
-    if (e.button !== 0) return; // gizmo only responds to left click
+    if (e.button !== 0) return; // selection/gizmo only responds to left click
 
-    const world = clientToWorld(e.clientX, e.clientY);
-    const selected = editorState.world ? editorState.world.getEntity(editorState.selectedId) : null;
-    const transform = selected ? selected.getComponent(TRANSFORM) : null;
+    // Gizmo dragging is exclusive to translate/scale/rotate — but
+    // click-to-select on a sprite should work no matter which tool is
+    // active (including "pan"), same as every other editor. This used
+    // to bail out entirely for any other tool, which made clicking a
+    // sprite do nothing while the pan tool was selected.
+    if (tool === "translate" || tool === "scale" || tool === "rotate") {
+      const world = clientToWorld(e.clientX, e.clientY);
+      const selected = editorState.world ? editorState.world.getEntity(editorState.selectedId) : null;
+      const transform = selected ? selected.getComponent(TRANSFORM) : null;
 
-    if (transform) {
-      const handle = transformGizmo.hitTest(world.x, world.y);
-      if (handle) {
-        transformGizmo.beginDrag(handle, world.x, world.y, transform);
-        try { el.setPointerCapture(e.pointerId); } catch (err) {}
-        e.preventDefault();
-        e.stopPropagation();
-        return;
+      if (transform) {
+        const handle = transformGizmo.hitTest(world.x, world.y);
+        if (handle) {
+          transformGizmo.beginDrag(handle, world.x, world.y, transform);
+          try { el.setPointerCapture(e.pointerId); } catch (err) {}
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
       }
     }
 
-    // not on a handle: try selecting a different entity by clicking its sprite
+    // Not on a gizmo handle (or gizmo tool isn't active): try selecting
+    // a different entity by clicking its sprite. Runs for every tool
+    // (including "pan") so clicking a sprite always selects it.
+    const world = clientToWorld(e.clientX, e.clientY);
     const hit = hitTestEntities(world.x, world.y);
     if (hit) {
       editorState.selectedId = hit.id;
@@ -208,11 +217,14 @@ function attachGizmoPointerEvents(mount) {
 }
 
 /**
- * Simple bounding-box hit test against every entity that has a Transform
- * + SpriteRenderer, used for click-to-select in the viewport. Uses an
- * 80x80 box centered on the entity to match the selection gizmo size,
- * which is good enough for editor selection (not pixel-perfect sprite
- * bounds, since sprites can be arbitrary sizes).
+ * Bounding-box hit test against every entity that has a Transform +
+ * SpriteRenderer, used for click-to-select in the viewport. Uses each
+ * sprite's REAL rendered world-space size (via RenderSystem's live PIXI
+ * sprite — see getSpriteWorldHalfExtents above) so clicks land correctly
+ * regardless of how big or small a given sprite actually is; falls back
+ * to a reasonable 40px half-extent only for the rare case a sprite
+ * hasn't been rendered yet (e.g. its texture is still loading), so a
+ * click still hits something close instead of never registering.
  */
 function hitTestEntities(worldX, worldY) {
   if (!editorState.world) return null;
@@ -220,8 +232,10 @@ function hitTestEntities(worldX, worldY) {
   // iterate back-to-front (topmost first) by reversing
   for (let i = entities.length - 1; i >= 0; i--) {
     const t = entities[i].getComponent(TRANSFORM);
-    const half = 40 * Math.max(Math.abs(t.scaleX), Math.abs(t.scaleY), 0.2);
-    if (worldX >= t.x - half && worldX <= t.x + half && worldY >= t.y - half && worldY <= t.y + half) {
+    const real = renderSystem ? renderSystem.getSpriteWorldHalfExtents(entities[i].id) : null;
+    const halfWidth = real ? real.halfWidth : 40 * Math.max(Math.abs(t.scaleX), Math.abs(t.scaleY), 0.2);
+    const halfHeight = real ? real.halfHeight : halfWidth;
+    if (worldX >= t.x - halfWidth && worldX <= t.x + halfWidth && worldY >= t.y - halfHeight && worldY <= t.y + halfHeight) {
       return entities[i];
     }
   }
