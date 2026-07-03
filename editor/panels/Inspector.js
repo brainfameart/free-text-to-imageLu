@@ -87,7 +87,12 @@ export function renderInspector() {
       "Camera",
       "camera",
       row("Clear Flags", dropdownInput(["Solid Color", "Skybox", "Depth only", "Don't Clear"], "Solid Color")) +
-        row("Background", '<div class="color-swatch" style="background:' + camera.backgroundColor + ';" data-action="pick-color" data-field="Camera.backgroundColor"></div>') +
+        row(
+          "Background",
+          '<input type="color" class="color-swatch-input" value="' +
+            camera.backgroundColor +
+            '" data-field="Camera.backgroundColor" />'
+        ) +
         row("Projection", dropdownInput(["Orthographic", "Perspective"], camera.projection, "Camera.projection")) +
         row("Size", numInput("", camera.size, "Camera.size")) +
         row(
@@ -107,7 +112,16 @@ export function renderInspector() {
         ) +
         resolutionFieldsHtml +
         '<div class="row"><span class="row-label">Export Size</span><div class="row-content"><span class="export-size-readout">' +
-        resolution.width + " x " + resolution.height + " px</span></div></div>"
+        resolution.width + " x " + resolution.height + " px</span></div></div>" +
+        row(
+          "Pseudo 3D (Z Scale)",
+          '<input type="checkbox" data-field="Camera.enablePseudo3D" style="accent-color:#2C5D87;margin:0;"' +
+            (camera.enablePseudo3D ? " checked" : "") +
+            "/>"
+        ) +
+        '<div class="pseudo3d-note" style="padding:2px 4px 4px;color:#8a93a0;font-size:11px;">' +
+        "When on, an object's Z position also scales its size (negative Z = farther = smaller). When off, Z only controls draw order." +
+        "</div>"
     );
   }
 
@@ -126,7 +140,12 @@ export function renderInspector() {
           spriteDisplayName +
           '</div><button class="sprite-pick"><span></span></button></div>'
       ) +
-        row("Color", '<div class="color-swatch" style="background:' + spriteRenderer.color + ';" data-action="pick-color" data-field="SpriteRenderer.color"></div>') +
+        row(
+          "Color",
+          '<input type="color" class="color-swatch-input" value="' +
+            spriteRenderer.color +
+            '" data-field="SpriteRenderer.color" />'
+        ) +
         row(
           "Flip",
           '<div class="flip-row"><label><input type="checkbox" data-field="SpriteRenderer.flipX"' +
@@ -134,8 +153,7 @@ export function renderInspector() {
             "/> X</label><label><input type=\"checkbox\" data-field=\"SpriteRenderer.flipY\"" +
             (spriteRenderer.flipY ? " checked" : "") +
             "/> Y</label></div>"
-        ) +
-        row("Order in Layer", numInput("", spriteRenderer.orderInLayer, "SpriteRenderer.orderInLayer"))
+        )
     );
   }
 

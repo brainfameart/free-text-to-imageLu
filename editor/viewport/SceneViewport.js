@@ -25,6 +25,8 @@ import { editorState, pushLog } from "../state/EditorState.js";
 import { attachPixiDiagnostics } from "../state/ConsoleCapture.js";
 import { TRANSFORM, Transform } from "../../runtime/components/Transform.js";
 import { SPRITE_RENDERER, SpriteRenderer } from "../../runtime/components/SpriteRenderer.js";
+import { CAMERA } from "../../runtime/components/Camera.js";
+import { RenderSystem } from "../../runtime/systems/RenderSystem.js";
 import { getSpriteAsset } from "../../runtime/assets/AssetRegistry.js";
 
 let pixiApp = null;
@@ -40,6 +42,19 @@ let renderSystem = null;
 
 export function getGame() {
   return game;
+}
+
+/**
+ * Lightweight, DOM-safe live update: re-applies the Main Camera's
+ * current backgroundColor to the Scene viewport's canvas. Exported
+ * specifically so EditorEvents.js can call it on every "input" tick of
+ * the background color picker WITHOUT going through the full editor
+ * render() — render() replaces the entire app innerHTML, which would
+ * destroy/reopen a live native <input type="color"> popover mid-drag.
+ * This function touches only pixiApp.renderer, never the DOM tree.
+ */
+export function syncBackgroundColorLive() {
+  syncBackgroundColor();
 }
 
 function createViewport(mount, render) {
@@ -121,7 +136,7 @@ function attachGizmoPointerEvents(mount) {
 
   el.addEventListener("pointerdown", (e) => {
     const tool = editorState.activeTool;
-    if (tool !== "translate" && tool !== "scale") return;
+    if (tool !== "translate" && tool !== "scale" && tool !== "rotate") return;
     if (e.button !== 0) return; // gizmo only responds to left click
 
     const world = clientToWorld(e.clientX, e.clientY);
@@ -255,6 +270,23 @@ function syncSpriteRender() {
   } catch (err) {
     pushLog("error", "Render sync failed: " + (err && err.message ? err.message : err));
   }
+  syncBackgroundColor();
+}
+
+/**
+ * Applies the scene's Main Camera backgroundColor to the Scene
+ * viewport's own canvas, live — every editor render, so dragging the
+ * color picker in the Inspector previews instantly here, exactly like
+ * it will look in Play mode. This is the "live in the editor" half of
+ * the background-color feature; the play popup applies the same color
+ * only once, at the moment Play is pressed (see PlayWindow.js), never
+ * tracking further edits while a game is actually running.
+ */
+function syncBackgroundColor() {
+  if (!pixiApp || !editorState.world) return;
+  const cameraEntity = editorState.world.query(TRANSFORM, CAMERA).find((e) => e.getComponent(CAMERA).isMain);
+  const color = cameraEntity ? cameraEntity.getComponent(CAMERA).backgroundColor : "#282828";
+  RenderSystem.applyBackgroundColor(pixiApp, color);
 }
 
 /**

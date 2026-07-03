@@ -53,9 +53,29 @@ export function drawColliderGizmo(container, world, selectedId) {
     g.lineStyle(lineWidth, color, alpha);
 
     if (geo.shape === ColliderShape.CIRCLE) {
+      // A circle looks identical at any rotation, so no rotation is
+      // applied when drawing it — this matches Rapier too: a ball
+      // collider's rotation never changes its physical footprint.
       g.drawCircle(geo.centerX, geo.centerY, geo.radius);
     } else {
-      g.drawRect(geo.centerX - geo.halfWidth, geo.centerY - geo.halfHeight, geo.halfWidth * 2, geo.halfHeight * 2);
+      // Draw the box as 4 rotated corner points rather than an
+      // axis-aligned drawRect — this is what makes the red outline
+      // actually track the entity's rotation the same way Rapier's
+      // real cuboid collider does (a rotated body rotates its attached
+      // collider rigidly, not just its sprite).
+      const angleRad = (geo.rotationDeg * Math.PI) / 180;
+      const cos = Math.cos(angleRad);
+      const sin = Math.sin(angleRad);
+      const corners = [
+        [-geo.halfWidth, -geo.halfHeight],
+        [geo.halfWidth, -geo.halfHeight],
+        [geo.halfWidth, geo.halfHeight],
+        [-geo.halfWidth, geo.halfHeight],
+      ].map(([lx, ly]) => [geo.centerX + lx * cos - ly * sin, geo.centerY + lx * sin + ly * cos]);
+
+      g.moveTo(corners[0][0], corners[0][1]);
+      for (let i = 1; i < corners.length; i++) g.lineTo(corners[i][0], corners[i][1]);
+      g.lineTo(corners[0][0], corners[0][1]);
     }
 
     // small crosshair at the collider's own center so the offset from

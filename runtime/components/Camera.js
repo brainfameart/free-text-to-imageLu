@@ -13,6 +13,13 @@
  * exported at — see runtime/core/CameraUtils.js for the shared math both
  * the editor gizmo and the play window use to stay in sync.
  *
+ * `enablePseudo3D` is a scene-wide depth toggle: when true, every
+ * sprite's Transform.z ALSO scales its rendered size (more negative z =
+ * farther from camera = smaller), giving a cheap fake-parallax/3D look,
+ * on top of z always controlling draw order. When false (default), z
+ * only controls draw order and never touches an object's visual size —
+ * see runtime/systems/RenderSystem.js for where this is applied.
+ *
  * RUNTIME-ONLY FILE.
  */
 
@@ -41,6 +48,7 @@ export class Camera {
     squareSize = 720,
     customWidth = 800,
     customHeight = 600,
+    enablePseudo3D = false,
   } = {}) {
     this.backgroundColor = backgroundColor;
     this.projection = projection;
@@ -57,5 +65,6 @@ export class Camera {
     this.squareSize = squareSize;
     this.customWidth = customWidth;
     this.customHeight = customHeight;
+    this.enablePseudo3D = enablePseudo3D;
   }
 }

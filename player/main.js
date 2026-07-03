@@ -7,6 +7,9 @@
  */
 
 import { createGame } from "../runtime/index.js";
+import { RenderSystem } from "../runtime/systems/RenderSystem.js";
+import { CAMERA } from "../runtime/components/Camera.js";
+import { TRANSFORM } from "../runtime/components/Transform.js";
 
 async function boot() {
   const mount = document.getElementById("game-canvas");
@@ -35,6 +38,11 @@ async function boot() {
   const validation = game.validate();
   if (!validation.ok) {
     console.error("[player] Scene validation failed:", validation.errors);
+  }
+
+  const mainCameraEntity = game.world.query(TRANSFORM, CAMERA).find((e) => e.getComponent(CAMERA).isMain);
+  if (mainCameraEntity) {
+    RenderSystem.applyBackgroundColor(pixiApp, mainCameraEntity.getComponent(CAMERA).backgroundColor);
   }
 
   window.addEventListener("resize", () => {

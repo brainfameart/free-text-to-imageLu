@@ -20,6 +20,8 @@ const AXIS_Y_COLOR = 0x569ce4;
 const ARM_LENGTH = 70;
 const HANDLE_SIZE = 9;
 const HIT_PADDING = 6;
+const ROTATE_RADIUS = 55;
+const ROTATE_RING_HIT_BAND = 8; // how close to the ring counts as a hit, in world px
 
 export class TransformGizmo {
   /**
@@ -30,11 +32,14 @@ export class TransformGizmo {
     this.graphics = new PIXI.Graphics();
     this.gizmoContainer.addChild(this.graphics);
 
-    /** @type {null | { handle: string, startWorldX:number, startWorldY:number, startTransform:object }} */
+    /** @type {null | { handle: string, startWorldX:number, startWorldY:number, startTransform:object, startAngle?:number }} */
     this._drag = null;
 
-    /** current handle hitboxes in WORLD space, recomputed every draw() */
+    /** current RECTANGULAR handle hitboxes in WORLD space, recomputed every draw() (translate/scale tools) */
     this._handles = [];
+
+    /** current CIRCULAR handle (rotate tool), or null when not the active tool */
+    this._rotateHandle = null;
   }
 
   /**
@@ -43,19 +48,22 @@ export class TransformGizmo {
   draw(entity) {
     this.graphics.clear();
     this._handles = [];
+    this._rotateHandle = null;
 
     if (!entity) return;
     const transform = entity.getComponent(TRANSFORM);
     if (!transform) return;
 
     const tool = editorState.activeTool;
-    if (tool !== "translate" && tool !== "scale") {
+    if (tool === "translate") {
+      this._drawTranslateGizmo(transform);
+    } else if (tool === "scale") {
+      this._drawScaleGizmo(transform);
+    } else if (tool === "rotate") {
+      this._drawRotateGizmo(transform);
+    } else {
       this._drawSelectionBox(transform);
-      return;
     }
-
-    if (tool === "translate") this._drawTranslateGizmo(transform);
-    else this._drawScaleGizmo(transform);
   }
 
   _drawSelectionBox(transform) {
@@ -127,10 +135,57 @@ export class TransformGizmo {
   }
 
   /**
-   * Hit-tests a world-space point against the current handles.
+   * Draws a Unity-style rotate ring: a full circle outline (the drag
+   * surface — grab anywhere on it) plus a small knob + radial line at
+   * the object's CURRENT rotation angle, so the current angle is always
+   * visible at a glance, not just discoverable by dragging.
+   */
+  _drawRotateGizmo(transform) {
+    const g = this.graphics;
+    const { x, y, rotation } = transform;
+    const angleRad = (rotation * Math.PI) / 180;
+
+    g.lineStyle(2, 0x8fc153, 0.9);
+    g.drawCircle(x, y, ROTATE_RADIUS);
+
+    // radial indicator line + knob at the current angle, so you can see
+    // exactly where "0 rotation" vs the live angle is without dragging
+    const knobX = x + Math.cos(angleRad) * ROTATE_RADIUS;
+    const knobY = y + Math.sin(angleRad) * ROTATE_RADIUS;
+    g.lineStyle(2, 0xf2c14e, 1);
+    g.moveTo(x, y);
+    g.lineTo(knobX, knobY);
+    g.lineStyle(1, 0xffffff, 0.9);
+    g.beginFill(0xf2c14e, 1);
+    g.drawCircle(knobX, knobY, 6);
+    g.endFill();
+
+    g.lineStyle(1, 0xffffff, 0.9);
+    g.beginFill(0xdddddd, 1);
+    g.drawRect(x - 4, y - 4, 8, 8);
+    g.endFill();
+
+    // Circular hit region: dragging anywhere near the ring's
+    // circumference rotates the object — matches Unity/most editors'
+    // "grab the ring" convention, rather than requiring a pixel-precise
+    // grab on the knob itself.
+    this._rotateHandle = { cx: x, cy: y, radius: ROTATE_RADIUS, band: ROTATE_RING_HIT_BAND };
+  }
+
+  /**
+   * Hit-tests a world-space point against the current handles: the
+   * rectangular translate/scale handles, OR (rotate tool) the circular
+   * ring — a hit is anywhere within `band` px of the ring's radius, not
+   * just exactly on the knob, matching the "grab the ring" convention.
    * @returns {string|null} handle id or null
    */
   hitTest(worldX, worldY) {
+    if (this._rotateHandle) {
+      const { cx, cy, radius, band } = this._rotateHandle;
+      const dist = Math.hypot(worldX - cx, worldY - cy);
+      return Math.abs(dist - radius) <= band ? "rotate-z" : null;
+    }
+
     for (const h of this._handles) {
       if (worldX >= h.minX && worldX <= h.maxX && worldY >= h.minY && worldY <= h.maxY) {
         return h.id;
@@ -150,7 +205,18 @@ export class TransformGizmo {
       handle,
       startWorldX: worldX,
       startWorldY: worldY,
-      startTransform: { x: transform.x, y: transform.y, scaleX: transform.scaleX, scaleY: transform.scaleY },
+      startTransform: {
+        x: transform.x,
+        y: transform.y,
+        scaleX: transform.scaleX,
+        scaleY: transform.scaleY,
+        rotation: transform.rotation,
+      },
+      // pointer angle relative to the object's center at drag start, in
+      // degrees — used to compute how far the pointer has swept around
+      // since, rather than snapping rotation straight to the pointer's
+      // absolute angle (which would jump the object on grab).
+      startPointerAngle: (Math.atan2(worldY - transform.y, worldX - transform.x) * 180) / Math.PI,
     };
   }
 
@@ -194,6 +260,17 @@ export class TransformGizmo {
         const delta = (dx - dy) / (ARM_LENGTH * 2);
         transform.scaleX = Math.max(0.01, start.scaleX + delta * start.scaleX);
         transform.scaleY = Math.max(0.01, start.scaleY + delta * start.scaleY);
+        break;
+      }
+      case "rotate-z": {
+        // Current pointer angle relative to the object's center, minus
+        // the angle it started at, gives exactly how far around the
+        // pointer has swept — added onto the object's starting rotation
+        // so grabbing the ring never causes a jump to the pointer's
+        // absolute angle.
+        const currentPointerAngle = (Math.atan2(worldY - start.y, worldX - start.x) * 180) / Math.PI;
+        const sweep = currentPointerAngle - this._drag.startPointerAngle;
+        transform.rotation = start.rotation + sweep;
         break;
       }
     }

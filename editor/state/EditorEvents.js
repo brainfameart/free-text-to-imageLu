@@ -14,6 +14,7 @@ import { SPRITE_RENDERER } from "../../runtime/components/SpriteRenderer.js";
 import { RIGIDBODY_2D, Rigidbody2D } from "../../runtime/components/Rigidbody2D.js";
 import { COLLIDER_2D, Collider2D } from "../../runtime/components/Collider2D.js";
 import { importSpriteFiles } from "../../runtime/assets/AssetRegistry.js";
+import { syncBackgroundColorLive } from "../viewport/SceneViewport.js";
 
 const COMPONENT_TYPE_MAP = {
   Transform: TRANSFORM,
@@ -158,6 +159,13 @@ export function attachEditorEvents(render, onTogglePlay) {
     const field = e.target.dataset.field;
     if (field) {
       applyFieldChange(field, e.target);
+      // Color inputs: update the Scene viewport's rendered background
+      // live on every drag tick, WITHOUT a full render() — render()
+      // rebuilds the entire DOM tree, which would destroy/reopen the
+      // native color picker popover mid-drag. A full render() still
+      // happens on "change" (picker closed) to refresh the swatch's own
+      // displayed value and any other UI that reflects the color.
+      if (e.target.type === "color") syncBackgroundColorLive();
     }
   });
 

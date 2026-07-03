@@ -20,6 +20,9 @@
 
 import { createGame } from "../../runtime/index.js";
 import { registerTexture } from "../../runtime/assets/AssetManager.js";
+import { RenderSystem } from "../../runtime/systems/RenderSystem.js";
+import { CAMERA } from "../../runtime/components/Camera.js";
+import { TRANSFORM } from "../../runtime/components/Transform.js";
 
 /**
  * Rebuilds this popup's own AssetManager texture cache from the
@@ -85,6 +88,18 @@ async function boot() {
 
   const game = createGame({ pixiApp, followMainCamera: true });
   game.loadFromData(sceneData);
+
+  // Applied once, right here, at the moment Play was pressed — this
+  // popup never re-reads editor state after boot, so there is no "live
+  // tracking" of further Camera edits while the game is running, which
+  // is exactly the requested "update in game mode only when play is
+  // pressed" behavior (contrast with SceneViewport.js's syncBackgroundColor(),
+  // which DOES re-apply live on every edit, because that's the editor
+  // preview, not a running game).
+  const mainCameraEntity = game.world.query(TRANSFORM, CAMERA).find((e) => e.getComponent(CAMERA).isMain);
+  if (mainCameraEntity) {
+    RenderSystem.applyBackgroundColor(pixiApp, mainCameraEntity.getComponent(CAMERA).backgroundColor);
+  }
 
   const validation = game.validate();
   if (!validation.ok) {
