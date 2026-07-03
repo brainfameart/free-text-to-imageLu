@@ -52,6 +52,16 @@ svg.icon{display:inline-block;vertical-align:middle;flex-shrink:0;}
 .menu-bar{height:20px;display:flex;align-items:center;padding:0 8px;background:#1e1e1e;}
 .menu-btn{padding:0 8px;height:100%;font-size:11px;color:#ccc;display:flex;align-items:center;}
 .menu-btn:hover{background:#383838;color:#eee;}
+.menu-btn.active{background:#2C5D87;color:#fff;}
+
+.menu-item-wrap{position:relative;height:100%;display:flex;}
+.menu-dropdown{position:absolute;top:100%;left:0;min-width:170px;background:#2d2d2d;border:1px solid #1a1a1a;border-radius:3px;box-shadow:0 4px 12px rgba(0,0,0,0.4);z-index:50;padding:3px;}
+.menu-dropdown-item{display:flex;align-items:center;gap:7px;padding:5px 8px;font-size:11px;color:#ddd;border-radius:3px;cursor:pointer;position:relative;white-space:nowrap;}
+.menu-dropdown-item:hover{background:#2C5D87;color:#fff;}
+.menu-dropdown-item.has-submenu{justify-content:space-between;}
+.menu-dropdown-item.has-submenu>svg:first-child{margin-right:-2px;}
+.menu-dropdown-item.has-submenu>span{flex:1;}
+.menu-submenu{top:-4px;left:100%;margin-left:2px;}
 
 .main-toolbar{height:30px;background:#383838;border-top:1px solid #444;border-bottom:1px solid #1a1a1a;display:flex;align-items:center;padding:0 8px;position:relative;box-shadow:0 1px 2px rgba(0,0,0,0.1);}
 

@@ -14,6 +14,7 @@ import { SPRITE_RENDERER } from "../../runtime/components/SpriteRenderer.js";
 import { RIGIDBODY_2D, Rigidbody2D } from "../../runtime/components/Rigidbody2D.js";
 import { COLLIDER_2D, Collider2D } from "../../runtime/components/Collider2D.js";
 import { CHARACTER_CONTROLLER, CharacterController } from "../../runtime/components/CharacterController.js";
+import { LIGHT, Light, LightType } from "../../runtime/components/Light.js";
 import { importSpriteFiles } from "../../runtime/assets/AssetRegistry.js";
 import { syncBackgroundColorLive, switchScene } from "../viewport/SceneViewport.js";
 
@@ -24,6 +25,14 @@ const COMPONENT_TYPE_MAP = {
   Rigidbody2D: RIGIDBODY_2D,
   Collider2D: COLLIDER_2D,
   CharacterController: CHARACTER_CONTROLLER,
+  Light: LIGHT,
+};
+
+const LIGHT_TYPE_NAMES = {
+  [LightType.DIRECTIONAL]: "Directional Light",
+  [LightType.POINT]: "Point Light",
+  [LightType.SPOT]: "Spot Light",
+  [LightType.AREA]: "Area Light",
 };
 
 /**
@@ -126,6 +135,11 @@ export function attachEditorEvents(render, onTogglePlay) {
             entity.addComponent(CHARACTER_CONTROLLER, new CharacterController());
             pushLog("log", "Added Movement Type (CharacterController) to '" + entity.name + "'.");
           }
+        } else if (componentName === "Light") {
+          if (!entity.hasComponent(LIGHT)) {
+            entity.addComponent(LIGHT, new Light());
+            pushLog("log", "Added Light to '" + entity.name + "'.");
+          }
         }
         render();
         break;
@@ -168,7 +182,46 @@ export function attachEditorEvents(render, onTogglePlay) {
         render();
         break;
       }
+      case "toggle-menu": {
+        const menu = t.dataset.menu;
+        editorState.openMenu = editorState.openMenu === menu ? null : menu;
+        editorState.openSubmenu = null; // closing/reopening a top menu always collapses any open submenu
+        render();
+        break;
+      }
+      case "hover-submenu": {
+        editorState.openSubmenu = t.dataset.submenu;
+        render();
+        break;
+      }
+      case "add-light": {
+        if (!editorState.world) break;
+        const lightType = t.dataset.lightType;
+        const label = LIGHT_TYPE_NAMES[lightType] || "Light";
+        const entity = editorState.world.createEntity(label);
+        entity.addComponent(TRANSFORM, new Transform());
+        entity.addComponent(LIGHT, new Light({ type: lightType }));
+        editorState.selectedId = entity.id;
+        editorState.openMenu = null;
+        editorState.openSubmenu = null;
+        pushLog("log", "Created " + label + ".");
+        render();
+        break;
+      }
     }
+  });
+
+  // Clicking anywhere outside an open menu-bar dropdown closes it — a
+  // second, separate listener (rather than adding this to the
+  // data-action switch above) because it needs to fire on EVERY click,
+  // including ones with no data-action at all (e.g. clicking empty
+  // viewport space to dismiss the GameObject menu).
+  document.addEventListener("click", (e) => {
+    if (!editorState.openMenu) return;
+    if (e.target.closest(".menu-item-wrap")) return; // clicks inside the menu/submenu are handled by the switch above
+    editorState.openMenu = null;
+    editorState.openSubmenu = null;
+    render();
   });
 
   document.addEventListener("dblclick", (e) => {

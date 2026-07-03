@@ -16,6 +16,7 @@ import { SPRITE_RENDERER } from "../../runtime/components/SpriteRenderer.js";
 import { RIGIDBODY_2D, BodyType } from "../../runtime/components/Rigidbody2D.js";
 import { COLLIDER_2D, ColliderShape } from "../../runtime/components/Collider2D.js";
 import { CHARACTER_CONTROLLER, ControllerType } from "../../runtime/components/CharacterController.js";
+import { LIGHT, LightType } from "../../runtime/components/Light.js";
 import { getCameraResolution } from "../../runtime/core/CameraUtils.js";
 import { getSpriteAsset } from "../../runtime/assets/AssetRegistry.js";
 
@@ -151,6 +152,12 @@ export function renderInspector() {
             "/> X</label><label><input type=\"checkbox\" data-field=\"SpriteRenderer.flipY\"" +
             (spriteRenderer.flipY ? " checked" : "") +
             "/> Y</label></div>"
+        ) +
+        row(
+          "Cast Shadow",
+          '<input type="checkbox" data-field="SpriteRenderer.castShadow" style="accent-color:#2C5D87;margin:0;"' +
+            (spriteRenderer.castShadow ? " checked" : "") +
+            "/>"
         )
     );
   }
@@ -330,10 +337,57 @@ export function renderInspector() {
     );
   }
 
+  const light = entity.getComponent(LIGHT);
+  if (light) {
+    const isDirectional = light.type === LightType.DIRECTIONAL;
+    const isSpot = light.type === LightType.SPOT;
+    const isArea = light.type === LightType.AREA;
+    const isPointOrSpot = light.type === LightType.POINT || isSpot;
+
+    let typeFieldsHtml = "";
+    if (isDirectional) {
+      typeFieldsHtml =
+        '<div class="static-body-note" style="padding:6px 4px;color:#8a93a0;font-size:11px;">' +
+        "Directional lights ignore position/range/shape — they brighten the entire scene uniformly, like sunlight. When Cast Shadows is on, this light's Rotation sets the fixed direction every shadow points." +
+        "</div>";
+    } else {
+      if (isPointOrSpot) typeFieldsHtml += row("Range", numInput("", light.range, "Light.range"));
+      if (isSpot) typeFieldsHtml += row("Spot Angle", numInput("", light.spotAngle, "Light.spotAngle"));
+      if (isArea) {
+        typeFieldsHtml += row("Width", numInput("", light.width, "Light.width")) + row("Height", numInput("", light.height, "Light.height"));
+      }
+    }
+
+    body += section(
+      editorState.sectionsOpen,
+      "light",
+      "Light",
+      "lightbulb",
+      row("Type", dropdownInput(Object.values(LightType), light.type, "Light.type")) +
+        row(
+          "Enabled",
+          '<input type="checkbox" data-field="Light.enabled" style="accent-color:#2C5D87;margin:0;"' +
+            (light.enabled ? " checked" : "") +
+            "/>"
+        ) +
+        row("Color", '<input type="color" class="color-swatch-input" value="' + light.color + '" data-field="Light.color" />') +
+        row("Intensity", numInput("", light.intensity, "Light.intensity")) +
+        row(
+          "Cast Shadows",
+          '<input type="checkbox" data-field="Light.castShadows" style="accent-color:#2C5D87;margin:0;"' +
+            (light.castShadows ? " checked" : "") +
+            "/>"
+        ) +
+        typeFieldsHtml +
+        '<button class="removecomp-btn" data-action="remove-component" data-component="Light" style="margin-top:6px;">Remove Component</button>'
+    );
+  }
+
   const availableToAdd = [
     !rigidbody && { name: "Rigidbody2D", label: "Rigidbody 2D" },
     !collider && { name: "Collider2D", label: "Collider 2D" },
     !controller && { name: "CharacterController", label: "Movement Type" },
+    !light && { name: "Light", label: "Light" },
   ].filter(Boolean);
 
   body +=

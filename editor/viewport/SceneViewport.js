@@ -39,6 +39,7 @@ let transformGizmo = null;
 let game = null;
 let renderFn = null;
 let renderSystem = null;
+let lightingSystem = null;
 
 export function getGame() {
   return game;
@@ -105,6 +106,7 @@ function createViewport(mount, render) {
   // syncSpriteRender(), called from mountOrUpdateSceneViewport on every
   // editor render), so sprites show up immediately without simulating.
   renderSystem = game.world.systems.find((s) => s.constructor.name === "RenderSystem") || null;
+  lightingSystem = game.world.systems.find((s) => s.constructor.name === "LightingSystem") || null;
   syncSpriteRender();
   if (!editorState.selectedId) {
     const mainCamera = game.world.findFirstByName("Main Camera");
@@ -116,6 +118,20 @@ function createViewport(mount, render) {
   cameraGizmoContainer = new PIXI.Container();
   colliderGizmoContainer = new PIXI.Container();
   gizmoContainer = new PIXI.Container();
+  // RenderSystem turns on pixiApp.stage.sortableChildren so sprites can
+  // sort by Transform.z, and LightingSystem's darkness/glow layer uses
+  // zIndex = Infinity to always draw above every sprite (see
+  // runtime/systems/LightingSystem.js) — these editor-only overlays need
+  // to win that same sort too, or a lit scene would visually bury the
+  // grid/camera-frame/selection-gizmo under the darkness rect. Grid
+  // still stays visually "behind" scene content via drawing order within
+  // its own low zIndex; the gizmo/camera/collider layers need to be
+  // fully above absolutely everything the runtime draws, lighting
+  // included, so authoring stays usable in a dark scene.
+  gridContainer.zIndex = -1; // still behind runtime content (kept via addChildAt(0) below too)
+  cameraGizmoContainer.zIndex = Infinity;
+  colliderGizmoContainer.zIndex = Infinity;
+  gizmoContainer.zIndex = Infinity;
   pixiApp.stage.addChildAt(gridContainer, 0); // grid behind everything
   pixiApp.stage.addChild(cameraGizmoContainer); // camera frame above scene content
   pixiApp.stage.addChild(colliderGizmoContainer); // collider outlines above camera frame dimming
@@ -304,6 +320,7 @@ function syncSpriteRender() {
   if (!renderSystem || !editorState.world) return;
   try {
     renderSystem.update(editorState.world, 0);
+    if (lightingSystem) lightingSystem.update(editorState.world, 0);
   } catch (err) {
     pushLog("error", "Render sync failed: " + (err && err.message ? err.message : err));
   }

@@ -15,6 +15,7 @@ import { GameLoop } from "./core/GameLoop.js";
 import { ControllerSystem } from "./systems/ControllerSystem.js";
 import { PhysicsSystem } from "./systems/PhysicsSystem.js";
 import { RenderSystem } from "./systems/RenderSystem.js";
+import { LightingSystem } from "./systems/LightingSystem.js";
 import { loadSceneFromUrl, loadDefaultScene, validateScene } from "./scene/SceneLoader.js";
 import { serializeScene, deserializeScene } from "./scene/SceneSerializer.js";
 import {
@@ -59,9 +60,11 @@ export function createGame({ pixiApp, followMainCamera = false }) {
   const world = new World();
   const renderSystem = new RenderSystem(pixiApp.stage, { followMainCamera });
   const controllerSystem = new ControllerSystem();
+  const lightingSystem = new LightingSystem(pixiApp.stage, renderSystem);
   world.addSystem(controllerSystem);
   world.addSystem(new PhysicsSystem());
   world.addSystem(renderSystem);
+  world.addSystem(lightingSystem);
 
   const scriptApi = new ScriptAPI(world);
   const loop = new GameLoop(world);
@@ -77,6 +80,7 @@ export function createGame({ pixiApp, followMainCamera = false }) {
     validate: () => validateScene(world),
     destroyRenderer: () => renderSystem.destroy(),
     destroyControllers: () => controllerSystem.destroy(),
+    destroyLighting: () => lightingSystem.destroy(),
 
     // Multi-scene project management (see scene/SceneManager.js). Sprite
     // assets are NOT scoped per-scene — AssetRegistry.js is one shared
