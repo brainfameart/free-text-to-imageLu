@@ -589,10 +589,20 @@ export class LightingSystem extends System {
    * + ShadowCaster shouldn't shadow itself) or if it's further from the
    * light than the light's reach (nothing to shadow beyond where the
    * light doesn't reach anyway).
+   *
+   * Spot lights additionally only illuminate/shadow within their cone
+   * (light.angle degrees wide, centered on lightTransform.rotation) —
+   * without this check a Spot behaved like a Point light for shadow
+   * purposes and would happily cast shadows from occluders sitting
+   * completely outside its beam, including directly behind it.
    */
   _castProjectiveShadowsForLight(lightTransform, light, lightEntityId, occluders) {
     const baseReach =
       light.type === LightType.AREA ? (light.radius || 0) + Math.max(light.width, light.height) : light.radius;
+
+    const isSpot = light.type === LightType.SPOT;
+    const halfConeRad = isSpot ? ((light.angle || 45) * Math.PI) / 360 : 0;
+    const facingRad = isSpot ? ((lightTransform.rotation || 0) * Math.PI) / 180 : 0;
 
     for (const occ of occluders) {
       if (occ.id === lightEntityId) continue;
@@ -603,6 +613,23 @@ export class LightingSystem extends System {
       const dist = Math.sqrt(dx * dx + dy * dy);
       const reach = baseReach * occ.length;
       if (dist > baseReach + Math.max(occ.halfWidth, occ.halfHeight)) continue; // occluder is out of the LIGHT's reach
+
+      if (isSpot) {
+        // Angle from the light to the occluder's CENTER, compared
+        // against the cone's half-angle plus a small angular pad so an
+        // occluder straddling the cone's edge (its center just inside,
+        // body partly outside, or vice versa) doesn't pop in/out — the
+        // pad is derived from the occluder's own apparent angular size
+        // at this distance rather than a fixed constant, so it scales
+        // sensibly whether the occluder is tiny/far or huge/close.
+        const angleToOcc = Math.atan2(dy, dx);
+        let rel = angleToOcc - facingRad;
+        while (rel > Math.PI) rel -= Math.PI * 2;
+        while (rel < -Math.PI) rel += Math.PI * 2;
+
+        const angularPad = Math.atan2(Math.max(occ.halfWidth, occ.halfHeight), Math.max(dist, 1));
+        if (Math.abs(rel) > halfConeRad + angularPad) continue; // occluder is outside the spot's cone
+      }
 
       this._castProjectiveShadowForOccluder(lightTransform, occ, reach, light);
     }
