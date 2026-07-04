@@ -163,7 +163,7 @@ float radialFalloff(float distT) {
 }
 
 // Soft rectangular falloff for Area lights: full brightness inside the
-// core rect, smoothstep fade across `radius` past its edge — the
+// core rect, smoothstep fade across radius past its edge — the
 // per-pixel equivalent of the old baked box-blur texture, exact at any
 // scale instead of blurred-texture-resolution-limited.
 float areaFalloff(vec2 localP, vec2 halfSize, float radius) {
@@ -204,11 +204,11 @@ float quadShadowTest(vec2 pixelWorld, vec2 lightPos, int occIdx, float reachOver
 
     // Beyond-the-occluder wedge test: project the pixel onto the
     // light->occluder axis: it must be FARTHER from the light than the
-    // occluder's near edge, and within `reach` along that axis, and
+    // occluder's near edge, and within reach along that axis, and
     // its perpendicular distance from the axis must be within the
     // occluder's apparent half-width at that depth (linearly tapering
     // from the true half-width at the occluder out to the same
-    // half-width at `reach`, i.e. a straight-sided extrusion — exactly
+    // half-width at reach, i.e. a straight-sided extrusion — exactly
     // the old CPU quad's shape).
     vec2 toPixel = pixelWorld - lightPos;
     float alongAxis = dot(toPixel, dir);
