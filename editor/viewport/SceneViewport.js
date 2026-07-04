@@ -121,16 +121,18 @@ function createViewport(mount, render) {
   colliderGizmoContainer = new PIXI.Container();
   lightGizmoContainer = new PIXI.Container();
   gizmoContainer = new PIXI.Container();
-  // LightingSystem's darkness/light overlay (see runtime/systems/
-  // LightingSystem.js) lives in this SAME container (pixiApp.stage,
-  // passed to createGame as the world container) at a fixed high
-  // zIndex so it draws above sprites. Since RenderSystem/LightingSystem
-  // already turn sortableChildren on for this container, these
-  // editor-only chrome layers need explicit zIndex values above that,
-  // or the sort would otherwise bury them under the light/dark overlay
-  // (chrome must always stay visible on top, even in the dark).
-  // lightGizmoContainer specifically needs to be ABOVE LightingSystem's
-  // own darkness overlay so a light's bulb icon and range circle stay
+  // LightingSystem's GPU lighting filter (see runtime/systems/
+  // LightingSystem.js) is applied to createGame's internal
+  // gameContentContainer — a child of pixiApp.stage that holds ONLY
+  // RenderSystem's sprites — NOT to pixiApp.stage itself, specifically
+  // so it can never darken/shadow this editor-only chrome (grid,
+  // gizmos, camera frame) which lives as separate sibling containers
+  // directly on pixiApp.stage (see runtime/index.js for the full
+  // rationale). These chrome layers still get their own explicit
+  // zIndex values so they stay drawn above gameContentContainer
+  // (sortableChildren is on for pixiApp.stage too) regardless of add
+  // order. lightGizmoContainer specifically needs to be ABOVE the lit
+  // scene so a light's bulb icon and range circle stay
   // visible/clickable even in a fully darkened area of the scene —
   // otherwise you couldn't click a light to select it from inside its
   // own shadow.

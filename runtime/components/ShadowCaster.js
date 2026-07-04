@@ -73,8 +73,8 @@ export class ShadowCaster {
 
     // How far this object's shadow reaches, as a multiplier on the
     // casting light's natural reach (its radius, or a fixed world-unit
-    // distance for Directional/parallel shadows — see
-    // LightingSystem._castParallelShadowForOccluder). 1 = shadow
+    // distance for Directional/parallel shadows — see the shadow-reach
+    // uniform LightingSystem uploads per light, uLightShadowReach). 1 = shadow
     // reaches exactly as far as the light itself would; 0.5 = half as
     // far (a short, contact-y shadow); 2 = twice as far (a long,
     // late-afternoon-sun-style shadow). This is what actually varies
@@ -83,11 +83,10 @@ export class ShadowCaster {
     this.length = length;
 
     // Soft shadow edge (penumbra) amount in world units/px, 0 = crisp
-    // hard edge. Implemented by LightingSystem as several progressively
-    // larger/fainter copies of the shadow polygon rather than a true
-    // penumbra render (no per-pixel blur pass in this pipeline), which
-    // is a cheap but effective approximation — see
-    // LightingSystem._fillShadowPolygon.
+    // hard edge. Evaluated per-pixel on the GPU by LightingSystem's
+    // shader (see LightingShaderSource.js's quadShadowTest edge-fade
+    // and raymarchShadowTest's soft-distance accumulation) rather than
+    // approximated with multiple CPU-drawn polygon copies.
     this.softness = softness;
   }
 }

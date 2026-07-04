@@ -10,7 +10,10 @@
  *    shadow points the same direction, set purely by this light's
  *    rotation) rather than radiating from a position — exactly like
  *    real sunlight, where the sun's position doesn't matter, only its
- *    angle in the sky. See LightingSystem._castParallelShadowForOccluder.
+ *    angle in the sky. Computed per-pixel by LightingSystem's GPU
+ *    shader (see LightingShaderSource.js's directional-light shadow
+ *    branch, which derives an effective light position from rotation
+ *    alone rather than reading this entity's Transform position).
  *  - Point       : radiates outward from the entity's Transform position
  *    in all directions, fading out at `radius`. The classic "lightbulb".
  *  - Spot        : radiates from the entity's Transform position within
@@ -63,9 +66,10 @@ export class Light {
 
     // Point / Spot / Area only: how far the light reaches before fading
     // to nothing (world units / px). For Directional this is unused for
-    // the glow itself (see LightingSystem._drawDirectional) but IS used
-    // as the base shadow-casting distance when castShadows is on (scaled
-    // further per-caster by ShadowCaster.length).
+    // the glow itself (a Directional light fills the whole screen
+    // uniformly — see LightingShaderSource.js's typeId==0 branch) but
+    // IS used as the base shadow-casting distance when castShadows is
+    // on (scaled further per-caster by ShadowCaster.length).
     this.radius = radius;
 
     // Spot only: full cone width in degrees, centered on the entity's
