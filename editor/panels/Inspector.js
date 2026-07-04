@@ -180,13 +180,33 @@ export function renderInspector() {
             "</div>"
         ) + row("Falloff Radius", numInput("", light.radius, "Light.radius"));
     } else {
-      // Directional: no position/radius dependency — uniformly lights
-      // the whole scene, so no radius/angle/size fields apply.
+      // Directional: no position/radius dependency for its GLOW — it
+      // uniformly lights the whole scene — but its rotation still
+      // matters for shadow direction when Cast Shadows is on below (see
+      // "just like the sun" note there), so this stays informational
+      // rather than implying rotation is irrelevant.
       typeSpecificHtml =
         '<div class="static-body-note" style="padding:6px 4px;color:#8a93a0;font-size:11px;">' +
-        "Directional lights ignore position and reach — they light the entire scene evenly, like sunlight." +
+        "Directional lights ignore position and reach for lighting — they light the entire scene evenly, like sunlight. Rotation still controls shadow direction if Cast Shadows is on." +
         "</div>";
     }
+
+    const shadowFields = light.castShadows
+      ? row(
+          "Shadow Color",
+          '<input type="color" class="color-swatch-input" value="' +
+            light.shadowColor +
+            '" data-field="Light.shadowColor" />'
+        ) +
+        row("Shadow Strength", numInput("", light.shadowStrength, "Light.shadowStrength")) +
+        (light.type === LightType.DIRECTIONAL
+          ? '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
+            "Parallel shadows, like the sun: every Shadow Caster's shadow points the same way, set ONLY by this light's rotation — moving this light does nothing to its shadows." +
+            "</div>"
+          : '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
+            "Casts real-time shadows from every object with a Shadow Caster component (see below)." +
+            "</div>")
+      : "";
 
     body += section(
       editorState.sectionsOpen,
@@ -208,21 +228,13 @@ export function renderInspector() {
             (light.castsOnWorld ? " checked" : "") +
             "/>"
         ) +
-        (light.type === LightType.DIRECTIONAL
-          ? '<div class="static-body-note" style="padding:6px 4px;color:#8a93a0;font-size:11px;">' +
-            "Directional lights don't cast shadows (no single source position to project from)." +
-            "</div>"
-          : row(
-              "Cast Shadows",
-              '<input type="checkbox" data-field="Light.castShadows" style="accent-color:#2C5D87;margin:0;"' +
-                (light.castShadows ? " checked" : "") +
-                "/>"
-            ) +
-            (light.castShadows
-              ? '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
-                "Casts real-time shadows from every object with a Shadow Caster component (see below)." +
-                "</div>"
-              : "")) +
+        row(
+          "Cast Shadows",
+          '<input type="checkbox" data-field="Light.castShadows" style="accent-color:#2C5D87;margin:0;"' +
+            (light.castShadows ? " checked" : "") +
+            "/>"
+        ) +
+        shadowFields +
         '<button class="removecomp-btn" data-action="remove-component" data-component="Light" style="margin-top:6px;">Remove Component</button>'
     );
   }
@@ -252,6 +264,25 @@ export function renderInspector() {
         ) +
         '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
         "Leave blank to use this object's real sprite size." +
+        "</div>" +
+        row(
+          "Offset",
+          '<div style="display:flex;gap:4px;width:100%;">' +
+            numInput("X", shadowCaster.offsetX, "ShadowCaster.offsetX") +
+            numInput("Y", shadowCaster.offsetY, "ShadowCaster.offsetY") +
+            "</div>"
+        ) +
+        '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
+        "Shifts where the shadow shape is centered relative to this object (rotates together with it) — e.g. anchor a shadow to a character's feet instead of its middle." +
+        "</div>" +
+        row("Opacity", numInput("", shadowCaster.opacity, "ShadowCaster.opacity")) +
+        row("Length", numInput("", shadowCaster.length, "ShadowCaster.length")) +
+        '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
+        "Length is a multiplier on how far this object's shadow reaches: 1 = matches the light's own reach, 0.5 = a short shadow, 2+ = a long, late-day-sun-style shadow." +
+        "</div>" +
+        row("Softness", numInput("", shadowCaster.softness, "ShadowCaster.softness")) +
+        '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
+        "0 = crisp hard-edged shadow. Higher values add a soft, blurred edge (penumbra) for a more realistic look." +
         "</div>" +
         '<button class="removecomp-btn" data-action="remove-component" data-component="ShadowCaster" style="margin-top:6px;">Remove Component</button>'
     );

@@ -6,6 +6,11 @@
  *  - Directional : uniform light across the whole scene from one angle,
  *    like sunlight. No position falloff. `rotation` (degrees) sets the
  *    direction shadows/gradient would lean, `intensity` sets brightness.
+ *    When castShadows is on, shadows are PARALLEL (every occluder's
+ *    shadow points the same direction, set purely by this light's
+ *    rotation) rather than radiating from a position — exactly like
+ *    real sunlight, where the sun's position doesn't matter, only its
+ *    angle in the sky. See LightingSystem._castParallelShadowForOccluder.
  *  - Point       : radiates outward from the entity's Transform position
  *    in all directions, fading out at `radius`. The classic "lightbulb".
  *  - Spot        : radiates from the entity's Transform position within
@@ -46,6 +51,8 @@ export class Light {
     height = 200,
     castsOnWorld = true,
     castShadows = false,
+    shadowColor = "#000000",
+    shadowStrength = 1,
   } = {}) {
     this.type = type;
     this.color = color;
@@ -55,7 +62,10 @@ export class Light {
     this.intensity = intensity;
 
     // Point / Spot / Area only: how far the light reaches before fading
-    // to nothing (world units / px).
+    // to nothing (world units / px). For Directional this is unused for
+    // the glow itself (see LightingSystem._drawDirectional) but IS used
+    // as the base shadow-casting distance when castShadows is on (scaled
+    // further per-caster by ShadowCaster.length).
     this.radius = radius;
 
     // Spot only: full cone width in degrees, centered on the entity's
@@ -76,15 +86,33 @@ export class Light {
     // entity from being queried at all.
     this.castsOnWorld = castsOnWorld;
 
-    // When true, this light computes real-time shadow polygons from
-    // every ShadowCaster entity in the scene (see components/
-    // ShadowCaster.js and systems/LightingSystem.js) and darkens the
-    // occluded regions behind them, dynamically — moving either the
-    // light or an occluder updates shadows every frame, no baking.
-    // Defaults to false: shadow casting is real rendering cost (one
-    // shadow polygon per occluder per shadow-casting light per frame),
-    // so it's opt-in per light rather than always-on, matching Unity's
-    // own per-light "Shadow Type: None" default.
+    // When true, this light computes real-time shadows from every
+    // ShadowCaster entity in the scene (see components/ShadowCaster.js
+    // and systems/LightingSystem.js) and darkens the occluded regions
+    // behind them, dynamically — moving the light, an occluder, OR (for
+    // Directional) just rotating the light updates shadows every frame,
+    // no baking. Defaults to false: shadow casting is real rendering
+    // cost (one shadow shape per occluder per shadow-casting light per
+    // frame), so it's opt-in per light rather than always-on, matching
+    // Unity's own per-light "Shadow Type: None" default. Valid for
+    // EVERY light type including Directional (real sunlight casts
+    // shadows too) — see the Directional-specific parallel-shadow note
+    // above.
     this.castShadows = castShadows;
+
+    // Tint applied to this light's shadows. Defaults to pure black
+    // (a normal, "physically correct" shadow), but real scenes often
+    // want e.g. a cool blue-tinted shadow under a warm key light for
+    // extra realism/mood — matches Unity's per-Light2D shadow color.
+    this.shadowColor = shadowColor;
+
+    // Per-light shadow opacity multiplier, 0 (this light casts no
+    // visible shadow at all, even from enabled ShadowCasters) to 1
+    // (full strength). Multiplied together with each individual
+    // ShadowCaster's own `opacity` (see components/ShadowCaster.js) —
+    // either can independently fade shadows, matching Unity's split
+    // between a light's own Shadow Strength and a renderer's shadow
+    // contribution.
+    this.shadowStrength = shadowStrength;
   }
 }

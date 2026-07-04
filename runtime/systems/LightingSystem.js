@@ -10,11 +10,23 @@
  *
  * Soft falloff for Point/Spot/Area lights is a REAL smooth radial
  * gradient baked once into a canvas texture (see _getRadialGradientTexture)
- * and drawn as a tinted, scaled PIXI.Sprite — not the old "concentric
- * rings" approximation, which read as visibly banded/fake because
- * PIXI.Graphics has no native gradient fill. A genuine gradient plus an
+ * and drawn as a tinted, scaled PIXI.Sprite — not a "concentric rings"
+ * approximation, which reads as visibly banded/fake because PIXI.Graphics
+ * has no native gradient fill. A genuine gradient plus an
  * inverse-square-ish brightness curve is what actually sells "light"
  * instead of "a stack of solid circles."
+ *
+ * SHADOWS (see components/ShadowCaster.js) come in two distinct flavors,
+ * matching how real light actually behaves:
+ *  - Point/Spot/Area lights cast PROJECTIVE shadows: rays radiate out
+ *    from the light's own Transform position, so an occluder's shadow
+ *    direction depends on where the occluder sits RELATIVE TO the light
+ *    (see _castProjectiveShadowForOccluder).
+ *  - Directional lights cast PARALLEL shadows: every occluder's shadow
+ *    points the same direction regardless of position, determined
+ *    ENTIRELY by the light's Transform.rotation — exactly like the sun,
+ *    where moving the light does nothing but rotating it swings every
+ *    shadow in the scene together (see _castParallelShadowForOccluder).
  *
  * Owns its own PIXI.Container (added ABOVE the world container that
  * RenderSystem draws sprites into, but the darkness/light layer visually
@@ -55,6 +67,21 @@ const FALLBACK_OCCLUDER_HALF = 24;
 // serves every light of that falloff "shape" no matter how big or small
 // it is in world space.
 const GRADIENT_TEX_SIZE = 256;
+
+// Base shadow-casting distance (world units/px) used by Directional
+// lights' PARALLEL shadows, which have no light.radius of their own to
+// scale against (Directional's "radius" field is unused for the glow —
+// see _drawDirectional). Each ShadowCaster's own `length` multiplies
+// this base, same as it multiplies light.radius for Point/Spot/Area.
+const DIRECTIONAL_SHADOW_BASE_DISTANCE = 1200;
+
+// Number of progressively larger/fainter passes used to fake a soft
+// penumbra edge on a shadow polygon (see _fillShadowPolygon). More
+// passes = smoother-looking soft edge but more draw calls; 1 pass means
+// "no softness pass at all", used automatically when a caster's
+// `softness` is 0 so a crisp shadow costs exactly one fill, same as
+// before this feature existed.
+const MAX_SOFTNESS_PASSES = 5;
 
 export class LightingSystem extends System {
   /**
@@ -99,7 +126,8 @@ export class LightingSystem extends System {
     // (not additive) so they re-darken exactly the occluded wedge behind
     // each caster, cutting a real hole out of the light's additive glow
     // instead of adding more light. This is what makes shadows dynamic
-    // and per-light rather than a flat baked darkness — see _castShadow.
+    // and per-light rather than a flat baked darkness — see
+    // _castProjectiveShadowForOccluder / _castParallelShadowForOccluder.
     this.shadowGraphics = new PIXI.Graphics();
 
     this.overlay.addChild(this.darknessGraphics);
@@ -182,13 +210,19 @@ export class LightingSystem extends System {
           break;
       }
 
-      // Directional lights have no single source position (see
-      // _drawDirectional) so per-occluder point-projection shadows
-      // don't apply to them the same way real-time 2D shadow casting
-      // needs a finite light position to project FROM — skipped for
-      // now rather than drawing something physically nonsensical.
-      if (light.castShadows && light.type !== LightType.DIRECTIONAL && occluders.length) {
-        this._castShadowsForLight(transform, light, entity.id, occluders);
+      if (!light.castShadows || light.shadowStrength <= 0 || !occluders.length) continue;
+
+      if (light.type === LightType.DIRECTIONAL) {
+        // Parallel shadows: direction comes ONLY from the light's own
+        // rotation, never its position — see file header and
+        // _castParallelShadowForOccluder. This is the "just like the
+        // sun" behavior: dragging a Directional light around the scene
+        // does nothing to its shadows, only rotating it does.
+        for (const occ of occluders) {
+          this._castParallelShadowForOccluder(transform.rotation || 0, light, occ);
+        }
+      } else {
+        this._castProjectiveShadowsForLight(transform, light, entity.id, occluders);
       }
     }
 
@@ -316,7 +350,7 @@ export class LightingSystem extends System {
    * (t^1.8 rather than linear t) so the bright core stays tighter and
    * the outer fade is longer/softer — closer to how real point-light
    * intensity actually falls off than a linear ramp, which is part of
-   * why the old ringed version read as artificial.
+   * why a ringed/banded version reads as artificial.
    */
   _getRadialGradientTexture() {
     return this._getCachedTexture("radial", () => {
@@ -349,8 +383,8 @@ export class LightingSystem extends System {
    * Area light gradient: a flat-white core rectangle with a soft
    * radial-ish fade baked into the texture edges, achieved here by
    * layering a box blur via canvas shadowBlur rather than concentric
-   * rect outlines (the old approach) — one real blurred edge instead of
-   * a handful of visibly stepped rectangle outlines.
+   * rect outlines — one real blurred edge instead of a handful of
+   * visibly stepped rectangle outlines.
    */
   _getAreaGradientTexture() {
     return this._getCachedTexture("area", () => {
@@ -397,7 +431,7 @@ export class LightingSystem extends System {
    * cache) — bright near the apex, fading both radially outward AND
    * toward the cone's angular edges, which is what makes a spotlight's
    * beam look like an actual soft-edged beam instead of a hard wedge
-   * cut out of a circle (the old approach).
+   * cut out of a circle.
    *
    * Baked pointing along +X: apex at the LEFT edge (x=0), opening
    * rightward to the full `angle` degrees wide at x=size. The caller
@@ -459,11 +493,26 @@ export class LightingSystem extends System {
 
   /**
    * Gathers every enabled ShadowCaster entity's world-space occluder
-   * box: {id, x, y, halfWidth, halfHeight}. Prefers the entity's real
-   * rendered sprite bounds (RenderSystem.getSpriteWorldHalfExtents) so
-   * a shadow automatically matches what the sprite looks like; falls
-   * back to an explicit width/height override on the ShadowCaster
-   * component, then to FALLBACK_OCCLUDER_HALF if neither is available.
+   * box: {id, x, y, halfWidth, halfHeight, rotationDeg, opacity, length,
+   * softness}. Prefers the entity's real rendered sprite bounds
+   * (RenderSystem.getSpriteWorldHalfExtents) so a shadow automatically
+   * matches what the sprite looks like; falls back to an explicit
+   * width/height override on the ShadowCaster component, then to
+   * FALLBACK_OCCLUDER_HALF if neither is available.
+   *
+   * The occluder's center ALSO applies ShadowCaster.offsetX/offsetY,
+   * rotated by the entity's own Transform.rotation first — same
+   * local-offset-then-rotate-then-translate convention as
+   * runtime/physics/ColliderGeometry.js, so an offset caster on a
+   * rotated object swings around with it instead of sliding in world
+   * space independent of rotation.
+   *
+   * rotationDeg is carried through so the occluder's box corners can be
+   * computed rotated to match the entity's actual (possibly rotated)
+   * silhouette, rather than always an axis-aligned box — this is the
+   * single biggest shadow ACCURACY fix: a rotated sprite now casts a
+   * shadow from its true rotated footprint, not a boundingbox that
+   * ignores rotation entirely.
    */
   _collectOccluders(world) {
     const casters = world.query(TRANSFORM, SHADOW_CASTER);
@@ -472,6 +521,8 @@ export class LightingSystem extends System {
       const caster = entity.getComponent(SHADOW_CASTER);
       if (!caster.enabled) continue;
       const transform = entity.getComponent(TRANSFORM);
+      const rotationDeg = transform.rotation || 0;
+      const angleRad = (rotationDeg * Math.PI) / 180;
 
       let halfWidth, halfHeight;
       const real = this.renderSystem ? this.renderSystem.getSpriteWorldHalfExtents(entity.id) : null;
@@ -486,49 +537,89 @@ export class LightingSystem extends System {
         halfHeight = FALLBACK_OCCLUDER_HALF;
       }
 
-      out.push({ id: entity.id, x: transform.x, y: transform.y, halfWidth, halfHeight });
+      // Rotate the LOCAL offset by the entity's rotation, then
+      // translate by its world position (see file-header note above).
+      const localOffsetX = caster.offsetX || 0;
+      const localOffsetY = caster.offsetY || 0;
+      const rotatedOffsetX = localOffsetX * Math.cos(angleRad) - localOffsetY * Math.sin(angleRad);
+      const rotatedOffsetY = localOffsetX * Math.sin(angleRad) + localOffsetY * Math.cos(angleRad);
+
+      out.push({
+        id: entity.id,
+        x: transform.x + rotatedOffsetX,
+        y: transform.y + rotatedOffsetY,
+        halfWidth,
+        halfHeight,
+        rotationDeg,
+        opacity: caster.opacity != null ? caster.opacity : 1,
+        length: caster.length != null ? caster.length : 1,
+        softness: Math.max(0, caster.softness || 0),
+      });
     }
     return out;
   }
 
   /**
-   * Casts a real-time shadow polygon from every occluder box, as seen
-   * from this light's position, and darkens each occluded wedge.
-   * Skips an occluder if it IS the light's own entity (an object with
-   * both Light + ShadowCaster shouldn't shadow itself) or if it's
-   * further from the light than the light's reach (nothing to shadow
-   * beyond where the light doesn't reach anyway).
+   * Returns the occluder's 4 world-space corners, rotated by its own
+   * rotationDeg around its own center — the true rotated footprint
+   * rather than an axis-aligned box, which is what makes shadows track
+   * a spinning/rotated object's actual silhouette correctly.
    */
-  _castShadowsForLight(lightTransform, light, lightEntityId, occluders) {
-    const reach =
+  _occluderCorners(occ) {
+    const angleRad = (occ.rotationDeg * Math.PI) / 180;
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+    const local = [
+      [-occ.halfWidth, -occ.halfHeight],
+      [occ.halfWidth, -occ.halfHeight],
+      [occ.halfWidth, occ.halfHeight],
+      [-occ.halfWidth, occ.halfHeight],
+    ];
+    return local.map(([lx, ly]) => ({
+      x: occ.x + lx * cos - ly * sin,
+      y: occ.y + lx * sin + ly * cos,
+    }));
+  }
+
+  /**
+   * Projective shadows for Point/Spot/Area lights: rays radiate from
+   * the light's own Transform position, so each occluder's shadow
+   * direction depends on where it sits relative to the light. Skips an
+   * occluder if it IS the light's own entity (an object with both Light
+   * + ShadowCaster shouldn't shadow itself) or if it's further from the
+   * light than the light's reach (nothing to shadow beyond where the
+   * light doesn't reach anyway).
+   */
+  _castProjectiveShadowsForLight(lightTransform, light, lightEntityId, occluders) {
+    const baseReach =
       light.type === LightType.AREA ? (light.radius || 0) + Math.max(light.width, light.height) : light.radius;
 
     for (const occ of occluders) {
       if (occ.id === lightEntityId) continue;
+      if (occ.opacity <= 0) continue;
 
       const dx = occ.x - lightTransform.x;
       const dy = occ.y - lightTransform.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist > reach + Math.max(occ.halfWidth, occ.halfHeight)) continue; // occluder is out of this light's reach
+      const reach = baseReach * occ.length;
+      if (dist > baseReach + Math.max(occ.halfWidth, occ.halfHeight)) continue; // occluder is out of the LIGHT's reach
 
-      this._castShadowForOccluder(lightTransform, occ, reach);
+      this._castProjectiveShadowForOccluder(lightTransform, occ, reach, light);
     }
   }
 
   /**
-   * Classic 2D point-light shadow casting: find the occluder box's two
-   * "silhouette" corners as seen from the light (the tangent corners
-   * where the box's edge turns away from the light), then extrude a
-   * quad from those two corners straight out past the light's reach,
-   * and fill it in the darkness color to re-occlude that wedge.
+   * Classic 2D point-light shadow casting, upgraded for accuracy: finds
+   * the occluder's ROTATED box's two "silhouette" corners as seen from
+   * the light (the tangent corners where the box's edge turns away from
+   * the light), then extrudes a quad from those two corners out to
+   * `reach` (the light's natural reach scaled by this caster's own
+   * `length`), and fills it — tinted by the light's shadowColor, faded
+   * by shadowStrength * caster.opacity, and optionally softened at the
+   * edge (see _fillShadowPolygon).
    */
-  _castShadowForOccluder(lightTransform, occ, reach) {
-    const corners = [
-      { x: occ.x - occ.halfWidth, y: occ.y - occ.halfHeight },
-      { x: occ.x + occ.halfWidth, y: occ.y - occ.halfHeight },
-      { x: occ.x + occ.halfWidth, y: occ.y + occ.halfHeight },
-      { x: occ.x - occ.halfWidth, y: occ.y + occ.halfHeight },
-    ];
+  _castProjectiveShadowForOccluder(lightTransform, occ, reach, light) {
+    const corners = this._occluderCorners(occ);
 
     // For a convex box, the silhouette as seen from an external point
     // is exactly the two corners adjacent to the single farthest edge
@@ -564,47 +655,134 @@ export class LightingSystem extends System {
     }
 
     // Extrude both silhouette corners straight out along the
-    // light->corner ray, well past the light's reach, so the far edge
-    // of the shadow quad always lands outside the light's visible
-    // range (the light's own additive falloff naturally hides any
-    // excess beyond `reach`, so overshooting here is harmless).
+    // light->corner ray, to exactly `reach` — a REAL, controllable
+    // shadow length now (ShadowCaster.length), rather than always
+    // overshooting past the light's visible range regardless of intent.
     const extrude = (corner) => {
       const rayX = corner.x - lightTransform.x;
       const rayY = corner.y - lightTransform.y;
       const rayLen = Math.sqrt(rayX * rayX + rayY * rayY) || 1;
-      const scale = (reach * 2.5) / rayLen;
+      const scale = reach / rayLen;
       return { x: lightTransform.x + rayX * scale, y: lightTransform.y + rayY * scale };
     };
 
     const farMin = extrude(cornerAtMin);
     const farMax = extrude(cornerAtMax);
 
-    // Full opacity black quad: shadows are a hard occlusion (light
-    // physically can't reach there), not a soft falloff, matching how
-    // Unity 2D's shadow casters read — a crisp dynamic shadow rather
-    // than a gradient. Drawn in shadowGraphics (normal blend, on top of
-    // the additive lightLayer) so it reliably cuts the light back down
-    // to full ambient darkness in the occluded wedge regardless of how
-    // bright the light underneath was.
-    this.shadowGraphics.beginFill(0x000000, AMBIENT_DARKNESS);
-    this.shadowGraphics.moveTo(cornerAtMin.x, cornerAtMin.y);
-    this.shadowGraphics.lineTo(farMin.x, farMin.y);
-    this.shadowGraphics.lineTo(farMax.x, farMax.y);
-    this.shadowGraphics.lineTo(cornerAtMax.x, cornerAtMax.y);
-    this.shadowGraphics.closePath();
-    this.shadowGraphics.endFill();
+    const points = [cornerAtMin, farMin, farMax, cornerAtMax];
+    const alpha = Math.min(1, light.shadowStrength * occ.opacity) * AMBIENT_DARKNESS;
+    this._fillShadowPolygon(points, this._toHex(light.shadowColor), alpha, occ.softness);
 
-    // The occluder's own box is also re-darkened (an object standing in
-    // its own light doesn't light itself up from inside) — drawn as a
-    // separate fill so it stays correct even if the silhouette quad
-    // above doesn't perfectly cover the near face at grazing angles.
-    this.shadowGraphics.beginFill(0x000000, AMBIENT_DARKNESS);
-    this.shadowGraphics.drawRect(
-      occ.x - occ.halfWidth,
-      occ.y - occ.halfHeight,
-      occ.halfWidth * 2,
-      occ.halfHeight * 2
-    );
+    // The occluder's own footprint is also re-darkened (an object
+    // standing in its own light doesn't light itself up from inside) —
+    // filled as its real rotated corners, not an axis-aligned rect, for
+    // the same accuracy reason as the shadow quad above.
+    this._fillPolygon(corners, this._toHex(light.shadowColor), alpha);
+  }
+
+  /**
+   * Parallel ("sun") shadows for Directional lights: EVERY occluder's
+   * shadow points the same direction, taken purely from the light's own
+   * Transform.rotation (0deg = shadow points along +X, matching the
+   * same rotation convention Spot lights already use for aiming) — the
+   * light's own position is never read here at all, which is exactly
+   * the "only rotation affects the shadow, just like the sun" behavior
+   * requested: dragging the light around does nothing, spinning it
+   * swings every shadow in the scene together.
+   */
+  _castParallelShadowForOccluder(lightRotationDeg, light, occ) {
+    if (occ.opacity <= 0) return;
+
+    const corners = this._occluderCorners(occ);
+    const angleRad = (lightRotationDeg * Math.PI) / 180;
+    // Shadows point AWAY from the light's facing direction, same as a
+    // real sun: the light "shines" along (cos,sin) of its rotation, so
+    // the shadow it casts extends in that same direction on the far
+    // side of the occluder.
+    const dirX = Math.cos(angleRad);
+    const dirY = Math.sin(angleRad);
+
+    const reach = DIRECTIONAL_SHADOW_BASE_DISTANCE * occ.length;
+
+    // For a parallel projection, EVERY corner extrudes the same
+    // distance in the same direction (unlike the point-source case,
+    // where each corner's ray differs) — so the silhouette is simply
+    // whichever 2 of the 4 corners are the extreme points perpendicular
+    // to the light direction, found via a dot-product projection rather
+    // than the point-source's angular comparison.
+    const perpX = -dirY;
+    const perpY = dirX;
+
+    let minProj = Infinity;
+    let maxProj = -Infinity;
+    let cornerAtMin = corners[0];
+    let cornerAtMax = corners[0];
+    for (const corner of corners) {
+      const proj = corner.x * perpX + corner.y * perpY;
+      if (proj < minProj) {
+        minProj = proj;
+        cornerAtMin = corner;
+      }
+      if (proj > maxProj) {
+        maxProj = proj;
+        cornerAtMax = corner;
+      }
+    }
+
+    const farMin = { x: cornerAtMin.x + dirX * reach, y: cornerAtMin.y + dirY * reach };
+    const farMax = { x: cornerAtMax.x + dirX * reach, y: cornerAtMax.y + dirY * reach };
+
+    const points = [cornerAtMin, farMin, farMax, cornerAtMax];
+    const alpha = Math.min(1, light.shadowStrength * occ.opacity) * AMBIENT_DARKNESS;
+    this._fillShadowPolygon(points, this._toHex(light.shadowColor), alpha, occ.softness);
+
+    // Re-darken the occluder's own real (rotated) footprint too, same
+    // reasoning as the projective case.
+    this._fillPolygon(corners, this._toHex(light.shadowColor), alpha);
+  }
+
+  /**
+   * Fills a quadrilateral shadow shape, optionally with a soft
+   * (penumbra-style) edge: when `softness` is 0, this is a single crisp
+   * fill (cheapest case, and the default — most shadows should read as
+   * fairly defined, not universally blurry). When softness > 0, several
+   * progressively LARGER copies of the polygon are drawn first at very
+   * low alpha (building up a soft outer glow around the hard shadow),
+   * then the crisp polygon itself is drawn on top at full alpha — this
+   * is a cheap approximation of a penumbra without a real per-pixel
+   * blur pass, but reads convincingly soft at the shadow's edge, which
+   * is the visually important part.
+   */
+  _fillShadowPolygon(points, colorHex, alpha, softness) {
+    if (softness > 0) {
+      const passes = Math.min(MAX_SOFTNESS_PASSES, Math.max(1, Math.round(softness / 4)));
+      const cx = (points[0].x + points[1].x + points[2].x + points[3].x) / 4;
+      const cy = (points[0].y + points[1].y + points[2].y + points[3].y) / 4;
+
+      for (let p = passes; p >= 1; p--) {
+        const growth = (softness * p) / passes;
+        const passAlpha = alpha * 0.35 * (1 - p / (passes + 1));
+        if (passAlpha <= 0.002) continue;
+        const grown = points.map((pt) => {
+          const dx = pt.x - cx;
+          const dy = pt.y - cy;
+          const len = Math.sqrt(dx * dx + dy * dy) || 1;
+          const scale = (len + growth) / len;
+          return { x: cx + dx * scale, y: cy + dy * scale };
+        });
+        this._fillPolygon(grown, colorHex, passAlpha);
+      }
+    }
+
+    this._fillPolygon(points, colorHex, alpha);
+  }
+
+  _fillPolygon(points, colorHex, alpha) {
+    if (alpha <= 0) return;
+    this.shadowGraphics.beginFill(colorHex, Math.min(1, alpha));
+    this.shadowGraphics.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) this.shadowGraphics.lineTo(points[i].x, points[i].y);
+    this.shadowGraphics.closePath();
     this.shadowGraphics.endFill();
   }
 
