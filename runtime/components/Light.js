@@ -45,6 +45,7 @@ export class Light {
     width = 200,
     height = 200,
     castsOnWorld = true,
+    castShadows = false,
   } = {}) {
     this.type = type;
     this.color = color;
@@ -74,5 +75,16 @@ export class Light {
     // without overloading entity.active, which would also stop the
     // entity from being queried at all.
     this.castsOnWorld = castsOnWorld;
+
+    // When true, this light computes real-time shadow polygons from
+    // every ShadowCaster entity in the scene (see components/
+    // ShadowCaster.js and systems/LightingSystem.js) and darkens the
+    // occluded regions behind them, dynamically — moving either the
+    // light or an occluder updates shadows every frame, no baking.
+    // Defaults to false: shadow casting is real rendering cost (one
+    // shadow polygon per occluder per shadow-casting light per frame),
+    // so it's opt-in per light rather than always-on, matching Unity's
+    // own per-light "Shadow Type: None" default.
+    this.castShadows = castShadows;
   }
 }

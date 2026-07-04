@@ -67,7 +67,11 @@ export function createGame({ pixiApp, followMainCamera = false }) {
   // container (pixiApp.stage) so its darkness/light overlay updates
   // every frame right alongside sprites, staying visually locked to
   // them (same pan/zoom/camera-follow offset) instead of drifting.
-  const lightingSystem = new LightingSystem(pixiApp.stage);
+  // renderSystem is also passed in directly so LightingSystem can read
+  // each ShadowCaster entity's real rendered sprite bounds for dynamic
+  // shadow casting (see LightingSystem.`_collectOccluders`) — always
+  // available here since renderSystem is constructed just above.
+  const lightingSystem = new LightingSystem(pixiApp.stage, renderSystem);
   world.addSystem(lightingSystem);
 
   const scriptApi = new ScriptAPI(world);

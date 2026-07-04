@@ -15,6 +15,7 @@ import { RIGIDBODY_2D, Rigidbody2D } from "../../runtime/components/Rigidbody2D.
 import { COLLIDER_2D, Collider2D } from "../../runtime/components/Collider2D.js";
 import { CHARACTER_CONTROLLER, CharacterController } from "../../runtime/components/CharacterController.js";
 import { LIGHT, Light, LightType } from "../../runtime/components/Light.js";
+import { SHADOW_CASTER, ShadowCaster } from "../../runtime/components/ShadowCaster.js";
 import { importSpriteFiles } from "../../runtime/assets/AssetRegistry.js";
 import { syncBackgroundColorLive, switchScene } from "../viewport/SceneViewport.js";
 
@@ -26,6 +27,7 @@ const COMPONENT_TYPE_MAP = {
   Collider2D: COLLIDER_2D,
   CharacterController: CHARACTER_CONTROLLER,
   Light: LIGHT,
+  ShadowCaster: SHADOW_CASTER,
 };
 
 const LIGHT_ENTITY_NAMES = {
@@ -190,6 +192,11 @@ export function attachEditorEvents(render, onTogglePlay) {
             entity.addComponent(LIGHT, new Light());
             pushLog("log", "Added Light to '" + entity.name + "'.");
           }
+        } else if (componentName === "ShadowCaster") {
+          if (!entity.hasComponent(SHADOW_CASTER)) {
+            entity.addComponent(SHADOW_CASTER, new ShadowCaster());
+            pushLog("log", "Added Shadow Caster to '" + entity.name + "'.");
+          }
         }
         render();
         break;
@@ -353,8 +360,19 @@ function applyFieldChange(field, inputEl) {
   const axis = inputEl.dataset.axis;
   let value;
   if (inputEl.type === "checkbox") value = inputEl.checked;
-  else if (inputEl.type === "number") value = parseFloat(inputEl.value) || 0;
-  else value = inputEl.value;
+  else if (inputEl.type === "number") {
+    // ShadowCaster.width/height are an OPTIONAL override (null means
+    // "use this object's real sprite bounds" — see components/
+    // ShadowCaster.js) rather than a plain numeric field defaulting to
+    // 0, so a blank input there must round-trip back to null, not 0
+    // (0 would mean "zero-size occluder", a completely different and
+    // surprising thing to type-blank-and-get).
+    if (componentName === "ShadowCaster" && (propName === "width" || propName === "height") && inputEl.value.trim() === "") {
+      value = null;
+    } else {
+      value = parseFloat(inputEl.value) || 0;
+    }
+  } else value = inputEl.value;
 
   if (axis && propName === "position") {
     component.x = axis === "x" ? value : component.x;

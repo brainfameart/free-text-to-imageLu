@@ -20,6 +20,7 @@ import { ViewportCamera } from "./ViewportCamera.js";
 import { drawSceneGrid } from "./SceneGrid.js";
 import { drawCameraGizmo } from "./CameraGizmo.js";
 import { drawColliderGizmo } from "./ColliderGizmo.js";
+import { drawLightGizmo, hitTestLightGizmo } from "./LightGizmo.js";
 import { TransformGizmo } from "./TransformGizmo.js";
 import { editorState, pushLog } from "../state/EditorState.js";
 import { attachPixiDiagnostics } from "../state/ConsoleCapture.js";
@@ -35,6 +36,7 @@ let gridContainer = null;
 let gizmoContainer = null;
 let cameraGizmoContainer = null;
 let colliderGizmoContainer = null;
+let lightGizmoContainer = null;
 let transformGizmo = null;
 let game = null;
 let renderFn = null;
@@ -117,6 +119,7 @@ function createViewport(mount, render) {
   gridContainer = new PIXI.Container();
   cameraGizmoContainer = new PIXI.Container();
   colliderGizmoContainer = new PIXI.Container();
+  lightGizmoContainer = new PIXI.Container();
   gizmoContainer = new PIXI.Container();
   // LightingSystem's darkness/light overlay (see runtime/systems/
   // LightingSystem.js) lives in this SAME container (pixiApp.stage,
@@ -126,13 +129,20 @@ function createViewport(mount, render) {
   // editor-only chrome layers need explicit zIndex values above that,
   // or the sort would otherwise bury them under the light/dark overlay
   // (chrome must always stay visible on top, even in the dark).
+  // lightGizmoContainer specifically needs to be ABOVE LightingSystem's
+  // own darkness overlay so a light's bulb icon and range circle stay
+  // visible/clickable even in a fully darkened area of the scene —
+  // otherwise you couldn't click a light to select it from inside its
+  // own shadow.
   gridContainer.zIndex = -1; // grid stays behind everything, including darkness
   cameraGizmoContainer.zIndex = 200000;
   colliderGizmoContainer.zIndex = 200001;
-  gizmoContainer.zIndex = 200002;
+  lightGizmoContainer.zIndex = 200002;
+  gizmoContainer.zIndex = 200003;
   pixiApp.stage.addChildAt(gridContainer, 0); // grid behind everything
   pixiApp.stage.addChild(cameraGizmoContainer); // camera frame above scene content
   pixiApp.stage.addChild(colliderGizmoContainer); // collider outlines above camera frame dimming
+  pixiApp.stage.addChild(lightGizmoContainer); // light icons/range above the darkness overlay
   pixiApp.stage.addChild(gizmoContainer); // selection/transform gizmo above everything
   pixiApp.stage.sortableChildren = true;
   drawSceneGrid(gridContainer);
@@ -199,9 +209,19 @@ function attachGizmoPointerEvents(mount) {
     }
 
     // Not on a gizmo handle (or gizmo tool isn't active): try selecting
-    // a different entity by clicking its sprite. Runs for every tool
-    // (including "pan") so clicking a sprite always selects it.
+    // a different entity. Runs for every tool (including "pan") so
+    // clicking always selects it. Light gizmo icons are checked FIRST
+    // and take priority over sprite hit-testing — a light's clickable
+    // icon is deliberately small and would otherwise often be "covered"
+    // by whatever bigger sprite sits at/near the same position (a lamp
+    // sprite with a Point light entity centered on it, for example).
     const world = clientToWorld(e.clientX, e.clientY);
+    const lightHit = hitTestLightGizmo(editorState.world, world.x, world.y, _worldPerPixel());
+    if (lightHit) {
+      editorState.selectedId = lightHit.id;
+      if (renderFn) renderFn();
+      return;
+    }
     const hit = hitTestEntities(world.x, world.y);
     if (hit) {
       editorState.selectedId = hit.id;
@@ -357,6 +377,18 @@ function refreshGizmos() {
   transformGizmo.draw(selected);
   drawCameraGizmo(cameraGizmoContainer, editorState.world);
   drawColliderGizmo(colliderGizmoContainer, editorState.world, editorState.selectedId);
+  drawLightGizmo(lightGizmoContainer, editorState.world, editorState.selectedId, _worldPerPixel());
+}
+
+/**
+ * World units per screen pixel at the viewport's current zoom — the
+ * inverse of pixiApp.stage.scale.x (same scale clientToWorld already
+ * divides by). Used only to keep LightGizmo's bulb icon a constant
+ * apparent screen size regardless of zoom (see LightGizmo.js).
+ */
+function _worldPerPixel() {
+  if (!pixiApp || !pixiApp.stage.scale.x) return 1;
+  return 1 / pixiApp.stage.scale.x;
 }
 
 /**

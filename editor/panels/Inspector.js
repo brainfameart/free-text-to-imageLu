@@ -17,6 +17,7 @@ import { RIGIDBODY_2D, BodyType } from "../../runtime/components/Rigidbody2D.js"
 import { COLLIDER_2D, ColliderShape } from "../../runtime/components/Collider2D.js";
 import { CHARACTER_CONTROLLER, ControllerType } from "../../runtime/components/CharacterController.js";
 import { LIGHT, LightType } from "../../runtime/components/Light.js";
+import { SHADOW_CASTER } from "../../runtime/components/ShadowCaster.js";
 import { getCameraResolution } from "../../runtime/core/CameraUtils.js";
 import { getSpriteAsset } from "../../runtime/assets/AssetRegistry.js";
 
@@ -207,7 +208,52 @@ export function renderInspector() {
             (light.castsOnWorld ? " checked" : "") +
             "/>"
         ) +
+        (light.type === LightType.DIRECTIONAL
+          ? '<div class="static-body-note" style="padding:6px 4px;color:#8a93a0;font-size:11px;">' +
+            "Directional lights don't cast shadows (no single source position to project from)." +
+            "</div>"
+          : row(
+              "Cast Shadows",
+              '<input type="checkbox" data-field="Light.castShadows" style="accent-color:#2C5D87;margin:0;"' +
+                (light.castShadows ? " checked" : "") +
+                "/>"
+            ) +
+            (light.castShadows
+              ? '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
+                "Casts real-time shadows from every object with a Shadow Caster component (see below)." +
+                "</div>"
+              : "")) +
         '<button class="removecomp-btn" data-action="remove-component" data-component="Light" style="margin-top:6px;">Remove Component</button>'
+    );
+  }
+
+  const shadowCaster = entity.getComponent(SHADOW_CASTER);
+  if (shadowCaster) {
+    body += section(
+      editorState.sectionsOpen,
+      "shadowcaster",
+      "Shadow Caster",
+      "box",
+      row(
+        "Cast Shadow",
+        '<input type="checkbox" data-field="ShadowCaster.enabled" style="accent-color:#2C5D87;margin:0;"' +
+          (shadowCaster.enabled ? " checked" : "") +
+          "/>"
+      ) +
+        '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
+        "When enabled, this object blocks light and casts a dynamic shadow for every nearby light that has Cast Shadows on. By default the shadow's shape matches this object's own sprite." +
+        "</div>" +
+        row(
+          "Size Override",
+          '<div style="display:flex;gap:4px;width:100%;">' +
+            numInput("W", shadowCaster.width == null ? "" : shadowCaster.width, "ShadowCaster.width") +
+            numInput("H", shadowCaster.height == null ? "" : shadowCaster.height, "ShadowCaster.height") +
+            "</div>"
+        ) +
+        '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
+        "Leave blank to use this object's real sprite size." +
+        "</div>" +
+        '<button class="removecomp-btn" data-action="remove-component" data-component="ShadowCaster" style="margin-top:6px;">Remove Component</button>'
     );
   }
 
@@ -391,6 +437,7 @@ export function renderInspector() {
     !collider && { name: "Collider2D", label: "Collider 2D" },
     !controller && { name: "CharacterController", label: "Movement Type" },
     !light && { name: "Light", label: "Light" },
+    !shadowCaster && { name: "ShadowCaster", label: "Shadow Caster" },
   ].filter(Boolean);
 
   body +=
