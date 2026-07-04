@@ -25,15 +25,13 @@ export const editorState = {
   projectFolder: "scenes",
   sectionsOpen: { transform: true, camera: true, sprite: true, rigidbody: true, collider: true, movement: true, light: true },
   addComponentMenuOpen: false,
-  logs: [{ type: "log", msg: "Editor initialized successfully." }],
 
-  /** @type {string|null} which top menu-bar dropdown is open — currently
-   *   only "GameObject" actually opens a real dropdown (Light > 4 types);
-   *   the rest of MENUS in Toolbar.js are still inert labels, unchanged. */
+  /** @type {string|null} which top menu-bar dropdown is open ("GameObject", etc), or null */
   openMenu: null,
-  /** @type {string|null} which submenu inside the open menu is expanded
-   *   (currently only "Light", inside GameObject) */
+
+  /** @type {string|null} which submenu within the open menu is open ("Light"), or null */
   openSubmenu: null,
+  logs: [{ type: "log", msg: "Editor initialized successfully." }],
 
   /** @type {string|null} id of the scene file currently mid-inline-rename (in the
    *   Project > Scenes folder grid), or null */

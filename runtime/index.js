@@ -60,10 +60,14 @@ export function createGame({ pixiApp, followMainCamera = false }) {
   const world = new World();
   const renderSystem = new RenderSystem(pixiApp.stage, { followMainCamera });
   const controllerSystem = new ControllerSystem();
-  const lightingSystem = new LightingSystem(pixiApp.stage, renderSystem);
   world.addSystem(controllerSystem);
   world.addSystem(new PhysicsSystem());
   world.addSystem(renderSystem);
+  // LightingSystem is added AFTER RenderSystem and shares the exact same
+  // container (pixiApp.stage) so its darkness/light overlay updates
+  // every frame right alongside sprites, staying visually locked to
+  // them (same pan/zoom/camera-follow offset) instead of drifting.
+  const lightingSystem = new LightingSystem(pixiApp.stage);
   world.addSystem(lightingSystem);
 
   const scriptApi = new ScriptAPI(world);
@@ -79,8 +83,8 @@ export function createGame({ pixiApp, followMainCamera = false }) {
     getSceneData: () => serializeScene(world),
     validate: () => validateScene(world),
     destroyRenderer: () => renderSystem.destroy(),
-    destroyControllers: () => controllerSystem.destroy(),
     destroyLighting: () => lightingSystem.destroy(),
+    destroyControllers: () => controllerSystem.destroy(),
 
     // Multi-scene project management (see scene/SceneManager.js). Sprite
     // assets are NOT scoped per-scene — AssetRegistry.js is one shared

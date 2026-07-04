@@ -1,38 +1,27 @@
 /**
  * runtime/components/Light.js
  *
- * Plain light descriptor — 4 Unity-style light types, matching Unity's
- * own Light component naming/behavior split so it's immediately
- * familiar:
+ * Light descriptor, modeled after Unity's 4 light types (adapted to 2D):
  *
- *  - Directional: no falloff, no position dependence — lightens (or
- *    tints) EVERYTHING in the scene uniformly, like sunlight. Only
- *    color/intensity matter; range/angle/width/height are ignored. When
- *    castShadows is on, casts long PARALLEL shadows in a fixed
- *    direction (derived from the entity's Transform.rotation), the same
- *    way real sunlight does.
- *  - Point: radial falloff from the entity's Transform position in every
- *    direction, out to `range`. The classic "light bulb" light. When
- *    castShadows is on, shadows radiate outward from the light's exact
- *    position — near objects cast bigger/longer shadows than far ones.
- *  - Spot: same as Point but constrained to a cone facing
- *    Transform.rotation, width controlled by `spotAngle` (degrees).
- *    Casts radial shadows the same way Point does, clipped to the cone.
- *  - Area: a soft rectangular glow centered on the entity, sized by
- *    `width`/`height` instead of a radius — good for "light coming
- *    through a window" or a glowing floor panel. Shadows radiate
- *    outward from the entity's center, same as Point.
+ *  - Directional : uniform light across the whole scene from one angle,
+ *    like sunlight. No position falloff. `rotation` (degrees) sets the
+ *    direction shadows/gradient would lean, `intensity` sets brightness.
+ *  - Point       : radiates outward from the entity's Transform position
+ *    in all directions, fading out at `radius`. The classic "lightbulb".
+ *  - Spot        : radiates from the entity's Transform position within
+ *    a cone (`angle` degrees wide, aimed along `rotation`), fading out
+ *    at `radius`. Good for flashlights / focused beams.
+ *  - Area        : uniform light emitted from a rectangular region
+ *    (`width` x `height`) centered on the entity's Transform position,
+ *    with a soft `radius`-sized falloff at the rectangle's edge.
  *
- * `castShadows` is this light's half of shadow casting — see
- * SpriteRenderer.castShadow for the other half (whether a given object
- * blocks light at all). BOTH need to be on for a specific light/object
- * pair to actually produce a shadow — matches Unity's split between a
- * Light's own shadow toggle and a Renderer's "Cast Shadows" checkbox.
+ * All types share color/intensity so the Inspector and LightingSystem
+ * can treat them uniformly where the math allows, while type-specific
+ * fields (radius/angle/width/height) only apply to the relevant type.
  *
- * Rendering (actually dimming the world + brightening sprites near a
- * light, and cutting shadow shapes out of that brightening) is 100% the
- * renderer's job — see runtime/systems/LightingSystem.js — this file
- * only holds numbers.
+ * This component is PLAIN DATA ONLY (see RULES.txt #4) — actually
+ * darkening/lighting the world and sprites is LightingSystem's job
+ * (runtime/systems/LightingSystem.js), not this file's.
  *
  * RUNTIME-ONLY FILE.
  */
@@ -50,40 +39,40 @@ export class Light {
   constructor({
     type = LightType.POINT,
     color = "#ffffff",
-    intensity = 1, // 0-ish (off) to ~3 (blinding); 1 is a natural default brightness
-    range = 300, // px — Point/Spot: distance the light reaches before fully fading out
-
-    // Spot-only
-    spotAngle = 45, // degrees, full cone width
-
-    // Area-only
-    width = 300, // px
-    height = 200, // px
-
-    // Global toggle for whether this light contributes to the scene's
-    // ambient darkness/lighting pass at all — lets a light be authored
-    // and then temporarily switched off without deleting it, matching
-    // Unity's Light.enabled checkbox.
-    enabled = true,
-
-    // Whether THIS LIGHT casts shadows at all. Off = this light ignores
-    // every shadow-caster and just lights straight through them (cheap,
-    // useful for a soft fill light that shouldn't itself throw hard
-    // shadows). See file header for how this combines with
-    // SpriteRenderer.castShadow.
-    castShadows = true,
+    intensity = 1,
+    radius = 200,
+    angle = 45,
+    width = 200,
+    height = 200,
+    castsOnWorld = true,
   } = {}) {
     this.type = type;
     this.color = color;
+    // 0 = off, 1 = normal brightness, >1 = overbright. Drives both how
+    // strongly the light punches through the ambient darkness and how
+    // much it additively brightens/tints sprites underneath it.
     this.intensity = intensity;
-    this.range = range;
 
-    this.spotAngle = spotAngle;
+    // Point / Spot / Area only: how far the light reaches before fading
+    // to nothing (world units / px).
+    this.radius = radius;
 
+    // Spot only: full cone width in degrees, centered on the entity's
+    // Transform.rotation (0 = pointing along +X).
+    this.angle = angle;
+
+    // Area only: size in world units / px of the flat-lit rectangle
+    // before the `radius`-sized soft falloff kicks in at its edges.
     this.width = width;
     this.height = height;
 
-    this.enabled = enabled;
-    this.castShadows = castShadows;
+    // When true (default), this light contributes to the scene-wide
+    // ambient darkness pass in LightingSystem, visibly lighting up
+    // sprites and background underneath it. Turning it off keeps the
+    // light purely as scene data (e.g. for a script to read) without
+    // any visual effect — matches Unity's light "Enabled" behavior
+    // without overloading entity.active, which would also stop the
+    // entity from being queried at all.
+    this.castsOnWorld = castsOnWorld;
   }
 }

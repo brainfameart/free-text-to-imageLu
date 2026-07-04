@@ -4,13 +4,12 @@
  * Top menu bar + tool selection (pan/translate/rotate/scale) + play
  * controls. Editor-only.
  *
- * The "GameObject" menu is the one real dropdown in the menu bar (the
- * rest stay inert labels, matching how they were before — out of scope
- * here). It offers a "Light" submenu with the 4 Unity-style light
- * types (see runtime/components/Light.js); clicking one spawns a new
- * Light entity into the currently-open scene at the world origin, same
- * pattern as the Hierarchy's "+" (Add GameObject) button — see
- * "add-light" in editor/state/EditorEvents.js.
+ * The "GameObject" menu is the Unity-style entry point for spawning new
+ * entities into the scene, including the 4 light types (Directional,
+ * Point, Spot, Area — see runtime/components/Light.js). Clicking
+ * "GameObject" opens a dropdown; hovering/clicking "Light" opens a
+ * submenu listing the 4 types; clicking a type creates that light
+ * centered in the current scene (see EditorEvents.js "create-light").
  */
 
 import { icon } from "../icons/IconLibrary.js";
@@ -20,10 +19,10 @@ import { LightType } from "../../runtime/components/Light.js";
 const MENUS = ["File", "Edit", "Assets", "GameObject", "Component", "Window", "Help"];
 
 const LIGHT_MENU_ITEMS = [
-  { type: LightType.DIRECTIONAL, label: "Directional Light", iconName: "sun" },
-  { type: LightType.POINT, label: "Point Light", iconName: "lightbulb" },
-  { type: LightType.SPOT, label: "Spot Light", iconName: "flashlight" },
-  { type: LightType.AREA, label: "Area Light", iconName: "square" },
+  { type: LightType.DIRECTIONAL, label: "Directional Light" },
+  { type: LightType.POINT, label: "Point Light" },
+  { type: LightType.SPOT, label: "Spot Light" },
+  { type: LightType.AREA, label: "Area Light" },
 ];
 
 export function renderToolbar() {
@@ -37,7 +36,7 @@ export function renderToolbar() {
   return (
     '<div class="toolbar-wrap">' +
     '<div class="menu-bar">' +
-    MENUS.map((m) => renderMenuButton(m)).join("") +
+    MENUS.map((m) => renderMenu(m)).join("") +
     "</div>" +
     '<div class="main-toolbar">' +
     '<div class="tool-group">' +
@@ -84,33 +83,41 @@ export function renderToolbar() {
   );
 }
 
-function renderMenuButton(name) {
-  if (name !== "GameObject") {
-    // every other top menu stays an inert label, unchanged from before —
-    // only GameObject > Light is in scope for this feature.
-    return '<button class="menu-btn">' + name + "</button>";
-  }
-
-  const isOpen = editorState.openMenu === "GameObject";
+function renderMenu(name) {
+  const isOpen = editorState.openMenu === name;
   return (
-    '<div class="menu-item-wrap">' +
+    '<div class="menu-wrap" style="position:relative;display:inline-block;">' +
     '<button class="menu-btn' +
     (isOpen ? " active" : "") +
-    '" data-action="toggle-menu" data-menu="GameObject">' +
+    '" data-action="toggle-menu" data-menu="' +
+    name +
+    '">' +
     name +
     "</button>" +
-    (isOpen ? renderGameObjectDropdown() : "") +
+    (isOpen && name === "GameObject" ? renderGameObjectMenu() : "") +
     "</div>"
   );
 }
 
-function renderGameObjectDropdown() {
+function renderGameObjectMenu() {
   return (
-    '<div class="menu-dropdown">' +
-    '<div class="menu-dropdown-item has-submenu" data-action="hover-submenu" data-submenu="Light">' +
+    '<div class="dropdown-menu" style="position:absolute;top:100%;left:0;background:#2a2a2a;border:1px solid #444;' +
+    'border-radius:4px;min-width:160px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,.4);padding:4px 0;">' +
+    '<button class="dropdown-menu-item" data-action="add-entity" style="' +
+    DROPDOWN_ITEM_STYLE +
+    '">' +
+    icon("box", 12) +
+    "<span>Empty GameObject</span>" +
+    "</button>" +
+    '<div class="dropdown-submenu-wrap" style="position:relative;">' +
+    '<button class="dropdown-menu-item" data-action="toggle-submenu" data-submenu="Light" style="' +
+    DROPDOWN_ITEM_STYLE +
+    'justify-content:space-between;">' +
+    '<span style="display:flex;align-items:center;gap:6px;">' +
     icon("lightbulb", 12) +
-    "<span>Light</span>" +
+    "<span>Light</span></span>" +
     icon("chevronright", 10) +
+    "</button>" +
     (editorState.openSubmenu === "Light" ? renderLightSubmenu() : "") +
     "</div>" +
     "</div>"
@@ -119,17 +126,25 @@ function renderGameObjectDropdown() {
 
 function renderLightSubmenu() {
   return (
-    '<div class="menu-dropdown menu-submenu">' +
+    '<div class="dropdown-menu" style="position:absolute;top:0;left:100%;background:#2a2a2a;border:1px solid #444;' +
+    'border-radius:4px;min-width:170px;z-index:101;box-shadow:0 4px 12px rgba(0,0,0,.4);padding:4px 0;">' +
     LIGHT_MENU_ITEMS.map(
       (item) =>
-        '<div class="menu-dropdown-item" data-action="add-light" data-light-type="' +
+        '<button class="dropdown-menu-item" data-action="create-light" data-light-type="' +
         item.type +
+        '" style="' +
+        DROPDOWN_ITEM_STYLE +
         '">' +
-        icon(item.iconName, 12) +
+        icon("lightbulb", 12) +
         "<span>" +
         item.label +
-        "</span></div>"
+        "</span>" +
+        "</button>"
     ).join("") +
     "</div>"
   );
 }
+
+const DROPDOWN_ITEM_STYLE =
+  "display:flex;align-items:center;gap:6px;width:100%;text-align:left;padding:6px 12px;background:none;" +
+  "border:none;color:#ddd;cursor:pointer;font-size:11px;white-space:nowrap;";

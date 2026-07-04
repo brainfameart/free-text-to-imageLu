@@ -152,13 +152,62 @@ export function renderInspector() {
             "/> X</label><label><input type=\"checkbox\" data-field=\"SpriteRenderer.flipY\"" +
             (spriteRenderer.flipY ? " checked" : "") +
             "/> Y</label></div>"
-        ) +
-        row(
-          "Cast Shadow",
-          '<input type="checkbox" data-field="SpriteRenderer.castShadow" style="accent-color:#2C5D87;margin:0;"' +
-            (spriteRenderer.castShadow ? " checked" : "") +
-            "/>"
         )
+    );
+  }
+
+  const light = entity.getComponent(LIGHT);
+  if (light) {
+    let typeSpecificHtml = "";
+    if (light.type === LightType.POINT) {
+      typeSpecificHtml = row("Radius", numInput("", light.radius, "Light.radius"));
+    } else if (light.type === LightType.SPOT) {
+      typeSpecificHtml =
+        row("Radius", numInput("", light.radius, "Light.radius")) +
+        row("Spot Angle", numInput("", light.angle, "Light.angle")) +
+        row(
+          "Direction",
+          '<div class="static-body-note" style="padding:2px 0;color:#8a93a0;font-size:10px;">Aimed using this object\'s Transform &gt; Rotation.</div>'
+        );
+    } else if (light.type === LightType.AREA) {
+      typeSpecificHtml =
+        row(
+          "Size",
+          '<div style="display:flex;gap:4px;width:100%;">' +
+            numInput("W", light.width, "Light.width") +
+            numInput("H", light.height, "Light.height") +
+            "</div>"
+        ) + row("Falloff Radius", numInput("", light.radius, "Light.radius"));
+    } else {
+      // Directional: no position/radius dependency — uniformly lights
+      // the whole scene, so no radius/angle/size fields apply.
+      typeSpecificHtml =
+        '<div class="static-body-note" style="padding:6px 4px;color:#8a93a0;font-size:11px;">' +
+        "Directional lights ignore position and reach — they light the entire scene evenly, like sunlight." +
+        "</div>";
+    }
+
+    body += section(
+      editorState.sectionsOpen,
+      "light",
+      "Light",
+      "lightbulb",
+      row("Type", dropdownInput(Object.values(LightType), light.type, "Light.type")) +
+        row(
+          "Color",
+          '<input type="color" class="color-swatch-input" value="' +
+            light.color +
+            '" data-field="Light.color" />'
+        ) +
+        row("Intensity", numInput("", light.intensity, "Light.intensity")) +
+        typeSpecificHtml +
+        row(
+          "Affects World",
+          '<input type="checkbox" data-field="Light.castsOnWorld" style="accent-color:#2C5D87;margin:0;"' +
+            (light.castsOnWorld ? " checked" : "") +
+            "/>"
+        ) +
+        '<button class="removecomp-btn" data-action="remove-component" data-component="Light" style="margin-top:6px;">Remove Component</button>'
     );
   }
 
@@ -334,52 +383,6 @@ export function renderInspector() {
             "</div>"
           : "") +
         '<button class="removecomp-btn" data-action="remove-component" data-component="CharacterController" style="margin-top:6px;">Remove Component</button>'
-    );
-  }
-
-  const light = entity.getComponent(LIGHT);
-  if (light) {
-    const isDirectional = light.type === LightType.DIRECTIONAL;
-    const isSpot = light.type === LightType.SPOT;
-    const isArea = light.type === LightType.AREA;
-    const isPointOrSpot = light.type === LightType.POINT || isSpot;
-
-    let typeFieldsHtml = "";
-    if (isDirectional) {
-      typeFieldsHtml =
-        '<div class="static-body-note" style="padding:6px 4px;color:#8a93a0;font-size:11px;">' +
-        "Directional lights ignore position/range/shape — they brighten the entire scene uniformly, like sunlight. When Cast Shadows is on, this light's Rotation sets the fixed direction every shadow points." +
-        "</div>";
-    } else {
-      if (isPointOrSpot) typeFieldsHtml += row("Range", numInput("", light.range, "Light.range"));
-      if (isSpot) typeFieldsHtml += row("Spot Angle", numInput("", light.spotAngle, "Light.spotAngle"));
-      if (isArea) {
-        typeFieldsHtml += row("Width", numInput("", light.width, "Light.width")) + row("Height", numInput("", light.height, "Light.height"));
-      }
-    }
-
-    body += section(
-      editorState.sectionsOpen,
-      "light",
-      "Light",
-      "lightbulb",
-      row("Type", dropdownInput(Object.values(LightType), light.type, "Light.type")) +
-        row(
-          "Enabled",
-          '<input type="checkbox" data-field="Light.enabled" style="accent-color:#2C5D87;margin:0;"' +
-            (light.enabled ? " checked" : "") +
-            "/>"
-        ) +
-        row("Color", '<input type="color" class="color-swatch-input" value="' + light.color + '" data-field="Light.color" />') +
-        row("Intensity", numInput("", light.intensity, "Light.intensity")) +
-        row(
-          "Cast Shadows",
-          '<input type="checkbox" data-field="Light.castShadows" style="accent-color:#2C5D87;margin:0;"' +
-            (light.castShadows ? " checked" : "") +
-            "/>"
-        ) +
-        typeFieldsHtml +
-        '<button class="removecomp-btn" data-action="remove-component" data-component="Light" style="margin-top:6px;">Remove Component</button>'
     );
   }
 

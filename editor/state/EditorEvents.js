@@ -28,7 +28,7 @@ const COMPONENT_TYPE_MAP = {
   Light: LIGHT,
 };
 
-const LIGHT_TYPE_NAMES = {
+const LIGHT_ENTITY_NAMES = {
   [LightType.DIRECTIONAL]: "Directional Light",
   [LightType.POINT]: "Point Light",
   [LightType.SPOT]: "Spot Light",
@@ -44,8 +44,29 @@ const LIGHT_TYPE_NAMES = {
 export function attachEditorEvents(render, onTogglePlay) {
   document.addEventListener("click", (e) => {
     const t = e.target.closest("[data-action]");
-    if (!t) return;
+    if (!t) {
+      // Clicked somewhere with no data-action at all: close any open
+      // menu-bar dropdown (standard menu UX — clicking outside closes
+      // it), same as toggle-menu on the SAME menu button does.
+      if (editorState.openMenu) {
+        editorState.openMenu = null;
+        editorState.openSubmenu = null;
+        render();
+      }
+      return;
+    }
     const action = t.dataset.action;
+
+    // Any click on a real action target OTHER than the menu/submenu
+    // toggles themselves (or a light/entity creation, which already
+    // closes the menu above) should also close a stray open dropdown —
+    // e.g. clicking a tool button while GameObject menu happens to be
+    // open. Handled here rather than per-case so it's automatic for
+    // every current and future action.
+    if (editorState.openMenu && action !== "toggle-menu" && action !== "toggle-submenu" && action !== "create-light" && action !== "add-entity") {
+      editorState.openMenu = null;
+      editorState.openSubmenu = null;
+    }
 
     switch (action) {
       case "set-tool":
@@ -100,6 +121,35 @@ export function attachEditorEvents(render, onTogglePlay) {
         entity.addComponent(TRANSFORM, new Transform());
         editorState.selectedId = entity.id;
         pushLog("log", "Created GameObject '" + entity.name + "'.");
+        editorState.openMenu = null;
+        editorState.openSubmenu = null;
+        render();
+        break;
+      }
+      case "toggle-menu": {
+        const menu = t.dataset.menu;
+        editorState.openMenu = editorState.openMenu === menu ? null : menu;
+        editorState.openSubmenu = null;
+        render();
+        break;
+      }
+      case "toggle-submenu": {
+        const submenu = t.dataset.submenu;
+        editorState.openSubmenu = editorState.openSubmenu === submenu ? null : submenu;
+        render();
+        break;
+      }
+      case "create-light": {
+        if (!editorState.world) break;
+        const lightType = t.dataset.lightType || LightType.POINT;
+        const name = LIGHT_ENTITY_NAMES[lightType] || "Light";
+        const entity = editorState.world.createEntity(name);
+        entity.addComponent(TRANSFORM, new Transform());
+        entity.addComponent(LIGHT, new Light({ type: lightType }));
+        editorState.selectedId = entity.id;
+        pushLog("log", "Created " + name + ".");
+        editorState.openMenu = null;
+        editorState.openSubmenu = null;
         render();
         break;
       }
@@ -182,46 +232,7 @@ export function attachEditorEvents(render, onTogglePlay) {
         render();
         break;
       }
-      case "toggle-menu": {
-        const menu = t.dataset.menu;
-        editorState.openMenu = editorState.openMenu === menu ? null : menu;
-        editorState.openSubmenu = null; // closing/reopening a top menu always collapses any open submenu
-        render();
-        break;
-      }
-      case "hover-submenu": {
-        editorState.openSubmenu = t.dataset.submenu;
-        render();
-        break;
-      }
-      case "add-light": {
-        if (!editorState.world) break;
-        const lightType = t.dataset.lightType;
-        const label = LIGHT_TYPE_NAMES[lightType] || "Light";
-        const entity = editorState.world.createEntity(label);
-        entity.addComponent(TRANSFORM, new Transform());
-        entity.addComponent(LIGHT, new Light({ type: lightType }));
-        editorState.selectedId = entity.id;
-        editorState.openMenu = null;
-        editorState.openSubmenu = null;
-        pushLog("log", "Created " + label + ".");
-        render();
-        break;
-      }
     }
-  });
-
-  // Clicking anywhere outside an open menu-bar dropdown closes it — a
-  // second, separate listener (rather than adding this to the
-  // data-action switch above) because it needs to fire on EVERY click,
-  // including ones with no data-action at all (e.g. clicking empty
-  // viewport space to dismiss the GameObject menu).
-  document.addEventListener("click", (e) => {
-    if (!editorState.openMenu) return;
-    if (e.target.closest(".menu-item-wrap")) return; // clicks inside the menu/submenu are handled by the switch above
-    editorState.openMenu = null;
-    editorState.openSubmenu = null;
-    render();
   });
 
   document.addEventListener("dblclick", (e) => {

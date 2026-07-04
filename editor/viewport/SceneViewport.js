@@ -118,24 +118,23 @@ function createViewport(mount, render) {
   cameraGizmoContainer = new PIXI.Container();
   colliderGizmoContainer = new PIXI.Container();
   gizmoContainer = new PIXI.Container();
-  // RenderSystem turns on pixiApp.stage.sortableChildren so sprites can
-  // sort by Transform.z, and LightingSystem's darkness/glow layer uses
-  // zIndex = Infinity to always draw above every sprite (see
-  // runtime/systems/LightingSystem.js) — these editor-only overlays need
-  // to win that same sort too, or a lit scene would visually bury the
-  // grid/camera-frame/selection-gizmo under the darkness rect. Grid
-  // still stays visually "behind" scene content via drawing order within
-  // its own low zIndex; the gizmo/camera/collider layers need to be
-  // fully above absolutely everything the runtime draws, lighting
-  // included, so authoring stays usable in a dark scene.
-  gridContainer.zIndex = -1; // still behind runtime content (kept via addChildAt(0) below too)
-  cameraGizmoContainer.zIndex = Infinity;
-  colliderGizmoContainer.zIndex = Infinity;
-  gizmoContainer.zIndex = Infinity;
+  // LightingSystem's darkness/light overlay (see runtime/systems/
+  // LightingSystem.js) lives in this SAME container (pixiApp.stage,
+  // passed to createGame as the world container) at a fixed high
+  // zIndex so it draws above sprites. Since RenderSystem/LightingSystem
+  // already turn sortableChildren on for this container, these
+  // editor-only chrome layers need explicit zIndex values above that,
+  // or the sort would otherwise bury them under the light/dark overlay
+  // (chrome must always stay visible on top, even in the dark).
+  gridContainer.zIndex = -1; // grid stays behind everything, including darkness
+  cameraGizmoContainer.zIndex = 200000;
+  colliderGizmoContainer.zIndex = 200001;
+  gizmoContainer.zIndex = 200002;
   pixiApp.stage.addChildAt(gridContainer, 0); // grid behind everything
   pixiApp.stage.addChild(cameraGizmoContainer); // camera frame above scene content
   pixiApp.stage.addChild(colliderGizmoContainer); // collider outlines above camera frame dimming
   pixiApp.stage.addChild(gizmoContainer); // selection/transform gizmo above everything
+  pixiApp.stage.sortableChildren = true;
   drawSceneGrid(gridContainer);
 
   transformGizmo = new TransformGizmo(gizmoContainer);
@@ -320,6 +319,12 @@ function syncSpriteRender() {
   if (!renderSystem || !editorState.world) return;
   try {
     renderSystem.update(editorState.world, 0);
+    // Runs right after RenderSystem so any Light component edits (color,
+    // intensity, radius, type, or moving a light's Transform) preview
+    // live in the Scene view exactly like sprite edits do — matching
+    // how Play mode will actually look, same reasoning as calling
+    // renderSystem.update() here instead of only during a real game
+    // loop tick.
     if (lightingSystem) lightingSystem.update(editorState.world, 0);
   } catch (err) {
     pushLog("error", "Render sync failed: " + (err && err.message ? err.message : err));
