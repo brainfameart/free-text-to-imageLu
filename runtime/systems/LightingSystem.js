@@ -83,6 +83,24 @@ const DIRECTIONAL_SHADOW_BASE_DISTANCE = 1200;
 // before this feature existed.
 const MAX_SOFTNESS_PASSES = 5;
 
+// Soft band (world units/px) just past a light's radius over which
+// shadows fade to nothing, instead of a hard cutoff exactly at
+// radius — see _castProjectiveShadowsForLight's "REACH fade".
+const REACH_FADE_BAND = 60;
+
+// How many occluder-half-sizes away the light needs to be before a
+// shadow reaches full length/strength — see "PROXIMITY fade" above.
+// E.g. 3 means a light within 3x the occluder's own half-size still
+// casts a visibly shortened/faded shadow; further out is full strength.
+const PROXIMITY_FADE_SIZE_MULT = 3;
+
+// A shadow never shrinks all the way to zero LENGTH even when the
+// light is touching the occluder (only its ALPHA fades all the way to
+// 0 there) — a sliver of shadow at very-close range still reads as
+// "there", matching how real light wrapping around a nearby object
+// still leaves a short contact shadow rather than none at all.
+const MIN_SHADOW_LENGTH_FRACTION = 0.15;
+
 export class LightingSystem extends System {
   /**
    * @param {PIXI.Container} worldContainer the SAME container
@@ -362,21 +380,79 @@ export class LightingSystem extends System {
       const cy = GRADIENT_TEX_SIZE / 2;
       const r = GRADIENT_TEX_SIZE / 2;
 
+      // Real point-source light (a bare bulb/lantern) reads as a small,
+      // near-solid HOT core that only takes up a small fraction of the
+      // light's visible radius, followed by a long, gently-curved falloff
+      // "bloom" tail — not one single smooth curve from full-bright at
+      // the center all the way to the edge, which is what made the old
+      // single-curve gradient look like a flat CSS radial-gradient glow
+      // rather than an actual light source. HOT_CORE_T controls how much
+      // of the texture's radius stays essentially full-bright before the
+      // bloom falloff begins.
       const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-      // Multiple gamma-shaped stops approximate a t^1.8 curve (canvas
-      // gradients only support linear interpolation BETWEEN stops, so
-      // enough stops makes the overall curve read as smoothly
-      // non-linear rather than as a linear ramp).
-      const steps = 12;
+      const HOT_CORE_T = 0.12;
+      const steps = 20;
       for (let i = 0; i <= steps; i++) {
         const t = i / steps;
-        const eased = Math.pow(t, 1.8);
-        grad.addColorStop(t, "rgba(255,255,255," + (1 - eased) + ")");
+        let a;
+        if (t <= HOT_CORE_T) {
+          // Inside the hot core: stays at ~full strength (very slight
+          // taper so it's not a perfectly flat disc, which would show a
+          // visible ring where the core ends and the bloom begins).
+          a = 1 - 0.08 * (t / HOT_CORE_T);
+        } else {
+          // Bloom falloff: remap t into [0,1] across the remaining
+          // radius, then apply a steeper-than-before easing curve
+          // (t^2.4 rather than t^1.8) so brightness concentrates more
+          // toward the core and the outer bloom reads as a long, faint
+          // tail — closer to real inverse-square falloff than a gentler
+          // linear-ish ramp.
+          const bloomT = (t - HOT_CORE_T) / (1 - HOT_CORE_T);
+          a = 0.92 * (1 - Math.pow(bloomT, 2.4));
+        }
+        grad.addColorStop(t, "rgba(255,255,255," + Math.max(0, a) + ")");
       }
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, GRADIENT_TEX_SIZE, GRADIENT_TEX_SIZE);
+
+      this._applyLightGrain(ctx, GRADIENT_TEX_SIZE, GRADIENT_TEX_SIZE, cx, cy, r);
+
       return canvas;
     });
+  }
+
+  /**
+   * Stipples very faint per-pixel noise over a baked light texture,
+   * masked so it only affects the already-lit area (fades out exactly
+   * where the gradient itself fades to transparent). Real light/glow
+   * photographed or rendered at any real fidelity always carries a
+   * little grain/dither in its falloff — a mathematically perfect,
+   * noise-free gradient is one of the biggest tells that a glow is a
+   * flat vector/CSS effect rather than an actual light. The noise here
+   * is intentionally subtle (max ~4% alpha swing) so it reads as
+   * "photographic softness" rather than visible static.
+   */
+  _applyLightGrain(ctx, w, h, cx, cy, r) {
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const data = imgData.data;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const idx = (y * w + x) * 4;
+        const a = data[idx + 3];
+        if (a <= 0) continue;
+        // Noise strength itself fades with distance-from-center so the
+        // very brightest core (which should read as clean/hot, not
+        // grainy) stays smooth, and grain shows up mainly in the
+        // mid-to-outer falloff where real light grain is most visible.
+        const dx = x - cx;
+        const dy = y - cy;
+        const distT = Math.min(1, Math.sqrt(dx * dx + dy * dy) / r);
+        const noiseStrength = 10 * Math.min(1, distT * 1.5);
+        const noise = (Math.random() - 0.5) * 2 * noiseStrength;
+        data[idx + 3] = Math.max(0, Math.min(255, a + noise));
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
   }
 
   /**
@@ -421,6 +497,8 @@ export class LightingSystem extends System {
       ctx.fillStyle = "rgba(255,255,255,1)";
       ctx.fillRect(coreX, coreY, coreW, coreH);
 
+      this._applyLightGrain(ctx, size, size, size / 2, size / 2, size / 2);
+
       return canvas;
     });
   }
@@ -451,12 +529,24 @@ export class LightingSystem extends System {
       const apexY = size / 2;
       const halfAngle = (roundedAngle * Math.PI) / 360;
 
-      const steps = 48;
+      // Same "hot core near the source, then a real bloom tail" idea as
+      // _getRadialGradientTexture — a real flashlight/spotlight beam is
+      // brightest and most sharply defined close to the bulb, then
+      // gradually softens/dims outward, rather than fading at one
+      // constant rate along its whole length.
+      const HOT_CORE_T = 0.1;
+      const steps = 56;
       for (let i = steps; i >= 1; i--) {
         const t = i / steps; // 1 at far edge, ~0 near apex
         const dist = size * t;
-        const eased = Math.pow(t, 1.6);
-        const alpha = 1 - eased;
+
+        let alpha;
+        if (t <= HOT_CORE_T) {
+          alpha = 1 - 0.05 * (t / HOT_CORE_T);
+        } else {
+          const bloomT = (t - HOT_CORE_T) / (1 - HOT_CORE_T);
+          alpha = 0.95 * (1 - Math.pow(bloomT, 2.1));
+        }
         if (alpha <= 0.003) continue;
 
         // Slightly shrink the angle for outer rings so the cone's
@@ -477,6 +567,12 @@ export class LightingSystem extends System {
         ctx.fillStyle = "rgba(255,255,255," + alpha + ")";
         ctx.fill();
       }
+
+      // Grain centered on the apex (where the "source" is) rather than
+      // the texture's geometric center — same subtle photographic-noise
+      // reasoning as the radial texture, scaled to the cone's own reach
+      // (size) instead of a separate radius.
+      this._applyLightGrain(ctx, size, size, apexX, apexY, size);
 
       return canvas;
     });
@@ -586,15 +682,27 @@ export class LightingSystem extends System {
    * the light's own Transform position, so each occluder's shadow
    * direction depends on where it sits relative to the light. Skips an
    * occluder if it IS the light's own entity (an object with both Light
-   * + ShadowCaster shouldn't shadow itself) or if it's further from the
-   * light than the light's reach (nothing to shadow beyond where the
-   * light doesn't reach anyway).
+   * + ShadowCaster shouldn't shadow itself).
+   *
+   * Two separate fades keep shadows from ever popping instantly in/out:
+   *
+   *  - REACH fade: instead of a hard cutoff exactly at the light's
+   *    radius, shadows fade out over a soft band just past it (see
+   *    REACH_FADE_BAND below) — an occluder crossing the light's edge
+   *    dims out gradually rather than vanishing the instant it's one
+   *    pixel past `radius`.
+   *  - PROXIMITY fade: real light wrapping around a nearby object
+   *    produces a short, faint, soft-edged shadow rather than an
+   *    instant full-length hard one — a shadow only reaches full length
+   *    / full strength once the light is comfortably far from the
+   *    occluder (see PROXIMITY_FADE_DISTANCE). This is what makes
+   *    "bringing the light close" look like the shadow gradually
+   *    shrinking/fading rather than the shadow just being there-or-not.
    *
    * Spot lights additionally only illuminate/shadow within their cone
-   * (light.angle degrees wide, centered on lightTransform.rotation) —
-   * without this check a Spot behaved like a Point light for shadow
-   * purposes and would happily cast shadows from occluders sitting
-   * completely outside its beam, including directly behind it.
+   * (light.angle degrees wide, centered on lightTransform.rotation),
+   * ALSO with a soft angular fade rather than a hard edge, for the same
+   * "no popping" reason.
    */
   _castProjectiveShadowsForLight(lightTransform, light, lightEntityId, occluders) {
     const baseReach =
@@ -603,6 +711,11 @@ export class LightingSystem extends System {
     const isSpot = light.type === LightType.SPOT;
     const halfConeRad = isSpot ? ((light.angle || 45) * Math.PI) / 360 : 0;
     const facingRad = isSpot ? ((lightTransform.rotation || 0) * Math.PI) / 180 : 0;
+    // Angular width (radians) of the soft fade band just inside/outside
+    // the cone's edge — a fixed fraction of the half-angle so narrow
+    // spotlights get a proportionally narrow (still soft, never hard)
+    // fade band instead of a fade wider than the cone itself.
+    const coneFadeRad = isSpot ? Math.max(0.03, halfConeRad * 0.25) : 0;
 
     for (const occ of occluders) {
       if (occ.id === lightEntityId) continue;
@@ -612,27 +725,61 @@ export class LightingSystem extends System {
       const dy = occ.y - lightTransform.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
       const reach = baseReach * occ.length;
-      if (dist > baseReach + Math.max(occ.halfWidth, occ.halfHeight)) continue; // occluder is out of the LIGHT's reach
 
+      // REACH fade: 1 while comfortably inside the light's radius, 0
+      // once fully past radius + REACH_FADE_BAND, smoothly in between —
+      // replaces the old hard "dist > baseReach + occluderHalf" cutoff.
+      const distToNearEdge = dist - Math.max(occ.halfWidth, occ.halfHeight);
+      const reachFade = 1 - this._smoothstep(baseReach, baseReach + REACH_FADE_BAND, distToNearEdge);
+      if (reachFade <= 0.002) continue; // fully faded out, nothing to draw
+
+      let coneFade = 1;
       if (isSpot) {
         // Angle from the light to the occluder's CENTER, compared
-        // against the cone's half-angle plus a small angular pad so an
-        // occluder straddling the cone's edge (its center just inside,
-        // body partly outside, or vice versa) doesn't pop in/out — the
-        // pad is derived from the occluder's own apparent angular size
-        // at this distance rather than a fixed constant, so it scales
-        // sensibly whether the occluder is tiny/far or huge/close.
+        // against the cone's half-angle. angularPad accounts for the
+        // occluder's own apparent angular size at this distance so a
+        // wide/close occluder doesn't fade early just because its
+        // CENTER crosses the edge before its whole body does.
         const angleToOcc = Math.atan2(dy, dx);
         let rel = angleToOcc - facingRad;
         while (rel > Math.PI) rel -= Math.PI * 2;
         while (rel < -Math.PI) rel += Math.PI * 2;
 
         const angularPad = Math.atan2(Math.max(occ.halfWidth, occ.halfHeight), Math.max(dist, 1));
-        if (Math.abs(rel) > halfConeRad + angularPad) continue; // occluder is outside the spot's cone
+        const edge = halfConeRad + angularPad;
+        coneFade = 1 - this._smoothstep(edge, edge + coneFadeRad, Math.abs(rel));
+        if (coneFade <= 0.002) continue; // fully outside the cone (+ fade band)
       }
 
-      this._castProjectiveShadowForOccluder(lightTransform, occ, reach, light);
+      // PROXIMITY fade: a shadow right up against a very close light
+      // wraps around the occluder in reality rather than throwing a
+      // full hard shadow, so both the shadow's LENGTH and its ALPHA
+      // ramp up from ~0 near the occluder's own edge to full strength
+      // once the light is PROXIMITY_FADE_DISTANCE away (scaled by the
+      // occluder's own size, so a huge occluder and a tiny one both
+      // feel the same relative "how close is close" cutoff).
+      const proximityRef = Math.max(occ.halfWidth, occ.halfHeight, 1) * PROXIMITY_FADE_SIZE_MULT;
+      const proximityFade = this._smoothstep(0, proximityRef, distToNearEdge);
+      const lengthFade = MIN_SHADOW_LENGTH_FRACTION + (1 - MIN_SHADOW_LENGTH_FRACTION) * proximityFade;
+
+      const combinedFade = reachFade * coneFade;
+      if (combinedFade <= 0.002) continue;
+
+      this._castProjectiveShadowForOccluder(lightTransform, occ, reach * lengthFade, light, combinedFade * proximityFade);
     }
+  }
+
+  /**
+   * Classic smoothstep: 0 below `edge0`, 1 above `edge1`, smooth
+   * (cubic, zero-slope-at-both-ends) ramp between — used everywhere a
+   * fade needs to look like a gradual dimming rather than a linear
+   * ramp (which still has a visible "kink" where it starts/stops) or a
+   * hard step (which is the popping this whole feature exists to fix).
+   */
+  _smoothstep(edge0, edge1, x) {
+    if (edge0 === edge1) return x < edge0 ? 0 : 1;
+    const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+    return t * t * (3 - 2 * t);
   }
 
   /**
@@ -641,11 +788,19 @@ export class LightingSystem extends System {
    * the light (the tangent corners where the box's edge turns away from
    * the light), then extrudes a quad from those two corners out to
    * `reach` (the light's natural reach scaled by this caster's own
-   * `length`), and fills it — tinted by the light's shadowColor, faded
-   * by shadowStrength * caster.opacity, and optionally softened at the
-   * edge (see _fillShadowPolygon).
+   * `length` AND the caller's proximity/reach fade), and fills it —
+   * tinted by the light's shadowColor, faded by shadowStrength *
+   * caster.opacity * extraFade, and optionally softened at the edge
+   * (see _fillShadowPolygon).
+   *
+   * @param {number} extraFade additional [0,1] fade multiplier from the
+   *   caller (reach-band fade * cone-edge fade * proximity fade — see
+   *   _castProjectiveShadowsForLight) layered on top of the light's own
+   *   shadowStrength and the occluder's own opacity, so all of those
+   *   fades combine smoothly instead of any one of them being an
+   *   instant on/off.
    */
-  _castProjectiveShadowForOccluder(lightTransform, occ, reach, light) {
+  _castProjectiveShadowForOccluder(lightTransform, occ, reach, light, extraFade = 1) {
     const corners = this._occluderCorners(occ);
 
     // For a convex box, the silhouette as seen from an external point
@@ -697,7 +852,7 @@ export class LightingSystem extends System {
     const farMax = extrude(cornerAtMax);
 
     const points = [cornerAtMin, farMin, farMax, cornerAtMax];
-    const alpha = Math.min(1, light.shadowStrength * occ.opacity) * AMBIENT_DARKNESS;
+    const alpha = Math.min(1, light.shadowStrength * occ.opacity * extraFade) * AMBIENT_DARKNESS;
     this._fillShadowPolygon(points, this._toHex(light.shadowColor), alpha, occ.softness);
 
     // The occluder's own footprint is also re-darkened (an object
