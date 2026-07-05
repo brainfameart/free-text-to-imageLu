@@ -179,13 +179,16 @@ float areaFalloff(vec2 localP, vec2 halfSize, float radius) {
 // whose half-width is the occluder's own cross-section, out to reach" —
 // analytic and cheap (this is what QUAD shadow mode uses; see
 // ShadowMode.QUAD in LightingQuality.js). lightToP is in WORLD space.
-float quadShadowTest(vec2 pixelWorld, vec2 lightPos, int occIdx, float reachOverride, float extraFadeOut) {
-    vec2 occCenter = uOccPos[occIdx];
-    vec2 halfExt = uOccHalfExtents[occIdx];
-    float rot = uOccRotation[occIdx];
-    float opacity = uOccOpacity[occIdx];
-    float lengthMult = uOccLength[occIdx];
-    float softness = uOccSoftness[occIdx];
+//
+// Takes the occluder's fields directly (occCenter/halfExt/rot/opacity/
+// lengthMult/softness) rather than an index into the uOcc* uniform
+// arrays: GLSL ES 1.00 only allows a uniform array to be indexed by a
+// constant expression or a for-loop counter variable, NOT by a value
+// passed through a function parameter (even if every caller only ever
+// passes a loop variable) — indexing here with occIdx failed to
+// compile. The one call site below does the uOcc*[o] lookups itself,
+// inside its own for (int o ...) loop, where o IS a valid index.
+float quadShadowTest(vec2 pixelWorld, vec2 lightPos, vec2 occCenter, vec2 halfExt, float rot, float opacity, float lengthMult, float softness, float reachOverride, float extraFadeOut) {
     if (opacity <= 0.0) return 0.0;
 
     vec2 toOcc = occCenter - lightPos;
@@ -348,7 +351,7 @@ void main(void) {
                     vec2 effectiveLightPos = typeId == 0
                         ? pixelWorld - vec2(cos(uLightRotation[i]), sin(uLightRotation[i])) * reach
                         : lightPos;
-                    float s = quadShadowTest(pixelWorld, effectiveLightPos, o, reach, 1.0);
+                    float s = quadShadowTest(pixelWorld, effectiveLightPos, uOccPos[o], uOccHalfExtents[o], uOccRotation[o], uOccOpacity[o], uOccLength[o], uOccSoftness[o], reach, 1.0);
                     shadowAmount = max(shadowAmount, s);
                 }
             }

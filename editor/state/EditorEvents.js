@@ -16,6 +16,7 @@ import { COLLIDER_2D, Collider2D } from "../../runtime/components/Collider2D.js"
 import { CHARACTER_CONTROLLER, CharacterController } from "../../runtime/components/CharacterController.js";
 import { LIGHT, Light, LightType } from "../../runtime/components/Light.js";
 import { SHADOW_CASTER, ShadowCaster } from "../../runtime/components/ShadowCaster.js";
+import { LIGHTING_SETTINGS, LightingSettings } from "../../runtime/components/LightingSettings.js";
 import { importSpriteFiles } from "../../runtime/assets/AssetRegistry.js";
 import { syncBackgroundColorLive, switchScene } from "../viewport/SceneViewport.js";
 
@@ -28,6 +29,7 @@ const COMPONENT_TYPE_MAP = {
   CharacterController: CHARACTER_CONTROLLER,
   Light: LIGHT,
   ShadowCaster: SHADOW_CASTER,
+  LightingSettings: LIGHTING_SETTINGS,
 };
 
 const LIGHT_ENTITY_NAMES = {
@@ -223,6 +225,11 @@ export function attachEditorEvents(render, onTogglePlay) {
           if (!entity.hasComponent(SHADOW_CASTER)) {
             entity.addComponent(SHADOW_CASTER, new ShadowCaster());
             pushLog("log", "Added Shadow Caster to '" + entity.name + "'.");
+          }
+        } else if (componentName === "LightingSettings") {
+          if (!entity.hasComponent(LIGHTING_SETTINGS)) {
+            entity.addComponent(LIGHTING_SETTINGS, new LightingSettings());
+            pushLog("log", "Added Lighting Settings to '" + entity.name + "'.");
           }
         }
         render();

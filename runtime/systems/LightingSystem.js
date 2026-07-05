@@ -81,14 +81,15 @@ import { System } from "../core/System.js";
 import { TRANSFORM } from "../components/Transform.js";
 import { LIGHT, LightType } from "../components/Light.js";
 import { SHADOW_CASTER } from "../components/ShadowCaster.js";
+import { LIGHTING_SETTINGS } from "../components/LightingSettings.js";
 import { LightingQuality, ShadowMode } from "./LightingQuality.js";
 import { buildLightingFilter, MAX_LIGHTS, MAX_OCCLUDERS, MAX_RAYMARCH_STEPS } from "./LightingShaderSource.js";
 
-// How dark the ambient overlay gets where no light reaches, at
-// intensity 1 on whatever lights exist in the scene. 0 = no darkening
-// at all, 1 = fully black. Kept well under 1 so scenes read as "dim"
-// rather than pitch black outside light range — same value as the old
-// CPU system so existing scenes look the same by default.
+// Fallback ambient darkness (see components/LightingSettings.js),
+// used only when a scene has no LightingSettings component. Same
+// value the old hardcoded-constant system always used, so existing
+// scenes render identically until a user adds LightingSettings and
+// starts tuning it themselves.
 const AMBIENT_DARKNESS = 0.65;
 
 // Fallback occluder half-size (px) for a ShadowCaster with no explicit
@@ -135,10 +136,12 @@ export class LightingSystem extends System {
     this.renderSystem = renderSystem || null;
     this.pixiApp = pixiApp || null;
 
-    // Per-scene/per-player GPU shadow-quality choice, exposed on the
-    // instance (not a module constant) so the editor's Inspector or a
-    // game's own settings menu can flip it per machine — see
-    // LightingQuality.js.
+    // Fallback quality settings used ONLY when the scene has no
+    // LightingSettings component (see components/LightingSettings.js)
+    // — e.g. an older scene saved before this feature existed. When a
+    // LightingSettings entity IS present, its values win every frame
+    // (see _readSettings()) so the Inspector toggle is the real
+    // source of truth for end users of the engine.
     this.quality = new LightingQuality();
 
     // Set once the fragment/vertex shader has failed to compile/link
@@ -181,11 +184,31 @@ export class LightingSystem extends System {
     }
   }
 
+  /**
+   * Reads the scene's LightingSettings component, if any, so the
+   * Inspector toggle end users see is the actual live source of these
+   * values every frame — not just at scene load. Falls back to
+   * this.quality / AMBIENT_DARKNESS (the pre-Inspector defaults) when
+   * no LightingSettings entity exists, so older scenes and the
+   * standalone player keep working unchanged.
+   */
+  _readSettings(world) {
+    const entity = world.query(LIGHTING_SETTINGS)[0];
+    const settings = entity ? entity.getComponent(LIGHTING_SETTINGS) : null;
+    return {
+      shadowMode: settings ? settings.shadowMode : this.quality.shadowMode,
+      raymarchSteps: settings ? settings.raymarchSteps : this.quality.raymarchSteps,
+      ambientDarkness: settings ? settings.ambientDarkness : AMBIENT_DARKNESS,
+    };
+  }
+
   update(world) {
     if (this._filterBroken || !this.filter) {
       this._detachFilter();
       return;
     }
+
+    const settings = this._readSettings(world);
 
     const lightEntities = world
       .query(TRANSFORM, LIGHT)
@@ -227,9 +250,9 @@ export class LightingSystem extends System {
 
       this.filter.uniforms.uLightCount = Math.min(MAX_LIGHTS, lightEntities.length);
       this.filter.uniforms.uOccluderCount = Math.min(MAX_OCCLUDERS, occluders.length);
-      this.filter.uniforms.uShadowMode = this.quality.shadowMode === ShadowMode.RAYMARCH ? 1 : 0;
-      this.filter.uniforms.uRaymarchSteps = Math.min(MAX_RAYMARCH_STEPS, Math.max(1, this.quality.raymarchSteps));
-      this.filter.uniforms.uAmbientDarkness = AMBIENT_DARKNESS;
+      this.filter.uniforms.uShadowMode = settings.shadowMode === ShadowMode.RAYMARCH ? 1 : 0;
+      this.filter.uniforms.uRaymarchSteps = Math.min(MAX_RAYMARCH_STEPS, Math.max(1, settings.raymarchSteps));
+      this.filter.uniforms.uAmbientDarkness = Math.min(1, Math.max(0, settings.ambientDarkness));
       this._syncStageTransform();
       this._syncFilterArea();
 

@@ -16,6 +16,7 @@ import { Collider2D, COLLIDER_2D } from "../components/Collider2D.js";
 import { Light, LIGHT } from "../components/Light.js";
 import { ShadowCaster, SHADOW_CASTER } from "../components/ShadowCaster.js";
 import { CharacterController, CHARACTER_CONTROLLER } from "../components/CharacterController.js";
+import { LightingSettings, LIGHTING_SETTINGS } from "../components/LightingSettings.js";
 
 const COMPONENT_REGISTRY = {
   [TRANSFORM]: Transform,
@@ -26,6 +27,7 @@ const COMPONENT_REGISTRY = {
   [LIGHT]: Light,
   [SHADOW_CASTER]: ShadowCaster,
   [CHARACTER_CONTROLLER]: CharacterController,
+  [LIGHTING_SETTINGS]: LightingSettings,
 };
 
 /**

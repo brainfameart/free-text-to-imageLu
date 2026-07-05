@@ -23,7 +23,7 @@ export const editorState = {
   bottomTab: "project",
   /** @type {"scenes"|"sprites"|"scripts"} which Project > Assets folder is open in the bottom panel */
   projectFolder: "scenes",
-  sectionsOpen: { transform: true, camera: true, sprite: true, rigidbody: true, collider: true, movement: true, light: true, shadowcaster: true },
+  sectionsOpen: { transform: true, camera: true, sprite: true, rigidbody: true, collider: true, movement: true, light: true, shadowcaster: true, lightingsettings: true },
   addComponentMenuOpen: false,
 
   /** @type {string|null} which top menu-bar dropdown is open ("GameObject", etc), or null */

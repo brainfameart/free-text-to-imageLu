@@ -18,6 +18,8 @@ import { COLLIDER_2D, ColliderShape } from "../../runtime/components/Collider2D.
 import { CHARACTER_CONTROLLER, ControllerType } from "../../runtime/components/CharacterController.js";
 import { LIGHT, LightType } from "../../runtime/components/Light.js";
 import { SHADOW_CASTER } from "../../runtime/components/ShadowCaster.js";
+import { LIGHTING_SETTINGS } from "../../runtime/components/LightingSettings.js";
+import { ShadowMode } from "../../runtime/systems/LightingQuality.js";
 import { getCameraResolution } from "../../runtime/core/CameraUtils.js";
 import { getSpriteAsset } from "../../runtime/assets/AssetRegistry.js";
 
@@ -288,6 +290,34 @@ export function renderInspector() {
     );
   }
 
+  const lightingSettings = entity.getComponent(LIGHTING_SETTINGS);
+  if (lightingSettings) {
+    body += section(
+      editorState.sectionsOpen,
+      "lightingsettings",
+      "Lighting Settings",
+      "settings",
+      '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
+        "Scene-wide realism settings for every light and shadow in this scene — not tied to any one Light." +
+        "</div>" +
+        row("Shadow Mode", dropdownInput(Object.values(ShadowMode), lightingSettings.shadowMode, "LightingSettings.shadowMode")) +
+        '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
+        "Quad: cheap analytic shadows, best for lower-end machines. Raymarch: true per-pixel shadows with realistic soft edges, costs more GPU time." +
+        "</div>" +
+        (lightingSettings.shadowMode === ShadowMode.RAYMARCH
+          ? row("Raymarch Steps", numInput("", lightingSettings.raymarchSteps, "LightingSettings.raymarchSteps")) +
+            '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
+            "Higher = smoother, more accurate shadow edges (fewer thin shadows 'leaking' light through), at a higher GPU cost. 24 is a good starting point; try lower values first if this looks too slow." +
+            "</div>"
+          : "") +
+        row("Ambient Darkness", numInput("", lightingSettings.ambientDarkness, "LightingSettings.ambientDarkness")) +
+        '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
+        "How dark areas with no light get, from 0 (no darkening, full brightness everywhere) to 1 (pitch black outside any light's reach). This is the biggest single dial for how moody/realistic the scene's lighting feels." +
+        "</div>" +
+        '<button class="removecomp-btn" data-action="remove-component" data-component="LightingSettings" style="margin-top:6px;">Remove Component</button>'
+    );
+  }
+
   const rigidbody = entity.getComponent(RIGIDBODY_2D);
   if (rigidbody) {
     let bodyTypeFieldsHtml = "";
@@ -469,6 +499,7 @@ export function renderInspector() {
     !controller && { name: "CharacterController", label: "Movement Type" },
     !light && { name: "Light", label: "Light" },
     !shadowCaster && { name: "ShadowCaster", label: "Shadow Caster" },
+    !lightingSettings && { name: "LightingSettings", label: "Lighting Settings" },
   ].filter(Boolean);
 
   body +=
