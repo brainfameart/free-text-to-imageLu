@@ -86,11 +86,11 @@ svg.icon{display:inline-block;vertical-align:middle;flex-shrink:0;}
 
 /* ––––– Layout ––––– */
 .main-layout{display:flex;flex:1;overflow:hidden;background:#1c1c1c;}
-.col-hierarchy{width:250px;display:flex;flex-direction:column;border-right:1px solid #1a1a1a;}
-.col-center{flex:1;display:flex;flex-direction:column;min-width:0;}
+.col-hierarchy{width:250px;height:100%;min-height:0;display:flex;flex-direction:column;border-right:1px solid #1a1a1a;overflow:hidden;}
+.col-center{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;}
 .col-viewport-wrap{flex:1;display:flex;flex-direction:column;min-height:0;}
-.col-bottom-wrap{height:250px;flex-shrink:0;border-top:1px solid #1a1a1a;}
-.col-inspector{width:300px;display:flex;flex-direction:column;border-left:1px solid #1a1a1a;}
+.col-bottom-wrap{height:250px;flex-shrink:0;border-top:1px solid #1a1a1a;overflow:hidden;}
+.col-inspector{width:300px;height:100%;min-height:0;display:flex;flex-direction:column;border-left:1px solid #1a1a1a;overflow:hidden;}
 
 /* ––––– Hierarchy ––––– */
 .hierarchy-panel{width:100%;height:100%;display:flex;flex-direction:column;background:#383838;}
@@ -204,7 +204,7 @@ svg.icon{display:inline-block;vertical-align:middle;flex-shrink:0;}
 .proj-tree .rowsub{display:flex;align-items:center;padding:2px 8px 2px 20px;color:#ccc;cursor:pointer;}
 .proj-tree .rowsub:hover{background:#444;}
 .proj-tree .rowsub.selected{background:#2C5D87;color:#fff;}
-.proj-assets{flex:1;display:flex;flex-direction:column;background:#282828;}
+.proj-assets{flex:1;min-height:0;display:flex;flex-direction:column;background:#282828;}
 .proj-path{height:22px;border-bottom:1px solid #202020;background:#383838;display:flex;align-items:center;justify-content:space-between;padding:0 8px;}
 .proj-path span{font-size:11px;color:#eee;}
 .import-sprite-btn{display:flex;align-items:center;gap:4px;font-size:11px;color:#eee;background:#2C5D87;border:1px solid #1a1a1a;border-radius:3px;padding:2px 8px;cursor:pointer;}
