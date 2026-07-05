@@ -109,6 +109,7 @@ export function renderBottom() {
       '<div class="bottom-body" style="flex-direction:column;background:#282828;overflow:hidden;">' +
       '<div class="console-toolbar">' +
       '<button class="console-clear" data-action="clear-console">Clear</button>' +
+      '<button class="console-clear" data-action="copy-console">Copy All</button>' +
       '<button class="console-toggle">Collapse</button>' +
       '<button class="console-toggle">Clear on Play</button>' +
       '<div style="flex:1;"></div>' +

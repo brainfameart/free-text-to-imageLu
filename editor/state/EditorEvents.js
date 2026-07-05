@@ -117,6 +117,33 @@ export function attachEditorEvents(render, onTogglePlay) {
         editorState.logs = [];
         render();
         break;
+      case "copy-console": {
+        const text = editorState.logs.map((l) => "[" + l.type.toUpperCase() + "] " + l.msg).join("\n");
+        const onCopied = () => pushLog("log", "Copied " + editorState.logs.length + " console line(s) to clipboard.");
+        const onFailed = (err) => pushLog("error", "Failed to copy console to clipboard: " + err.message);
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(onCopied, onFailed);
+        } else {
+          // Fallback for contexts without the async Clipboard API
+          // (e.g. non-HTTPS/local file preview): a hidden textarea +
+          // execCommand("copy") still works in every browser.
+          try {
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            ta.style.position = "fixed";
+            ta.style.opacity = "0";
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand("copy");
+            document.body.removeChild(ta);
+            onCopied();
+          } catch (err) {
+            onFailed(err);
+          }
+        }
+        render();
+        break;
+      }
       case "add-entity": {
         if (!editorState.world) break;
         const entity = editorState.world.createEntity("GameObject");

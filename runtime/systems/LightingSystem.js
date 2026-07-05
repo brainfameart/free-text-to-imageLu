@@ -141,8 +141,17 @@ export class LightingSystem extends System {
     // LightingQuality.js.
     this.quality = new LightingQuality();
 
-    this.filter = buildLightingFilter();
-    this.filter.uniforms.uAmbientDarkness = AMBIENT_DARKNESS;
+    // Set once the fragment/vertex shader has failed to compile/link
+    // (see _buildFilterSafely). While true, update() short-circuits
+    // every frame instead of retrying a filter build that's already
+    // known to throw, so a bad shader degrades to "no lighting" rather
+    // than spamming the console every tick or crashing the game loop.
+    this._filterBroken = false;
+
+    this.filter = this._buildFilterSafely();
+    if (this.filter) {
+      this.filter.uniforms.uAmbientDarkness = AMBIENT_DARKNESS;
+    }
 
     // Attached/detached from worldContainer.filters depending on
     // whether any lights currently exist (see update()) — starts
@@ -151,7 +160,33 @@ export class LightingSystem extends System {
     this._filterAttached = false;
   }
 
+  /**
+   * Wraps buildLightingFilter() so a GLSL compile/link failure (bad
+   * edit to LightingShaderSource.js, a driver that rejects the
+   * raymarch branch, uniform count over the GPU's limit, etc.) is
+   * reported through the ordinary console.error/warn path instead of
+   * throwing out of the constructor and taking the whole engine down.
+   * console.error/warn are what editor/state/ConsoleCapture.js mirrors
+   * into the in-engine Console panel, so this is how a shader problem
+   * ends up visible there without runtime importing anything from
+   * /editor (see RULES.txt #1).
+   */
+  _buildFilterSafely() {
+    try {
+      return buildLightingFilter();
+    } catch (err) {
+      this._filterBroken = true;
+      console.error("[Lighting] Failed to compile lighting shader — lighting is disabled for this session:", err);
+      return null;
+    }
+  }
+
   update(world) {
+    if (this._filterBroken || !this.filter) {
+      this._detachFilter();
+      return;
+    }
+
     const lightEntities = world
       .query(TRANSFORM, LIGHT)
       .filter((e) => e.getComponent(LIGHT).castsOnWorld);
@@ -161,19 +196,54 @@ export class LightingSystem extends System {
       return;
     }
 
+    if (lightEntities.length > MAX_LIGHTS) {
+      console.warn(
+        "[Lighting] Scene has " +
+          lightEntities.length +
+          " active lights but the shader only supports " +
+          MAX_LIGHTS +
+          " at once. The extra " +
+          (lightEntities.length - MAX_LIGHTS) +
+          " light(s) will be ignored — remove or disable some lights, or raise MAX_LIGHTS in LightingShaderSource.js."
+      );
+    }
+
     const occluders = this._collectOccluders(world);
-    this._fillLightUniforms(lightEntities, occluders);
-    this._fillOccluderUniforms(occluders);
+    if (occluders.length > MAX_OCCLUDERS) {
+      console.warn(
+        "[Lighting] Scene has " +
+          occluders.length +
+          " enabled Shadow Casters but the shader only supports " +
+          MAX_OCCLUDERS +
+          " at once. The extra " +
+          (occluders.length - MAX_OCCLUDERS) +
+          " will not cast shadows."
+      );
+    }
 
-    this.filter.uniforms.uLightCount = Math.min(MAX_LIGHTS, lightEntities.length);
-    this.filter.uniforms.uOccluderCount = Math.min(MAX_OCCLUDERS, occluders.length);
-    this.filter.uniforms.uShadowMode = this.quality.shadowMode === ShadowMode.RAYMARCH ? 1 : 0;
-    this.filter.uniforms.uRaymarchSteps = Math.min(MAX_RAYMARCH_STEPS, Math.max(1, this.quality.raymarchSteps));
-    this.filter.uniforms.uAmbientDarkness = AMBIENT_DARKNESS;
-    this._syncStageTransform();
-    this._syncFilterArea();
+    try {
+      this._fillLightUniforms(lightEntities, occluders);
+      this._fillOccluderUniforms(occluders);
 
-    this._attachFilter();
+      this.filter.uniforms.uLightCount = Math.min(MAX_LIGHTS, lightEntities.length);
+      this.filter.uniforms.uOccluderCount = Math.min(MAX_OCCLUDERS, occluders.length);
+      this.filter.uniforms.uShadowMode = this.quality.shadowMode === ShadowMode.RAYMARCH ? 1 : 0;
+      this.filter.uniforms.uRaymarchSteps = Math.min(MAX_RAYMARCH_STEPS, Math.max(1, this.quality.raymarchSteps));
+      this.filter.uniforms.uAmbientDarkness = AMBIENT_DARKNESS;
+      this._syncStageTransform();
+      this._syncFilterArea();
+
+      this._attachFilter();
+    } catch (err) {
+      // A bad value slipping into a uniform (NaN transform, a light
+      // with a corrupt color string, etc.) throws deep inside PIXI's
+      // filter upload rather than here, so this catch is the last
+      // line of defense: log it clearly and drop lighting for this
+      // frame instead of breaking the whole render loop.
+      this._filterBroken = true;
+      this._detachFilter();
+      console.error("[Lighting] Error while updating lighting uniforms — lighting disabled for this session:", err);
+    }
   }
 
   /**
@@ -361,10 +431,19 @@ export class LightingSystem extends System {
   }
 
   _toRgbFloats(colorString) {
-    const hex =
-      PIXI.utils && PIXI.utils.string2hex
-        ? PIXI.utils.string2hex(colorString)
-        : parseInt(String(colorString).replace("#", "0x")) || 0xffffff;
+    let hex;
+    try {
+      hex =
+        PIXI.utils && PIXI.utils.string2hex
+          ? PIXI.utils.string2hex(colorString)
+          : parseInt(String(colorString).replace("#", "0x")) || 0xffffff;
+    } catch (err) {
+      hex = 0xffffff;
+    }
+    if (!Number.isFinite(hex)) {
+      console.warn("[Lighting] Light has an invalid color value '" + colorString + "' — falling back to white.");
+      hex = 0xffffff;
+    }
     return [((hex >> 16) & 0xff) / 255, ((hex >> 8) & 0xff) / 255, (hex & 0xff) / 255];
   }
 
