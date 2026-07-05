@@ -215,6 +215,9 @@ export class LightingSystem extends System {
       .filter((e) => e.getComponent(LIGHT).castsOnWorld);
 
     if (lightEntities.length === 0) {
+      if (this._filterAttached) {
+        console.warn("[Lighting DEBUG] No active lights found — detaching filter. (world.query(TRANSFORM, LIGHT) with castsOnWorld=true returned 0 entities.)");
+      }
       this._detachFilter();
       return;
     }
@@ -256,7 +259,32 @@ export class LightingSystem extends System {
       this._syncStageTransform();
       this._syncFilterArea();
 
+      const wasAttached = this._filterAttached;
       this._attachFilter();
+
+      // TEMP DIAGNOSTIC — logs once each time lighting turns on (not
+      // every frame, to avoid flooding the Console panel), so it's
+      // possible to see whether the filter is genuinely running and
+      // with what data, purely from the in-engine Console tab, without
+      // needing browser devtools access.
+      if (!wasAttached) {
+        console.warn(
+          "[Lighting DEBUG] Filter attached. lights=" +
+            lightEntities.length +
+            " occluders=" +
+            occluders.length +
+            " ambientDarkness=" +
+            settings.ambientDarkness +
+            " shadowMode=" +
+            settings.shadowMode +
+            " filterArea=" +
+            (this.filter.filterArea ? this.filter.filterArea.width + "x" + this.filter.filterArea.height : "null") +
+            " containerFilters=" +
+            (this.worldContainer.filters ? this.worldContainer.filters.length : "null") +
+            " containerChildren=" +
+            this.worldContainer.children.length
+        );
+      }
     } catch (err) {
       // A bad value slipping into a uniform (NaN transform, a light
       // with a corrupt color string, etc.) throws deep inside PIXI's
