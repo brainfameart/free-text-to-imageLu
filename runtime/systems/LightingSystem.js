@@ -1,78 +1,64 @@
 /**
  * runtime/systems/LightingSystem.js
  *
- * GPU-driven 2D lighting. Every Light component (see
- * components/Light.js) and every ShadowCaster (see
- * components/ShadowCaster.js) is uploaded as raw numeric data into a
- * single custom PIXI.Filter's uniforms, and ALL of the actual
- * lighting/shadow math — radial falloff, spot cones, area rectangles,
- * directional sun-fill, shadow occlusion, penumbra softening — runs
- * PER PIXEL on the GPU inside one fragment shader
- * (LightingShaderSource.js), once per frame. Nothing about lighting is
- * drawn with PIXI.Graphics or baked canvas gradient textures anymore:
- * there is no CPU polygon fill, no baked radial-gradient sprite, no
- * "concentric rings" or multi-pass softness approximation. The shader
- * itself computes a true smooth gradient / true shadow test at every
- * pixel, so quality no longer depends on how many draw calls or
- * texture passes we're willing to spend.
+ * GPU-driven 2D lighting, rebuilt to match Unity URP's actual 2D
+ * Lighting pipeline: TWO separate rendering phases per frame instead
+ * of one all-in-one filter.
  *
- * PIPELINE:
- *   1. The real game scene (sprites, drawn by RenderSystem) renders
- *      normally into worldContainer, same as before this feature
- *      existed.
- *   2. This system applies ONE PIXI.Filter directly to worldContainer.
- *      A filter re-renders its target into a texture and runs a
- *      fragment shader over every output pixel — that's the "GPU
- *      draws the lighting" part: darkness, light falloff, and shadows
- *      are composited in the shader against the already-rendered
- *      scene colors, instead of being separate Graphics/Sprite objects
- *      layered on top with blend modes.
- *   3. Every tick, update() walks Light + ShadowCaster entities and
- *      fills flat Float32Arrays (one slot per light / per occluder, up
- *      to MAX_LIGHTS / MAX_OCCLUDERS) which get assigned straight to
- *      the filter's uniforms — this is the only per-frame CPU cost, no
- *      trig-heavy polygon construction like the old system.
+ *   PHASE 1 — LIGHT TEXTURE (see LightTextureShaderSource.js):
+ *     Every Light + ShadowCaster entity's data is uploaded as uniforms
+ *     to a filter that draws ONLY light shapes (radial/cone/rect
+ *     falloff, directional fill, shadow occlusion) into an offscreen
+ *     PIXI.RenderTexture, in screen space, once per frame. This buffer
+ *     has zero knowledge of sprites — exactly Unity's "Light Render
+ *     Texture," a screen-space buffer containing only light color,
+ *     rendered once and shared by every sprite that samples it.
  *
- * COORDINATE SPACE: the filter's uniforms are filled in
- * WORLD-CONTAINER-LOCAL pixel space (i.e. Transform.x/y as-is, the
- * same space sprites already live in), NOT screen space. The vertex
- * shader reconstructs each pixel's local-space world coordinate
- * directly (see LightingShaderSource.js's vWorldCoord), so light
- * positions need zero extra conversion for panning/zooming — the SAME
- * filter instance keeps working correctly whether worldContainer is
- * translated only (play mode) or panned+scaled (editor's free-roam
- * Scene viewport), because the filter is attached to that container
- * and PIXI handles the transform for us.
+ *   PHASE 2 — SPRITE SAMPLING (see SpriteLightFilter.js):
+ *     Every individual sprite RenderSystem tracks gets its own tiny
+ *     PIXI.Filter attached that samples Phase 1's light texture at
+ *     that sprite's own screen position and MULTIPLIES it into that
+ *     sprite's own texture color. This is exactly Unity's Sprite-Lit
+ *     shader step: "spriteColor * lightSample", nothing more.
  *
- * SHADOW MODES (user picks based on their machine): every Light and
- * every ShadowCaster still has all the same fields as before
- * (radius/angle/width/height, castShadows, shadowColor/shadowStrength,
- * offset/opacity/length/softness). What changed is HOW the shadow test
- * runs, controlled by this.quality.shadowMode (see LightingQuality.js):
- *  - "quad": cheap analytic box-shadow test per pixel (same
- *    silhouette-quad extrusion geometry the old CPU version used, just
- *    evaluated in the shader instead of filled as a PIXI.Graphics
- *    polygon) — matches the previous look closely, costs very little
- *    GPU time.
- *  - "raymarch": true per-pixel occlusion — the shader marches a ray
- *    from each shaded pixel toward each light and tests it against
- *    every occluder box along the way, so shadows are exact at every
- *    pixel (correct penumbra from an occluder's own apparent size,
- *    correctly handles overlapping occluders) at a real GPU cost that
- *    scales with lights * occluders * pixels — meant for the "my
- *    computer can take it" case.
- * Both modes are compiled into the SAME shader (branched by the
- * uShadowMode uniform), so switching mid-game needs no shader rebuild
- * — just flip `lightingSystem.quality.shadowMode`.
+ * WHY TWO PHASES INSTEAD OF ONE FILTER (what changed from the previous
+ * single-pass version): the old system ran one filter over the WHOLE
+ * rendered scene and tried to do "read scene pixel, read all lights,
+ * composite" in a single shader — which made it easy for a light's own
+ * additive color term to overpower/replace a sprite's actual color
+ * (visible as "sprites turn white under any light"). Splitting into
+ * two phases makes that structurally impossible: Phase 1 NEVER touches
+ * a sprite pixel (it only ever produces a light VALUE), and Phase 2's
+ * only operation is multiplying that value into each sprite's own
+ * color. A light can dim/tint/brighten a sprite; it can never replace
+ * its color, and a shadow can never crush a pixel to flat (0,0,0)
+ * unless ambientDarkness/shadowColor are deliberately set that way.
+ *
+ * COORDINATE SPACE: both phases work in the same WORLD-CONTAINER-LOCAL
+ * pixel space Transform.x/y already live in (see _syncStageTransform),
+ * so light positions need zero extra conversion whether
+ * gameContentContainer is panned/zoomed (editor) or camera-follow
+ * translated (play mode/player) — same guarantee the old system had.
+ *
+ * SHADOW MODES: unchanged from the previous version — "quad" (cheap
+ * analytic per-pixel box-shadow test) or "raymarch" (true per-pixel
+ * occlusion marching), both compiled into Phase 1's single shader and
+ * switchable at runtime via LightingSettings.shadowMode (see
+ * LightTextureShaderSource.js's uShadowMode branch).
+ *
+ * If a scene has ZERO light entities, Phase 1's light texture is never
+ * rendered and every sprite's SpriteLightFilter is detached, so a
+ * light-less scene pays exactly zero extra GPU cost and renders
+ * pixel-identical to before lighting existed — same guarantee the
+ * previous version made.
  *
  * Both the editor's Scene/Game viewport and the standalone player get
  * identical lighting because both go through this one System, same as
- * RenderSystem (see RULES.txt #5 — rendering is centralized).
- *
- * If a scene has ZERO light entities, the filter is removed from
- * worldContainer entirely (filters = null) so a light-less scene has
- * exactly zero lighting overhead and renders pixel-identical to before
- * lighting existed.
+ * RenderSystem (see RULES.txt #5 — rendering is centralized). This
+ * file keeps the SAME public shape (class name LightingSystem,
+ * constructor(worldContainer, renderSystem, pixiApp), .update(world))
+ * as the previous version so runtime/index.js and
+ * editor/viewport/SceneViewport.js need no changes.
  *
  * RUNTIME-ONLY FILE (depends on PIXI, not on the editor).
  */
@@ -83,23 +69,19 @@ import { LIGHT, LightType } from "../components/Light.js";
 import { SHADOW_CASTER } from "../components/ShadowCaster.js";
 import { LIGHTING_SETTINGS } from "../components/LightingSettings.js";
 import { LightingQuality, ShadowMode } from "./LightingQuality.js";
-import { buildLightingFilter, MAX_LIGHTS, MAX_OCCLUDERS, MAX_RAYMARCH_STEPS } from "./LightingShaderSource.js";
+import { buildLightTextureFilter, MAX_LIGHTS, MAX_OCCLUDERS, MAX_RAYMARCH_STEPS } from "./LightTextureShaderSource.js";
+import { buildSpriteLightFilter } from "./SpriteLightFilter.js";
 
-// Fallback ambient darkness (see components/LightingSettings.js),
-// used only when a scene has no LightingSettings component. Same
-// value the old hardcoded-constant system always used, so existing
-// scenes render identically until a user adds LightingSettings and
-// starts tuning it themselves.
+// Fallback ambient darkness (see components/LightingSettings.js), used
+// only when a scene has no LightingSettings component.
 const AMBIENT_DARKNESS = 0.65;
 
 // Fallback occluder half-size (px) for a ShadowCaster with no explicit
-// width/height override AND no live rendered sprite yet (e.g. a
-// texture still loading, or no SpriteRenderer at all).
+// width/height override AND no live rendered sprite yet.
 const FALLBACK_OCCLUDER_HALF = 24;
 
-// Base shadow-casting distance (world units/px) used by Directional
-// lights' PARALLEL shadows, which have no light.radius of their own to
-// scale against. Each ShadowCaster's own `length` multiplies this base.
+// Base shadow-casting distance (world units/px) for Directional
+// lights' parallel shadows (see the old system's identical constant).
 const DIRECTIONAL_SHADOW_BASE_DISTANCE = 1200;
 
 const LIGHT_TYPE_ID = Object.freeze({
@@ -112,23 +94,19 @@ const LIGHT_TYPE_ID = Object.freeze({
 export class LightingSystem extends System {
   /**
    * @param {PIXI.Container} worldContainer the SAME container
-   *   RenderSystem draws sprites into — the lighting filter is applied
-   *   directly to it, so it composites against exactly the sprites
-   *   drawn this frame and pans/zooms/follows-camera in lockstep
-   *   automatically (see file header, COORDINATE SPACE).
+   *   RenderSystem draws sprites into. Phase 1's light texture is
+   *   rendered from a SEPARATE offscreen container (never added to
+   *   the visible stage) that mirrors this container's light/occluder
+   *   DATA (not its display objects) — see _renderLightTexture.
    * @param {import('./RenderSystem.js').RenderSystem} [renderSystem]
-   *   optional reference used ONLY to read each ShadowCaster entity's
-   *   real rendered sprite bounds (getSpriteWorldHalfExtents) as the
-   *   default occluder shape — see components/ShadowCaster.js.
-   * @param {PIXI.Application} [pixiApp] optional reference used ONLY to
-   *   read renderer.screen each frame so the lighting filter always
-   *   covers the FULL visible canvas (see LightingShaderSource.js's
-   *   autoFit=false note) rather than just the bounding box of
-   *   currently-rendered sprites — matches the old CPU system always
-   *   darkening/lighting a large fixed area regardless of where
-   *   sprites happen to be. If omitted, PIXI's own default filter-area
-   *   behavior is used instead (a reasonable fallback, just without
-   *   the "light empty background too" guarantee).
+   *   used for TWO things now: (1) reading each ShadowCaster entity's
+   *   real rendered sprite bounds (unchanged from before), and (2)
+   *   Phase 2 — iterating every live tracked sprite via
+   *   getTrackedSprites() to attach/update its SpriteLightFilter.
+   * @param {PIXI.Application} [pixiApp] used to read renderer.screen
+   *   (so both phases always cover the full visible canvas) and to
+   *   actually execute Phase 1's offscreen render each frame via
+   *   renderer.render().
    */
   constructor(worldContainer, renderSystem, pixiApp) {
     super();
@@ -136,75 +114,81 @@ export class LightingSystem extends System {
     this.renderSystem = renderSystem || null;
     this.pixiApp = pixiApp || null;
 
-    // Fallback quality settings used ONLY when the scene has no
-    // LightingSettings component (see components/LightingSettings.js)
-    // — e.g. an older scene saved before this feature existed. When a
-    // LightingSettings entity IS present, its values win every frame
-    // (see _readSettings()) so the Inspector toggle is the real
-    // source of truth for end users of the engine.
     this.quality = new LightingQuality();
 
-    // Set once the fragment/vertex shader has failed to compile/link
-    // (see _buildFilterSafely). While true, update() short-circuits
-    // every frame instead of retrying a filter build that's already
-    // known to throw, so a bad shader degrades to "no lighting" rather
-    // than spamming the console every tick or crashing the game loop.
     this._filterBroken = false;
 
-    this.filter = this._buildFilterSafely();
-    if (this.filter) {
-      this.filter.uniforms.uAmbientDarkness = AMBIENT_DARKNESS;
-    }
+    // PHASE 1 state: an offscreen container (never attached to the
+    // real stage) holding one full-screen quad with the light-texture
+    // filter applied, plus the RenderTexture it gets rendered into
+    // each frame.
+    this._lightTextureFilter = this._buildLightTextureFilterSafely();
+    this._lightRenderTexture = null;
+    this._lightSourceContainer = null; // offscreen quad the filter is applied to
+    this._lightQuad = null;
 
-    // Attached/detached from worldContainer.filters depending on
-    // whether any lights currently exist (see update()) — starts
-    // detached so a scene with no Light entities pays exactly zero
-    // extra GPU cost, matching the old system's early-return.
-    this._filterAttached = false;
+    // PHASE 2 state: entityId -> PIXI.Filter, one SpriteLightFilter
+    // instance per live sprite, kept in sync with RenderSystem's own
+    // tracked-sprite set every frame (see _syncSpriteFilters).
+    this._spriteFilters = new Map();
+
+    if (this._lightTextureFilter && this.pixiApp && this.pixiApp.renderer) {
+      this._setupLightTextureResources();
+    }
   }
 
   /**
-   * Wraps buildLightingFilter() so a GLSL compile/link failure (bad
-   * edit to LightingShaderSource.js, a driver that rejects the
-   * raymarch branch, uniform count over the GPU's limit, etc.) is
-   * reported through the ordinary console.error/warn path instead of
+   * Wraps buildLightTextureFilter() so a GLSL compile/link failure is
+   * reported through console.error (mirrored into the in-engine
+   * Console panel by editor/state/ConsoleCapture.js) instead of
    * throwing out of the constructor and taking the whole engine down.
-   * console.error/warn are what editor/state/ConsoleCapture.js mirrors
-   * into the in-engine Console panel, so this is how a shader problem
-   * ends up visible there without runtime importing anything from
-   * /editor (see RULES.txt #1).
    */
-  _buildFilterSafely() {
+  _buildLightTextureFilterSafely() {
     try {
-      return buildLightingFilter();
+      return buildLightTextureFilter();
     } catch (err) {
       this._filterBroken = true;
-      console.error("[Lighting] Failed to compile lighting shader — lighting is disabled for this session:", err);
+      console.error("[Lighting] Failed to compile light-texture shader — lighting is disabled for this session:", err);
       return null;
     }
   }
 
   /**
-   * Reads the scene's LightingSettings component, if any, so the
-   * Inspector toggle end users see is the actual live source of these
-   * values every frame — not just at scene load. Falls back to
-   * this.quality / AMBIENT_DARKNESS (the pre-Inspector defaults) when
-   * no LightingSettings entity exists, so older scenes and the
-   * standalone player keep working unchanged.
+   * Creates the offscreen RenderTexture + a single full-screen quad
+   * (a PIXI.Sprite stretched to renderer.screen size, filter-only, no
+   * visible texture content of its own) that Phase 1 renders every
+   * frame. This mirrors Unity's Light Render Texture: a screen-space
+   * buffer that exists independent of any particular sprite.
    */
-  _readSettings(world) {
-    const entity = world.query(LIGHTING_SETTINGS)[0];
-    const settings = entity ? entity.getComponent(LIGHTING_SETTINGS) : null;
-    return {
-      shadowMode: settings ? settings.shadowMode : this.quality.shadowMode,
-      raymarchSteps: settings ? settings.raymarchSteps : this.quality.raymarchSteps,
-      ambientDarkness: settings ? settings.ambientDarkness : AMBIENT_DARKNESS,
-    };
+  _setupLightTextureResources() {
+    const screen = this.pixiApp.renderer.screen;
+    this._lightRenderTexture = PIXI.RenderTexture.create({
+      width: Math.max(1, screen.width),
+      height: Math.max(1, screen.height),
+      resolution: this.pixiApp.renderer.resolution,
+    });
+
+    // A blank white quad is enough — the light-texture filter computes
+    // its ENTIRE output from world-position uniforms/varyings, it
+    // never samples this quad's own pixels (see
+    // LightTextureShaderSource.js's fragment shader: no uSampler at
+    // all). The quad exists purely to give the filter a rectangle to
+    // run over.
+    this._lightQuad = new PIXI.Sprite(PIXI.Texture.WHITE);
+    this._lightQuad.width = screen.width;
+    this._lightQuad.height = screen.height;
+    this._lightQuad.filters = [this._lightTextureFilter];
+
+    this._lightSourceContainer = new PIXI.Container();
+    this._lightSourceContainer.addChild(this._lightQuad);
+    // Deliberately NEVER added to pixiApp.stage — rendered manually
+    // into _lightRenderTexture via renderer.render() each frame
+    // instead, so it's never part of the normal visible draw pass.
   }
 
   update(world) {
-    if (this._filterBroken || !this.filter) {
-      this._detachFilter();
+    if (this._filterBroken || !this._lightTextureFilter || !this.pixiApp || !this.pixiApp.renderer) {
+      this._teardownAllSpriteFilters();
       return;
     }
 
@@ -215,10 +199,7 @@ export class LightingSystem extends System {
       .filter((e) => e.getComponent(LIGHT).castsOnWorld);
 
     if (lightEntities.length === 0) {
-      if (this._filterAttached) {
-        console.warn("[Lighting DEBUG] No active lights found — detaching filter. (world.query(TRANSFORM, LIGHT) with castsOnWorld=true returned 0 entities.)");
-      }
-      this._detachFilter();
+      this._teardownAllSpriteFilters();
       return;
     }
 
@@ -230,7 +211,7 @@ export class LightingSystem extends System {
           MAX_LIGHTS +
           " at once. The extra " +
           (lightEntities.length - MAX_LIGHTS) +
-          " light(s) will be ignored — remove or disable some lights, or raise MAX_LIGHTS in LightingShaderSource.js."
+          " light(s) will be ignored — remove or disable some lights, or raise MAX_LIGHTS in LightTextureShaderSource.js."
       );
     }
 
@@ -251,80 +232,147 @@ export class LightingSystem extends System {
       this._fillLightUniforms(lightEntities, occluders);
       this._fillOccluderUniforms(occluders);
 
-      this.filter.uniforms.uLightCount = Math.min(MAX_LIGHTS, lightEntities.length);
-      this.filter.uniforms.uOccluderCount = Math.min(MAX_OCCLUDERS, occluders.length);
-      this.filter.uniforms.uShadowMode = settings.shadowMode === ShadowMode.RAYMARCH ? 1 : 0;
-      this.filter.uniforms.uRaymarchSteps = Math.min(MAX_RAYMARCH_STEPS, Math.max(1, settings.raymarchSteps));
-      this.filter.uniforms.uAmbientDarkness = Math.min(1, Math.max(0, settings.ambientDarkness));
-      this._syncStageTransform();
-      this._syncFilterArea();
+      const filter = this._lightTextureFilter;
+      filter.uniforms.uLightCount = Math.min(MAX_LIGHTS, lightEntities.length);
+      filter.uniforms.uOccluderCount = Math.min(MAX_OCCLUDERS, occluders.length);
+      filter.uniforms.uShadowMode = settings.shadowMode === ShadowMode.RAYMARCH ? 1 : 0;
+      filter.uniforms.uRaymarchSteps = Math.min(MAX_RAYMARCH_STEPS, Math.max(1, settings.raymarchSteps));
+      filter.uniforms.uAmbientDarkness = Math.min(1, Math.max(0, settings.ambientDarkness));
+      this._syncStageTransform(filter);
 
-      const wasAttached = this._filterAttached;
-      this._attachFilter();
+      // PHASE 1: render the light texture, once, this frame.
+      this._renderLightTexture();
 
-      // TEMP DIAGNOSTIC — logs once each time lighting turns on (not
-      // every frame, to avoid flooding the Console panel), so it's
-      // possible to see whether the filter is genuinely running and
-      // with what data, purely from the in-engine Console tab, without
-      // needing browser devtools access.
-      if (!wasAttached) {
-        console.warn(
-          "[Lighting DEBUG] Filter attached. lights=" +
-            lightEntities.length +
-            " occluders=" +
-            occluders.length +
-            " ambientDarkness=" +
-            settings.ambientDarkness +
-            " shadowMode=" +
-            settings.shadowMode +
-            " filterArea=" +
-            (this.filter.filterArea ? this.filter.filterArea.width + "x" + this.filter.filterArea.height : "null") +
-            " containerFilters=" +
-            (this.worldContainer.filters ? this.worldContainer.filters.length : "null") +
-            " containerChildren=" +
-            this.worldContainer.children.length
-        );
-      }
+      // PHASE 2: make sure every live sprite has an up-to-date
+      // SpriteLightFilter pointed at this frame's light texture.
+      this._syncSpriteFilters();
     } catch (err) {
-      // A bad value slipping into a uniform (NaN transform, a light
-      // with a corrupt color string, etc.) throws deep inside PIXI's
-      // filter upload rather than here, so this catch is the last
-      // line of defense: log it clearly and drop lighting for this
-      // frame instead of breaking the whole render loop.
       this._filterBroken = true;
-      this._detachFilter();
-      console.error("[Lighting] Error while updating lighting uniforms — lighting disabled for this session:", err);
+      this._teardownAllSpriteFilters();
+      console.error("[Lighting] Error while updating lighting — lighting disabled for this session:", err);
     }
   }
 
   /**
-   * Points the filter at the renderer's full screen rect (see
-   * LightingShaderSource.js's autoFit=false note) instead of letting
-   * PIXI auto-fit to gameContentContainer's current sprite bounding
-   * box, so empty background areas of the scene still get darkened/lit
-   * exactly like the old system's large fixed-size darkness rect did.
+   * Resizes the offscreen RenderTexture/quad to match the renderer's
+   * current screen size (canvas resize, resolution change), THEN
+   * actually executes Phase 1: renders _lightSourceContainer into
+   * _lightRenderTexture. This is the literal equivalent of Unity's
+   * "draw the Light Textures for this batch" step — a real, separate
+   * render pass that happens before any sprite is touched.
    */
-  _syncFilterArea() {
-    if (!this.pixiApp || !this.pixiApp.renderer) return;
-    this.filter.filterArea = this.pixiApp.renderer.screen;
+  _renderLightTexture() {
+    const screen = this.pixiApp.renderer.screen;
+    const w = Math.max(1, Math.round(screen.width));
+    const h = Math.max(1, Math.round(screen.height));
+
+    if (this._lightRenderTexture.width !== w || this._lightRenderTexture.height !== h) {
+      this._lightRenderTexture.resize(w, h);
+      this._lightQuad.width = w;
+      this._lightQuad.height = h;
+    }
+
+    this.pixiApp.renderer.render(this._lightSourceContainer, {
+      renderTexture: this._lightRenderTexture,
+      clear: true,
+    });
+  }
+
+  /**
+   * PHASE 2 driver: walks every sprite RenderSystem currently tracks
+   * (via the new getTrackedSprites() accessor — see RenderSystem.js)
+   * and makes sure each one has a SpriteLightFilter attached and
+   * pointed at this frame's light texture, adding filters for newly-
+   * appeared sprites and removing them for sprites RenderSystem no
+   * longer tracks (matches the entity's own lifecycle exactly, no
+   * separate cleanup pass needed).
+   */
+  _syncSpriteFilters() {
+    if (!this.renderSystem) return;
+
+    const seen = new Set();
+    const screen = this.pixiApp.renderer.screen;
+    // PIXI's default WebGL render-to-texture convention is Y-flipped
+    // relative to render-to-screen — this single flag (rather than
+    // duplicating the whole shader) lets SpriteLightFilter correct for
+    // it without needing to know WHY, just whether to.
+    const flipY = 1.0;
+
+    for (const [entityId, sprite] of this.renderSystem.getTrackedSprites()) {
+      seen.add(entityId);
+      let filter = this._spriteFilters.get(entityId);
+      if (!filter) {
+        filter = buildSpriteLightFilter();
+        this._spriteFilters.set(entityId, filter);
+      }
+
+      filter.uniforms.uLightTexture = this._lightRenderTexture;
+      filter.uniforms.uLightTexSize[0] = screen.width;
+      filter.uniforms.uLightTexSize[1] = screen.height;
+      filter.uniforms.uLightTexFlipY = flipY;
+
+      const existing = sprite.filters || [];
+      if (existing.indexOf(filter) === -1) {
+        sprite.filters = [...existing.filter((f) => f !== filter), filter];
+      }
+    }
+
+    // Detach + drop filters for sprites that no longer exist.
+    for (const [entityId, filter] of this._spriteFilters) {
+      if (seen.has(entityId)) continue;
+      this._spriteFilters.delete(entityId);
+      // The sprite itself is already destroyed by RenderSystem by the
+      // time we get here in the normal case, so there's usually
+      // nothing left to detach from — this is just belt-and-suspenders
+      // cleanup of our own map.
+    }
+  }
+
+  /**
+   * Removes every sprite's SpriteLightFilter (scene has zero active
+   * lights, or the light-texture shader is broken) so lighting has
+   * exactly zero visual/GPU effect, matching the previous version's
+   * "detach filter -> pixel-identical to before lighting existed"
+   * guarantee.
+   */
+  _teardownAllSpriteFilters() {
+    if (!this.renderSystem) {
+      this._spriteFilters.clear();
+      return;
+    }
+    for (const [entityId, sprite] of this.renderSystem.getTrackedSprites()) {
+      const filter = this._spriteFilters.get(entityId);
+      if (!filter || !sprite.filters) continue;
+      const remaining = sprite.filters.filter((f) => f !== filter);
+      sprite.filters = remaining.length ? remaining : null;
+    }
+    this._spriteFilters.clear();
+  }
+
+  /**
+   * Reads the scene's LightingSettings component, if any — identical
+   * semantics to the previous version.
+   */
+  _readSettings(world) {
+    const entity = world.query(LIGHTING_SETTINGS)[0];
+    const settings = entity ? entity.getComponent(LIGHTING_SETTINGS) : null;
+    return {
+      shadowMode: settings ? settings.shadowMode : this.quality.shadowMode,
+      raymarchSteps: settings ? settings.raymarchSteps : this.quality.raymarchSteps,
+      ambientDarkness: settings ? settings.ambientDarkness : AMBIENT_DARKNESS,
+    };
   }
 
   /**
    * Uploads gameContentContainer's actual on-screen transform (plain
-   * translate + uniform scale — nothing in this engine ever rotates
-   * this container or any of its ancestors, see file header) so the
-   * shader can convert screen-space pixels back to world space (see
-   * LightingShaderSource.js's vertex shader). Walked by hand from
-   * .x/.y/.scale.x up the parent chain rather than read off
-   * .worldTransform, since PIXI only recomputes worldTransform during
-   * its OWN render pass (driven by the shared ticker), which may not
-   * have run yet for this tick by the time this System's update() is
-   * called — reading .worldTransform here could be one frame stale
-   * during a fast pan/zoom. Walking the plain x/y/scale numbers
-   * ourselves is always exactly in sync with what THIS frame is about
-   * to render.
+   * translate + uniform scale) to the given filter so Phase 1's
+   * shader can convert screen-space pixels back to world space.
+   * Identical approach/rationale to the previous version — walked by
+   * hand from .x/.y/.scale.x up the parent chain rather than read off
+   * .worldTransform, to always be exactly in sync with the frame
+   * about to render rather than one frame stale.
    */
-  _syncStageTransform() {
+  _syncStageTransform(filter) {
     let offsetX = 0;
     let offsetY = 0;
     let scale = 1;
@@ -335,39 +383,19 @@ export class LightingSystem extends System {
       scale *= node.scale.x;
       node = node.parent;
     }
-    this.filter.uniforms.uStageOffset[0] = offsetX;
-    this.filter.uniforms.uStageOffset[1] = offsetY;
-    this.filter.uniforms.uStageScale = scale || 1;
-  }
-
-  _attachFilter() {
-    if (this._filterAttached) return;
-    const existing = this.worldContainer.filters || [];
-    this.worldContainer.filters = [...existing.filter((f) => f !== this.filter), this.filter];
-    this._filterAttached = true;
-  }
-
-  _detachFilter() {
-    if (!this._filterAttached) return;
-    const existing = this.worldContainer.filters || [];
-    const remaining = existing.filter((f) => f !== this.filter);
-    this.worldContainer.filters = remaining.length ? remaining : null;
-    this._filterAttached = false;
+    filter.uniforms.uStageOffset[0] = offsetX;
+    filter.uniforms.uStageOffset[1] = offsetY;
+    filter.uniforms.uStageScale = scale || 1;
   }
 
   /**
-   * Fills the shader's per-light uniform arrays (flat, MAX_LIGHTS slots
-   * each — GLSL ES 1.00 has no dynamically-sized uniform arrays, so a
-   * fixed cap plus an explicit uLightCount is the standard technique;
-   * see LightingShaderSource.js's loop, which simply `break`s past
-   * uLightCount). One slot's worth of floats fully describes any light
-   * type uniformly (type id + shared color/intensity + the 4
-   * type-specific fields angle/radius/width/height), which is what
-   * lets a single shader branch handle all 4 Light types instead of 4
-   * separate shaders.
+   * Fills Phase 1's per-light uniform arrays. Identical semantics to
+   * the previous version — only the shader consuming this data moved
+   * files (LightTextureShaderSource.js instead of
+   * LightingShaderSource.js).
    */
   _fillLightUniforms(lightEntities, occluders) {
-    const u = this.filter.uniforms;
+    const u = this._lightTextureFilter.uniforms;
     const count = Math.min(MAX_LIGHTS, lightEntities.length);
 
     for (let i = 0; i < count; i++) {
@@ -394,27 +422,18 @@ export class LightingSystem extends System {
       u.uLightShadowColor[i * 3 + 0] = shadowRgb[0];
       u.uLightShadowColor[i * 3 + 1] = shadowRgb[1];
       u.uLightShadowColor[i * 3 + 2] = shadowRgb[2];
-      // Directional shadow reach is fixed (parallel/"sun" shadows have
-      // no natural radius to scale against — see components/Light.js);
-      // Point/Spot/Area reach is just the light's own radius, scaled
-      // per-occluder by ShadowCaster.length inside the shader.
       u.uLightShadowReach[i] =
         light.type === LightType.DIRECTIONAL ? DIRECTIONAL_SHADOW_BASE_DISTANCE : Math.max(0.0001, light.radius || 0);
     }
   }
 
   /**
-   * Fills the shader's per-occluder uniform arrays (flat, MAX_OCCLUDERS
-   * slots). Occluder collection semantics (real sprite bounds ->
-   * explicit width/height override -> fallback half-size; local
-   * offset rotated by the entity's own rotation before translating;
-   * rotated box) are UNCHANGED from the previous CPU system — only
-   * where the box gets turned into pixels changed (GPU shadow test
-   * instead of CPU polygon fill), so existing scenes' shadow
-   * shapes/behavior carry over.
+   * Fills Phase 1's per-occluder uniform arrays. Identical semantics
+   * to the previous version (LightTextureShaderSource.js consumes
+   * this data now instead of the old LightingShaderSource.js).
    */
   _fillOccluderUniforms(occluders) {
-    const u = this.filter.uniforms;
+    const u = this._lightTextureFilter.uniforms;
     const count = Math.min(MAX_OCCLUDERS, occluders.length);
 
     for (let i = 0; i < count; i++) {
@@ -432,11 +451,7 @@ export class LightingSystem extends System {
 
   /**
    * Gathers every enabled ShadowCaster entity's world-space occluder
-   * box: {id, x, y, halfWidth, halfHeight, rotationDeg, opacity,
-   * length, softness}. Identical semantics to the previous CPU
-   * system's _collectOccluders (see components/ShadowCaster.js for the
-   * offset/rotation convention) — only the consumer of this data
-   * changed (GPU uniforms instead of CPU polygon math).
+   * box. Identical semantics to the previous version.
    */
   _collectOccluders(world) {
     const casters = world.query(TRANSFORM, SHADOW_CASTER);
@@ -499,7 +514,9 @@ export class LightingSystem extends System {
   }
 
   destroy() {
-    this._detachFilter();
-    this.filter.destroy();
+    this._teardownAllSpriteFilters();
+    if (this._lightTextureFilter) this._lightTextureFilter.destroy();
+    if (this._lightRenderTexture) this._lightRenderTexture.destroy(true);
+    if (this._lightSourceContainer) this._lightSourceContainer.destroy({ children: true });
   }
 }

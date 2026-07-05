@@ -222,6 +222,22 @@ export class RenderSystem extends System {
     return { halfWidth: Math.abs(sprite.width) / 2, halfHeight: Math.abs(sprite.height) / 2 };
   }
 
+  /**
+   * Read-only iteration over every live entityId -> PIXI.Sprite pair
+   * this system currently tracks. Used ONLY by LightingSystem (see
+   * systems/LightingSystem.js's Phase 2: attaching/updating a
+   * per-sprite SpriteLightFilter) so it can react to sprites being
+   * added/removed without RenderSystem needing to know anything about
+   * lighting — keeps rendering centralized here (RULES.txt #5) while
+   * still letting another system piggyback on the same tracked sprite
+   * set instead of building its own parallel entityId->displayObject
+   * map.
+   * @returns {IterableIterator<[string, PIXI.Sprite]>}
+   */
+  getTrackedSprites() {
+    return this._sprites.entries();
+  }
+
   destroy() {
     for (const sprite of this._sprites.values()) {
       this.worldContainer.removeChild(sprite);

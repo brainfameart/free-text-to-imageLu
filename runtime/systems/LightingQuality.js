@@ -3,7 +3,7 @@
  *
  * The user-facing GPU shadow-quality toggle for LightingSystem. Both
  * modes run entirely inside the same lighting shader (see
- * LightingShaderSource.js's `uShadowMode` branch), so switching between
+ * LightTextureShaderSource.js's `uShadowMode` branch), so switching between
  * them is instant (no shader recompile) and can happen mid-game from a
  * settings menu, not just at scene-load.
  *

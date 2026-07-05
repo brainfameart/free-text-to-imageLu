@@ -84,7 +84,7 @@ export class ShadowCaster {
 
     // Soft shadow edge (penumbra) amount in world units/px, 0 = crisp
     // hard edge. Evaluated per-pixel on the GPU by LightingSystem's
-    // shader (see LightingShaderSource.js's quadShadowTest edge-fade
+    // shader (see LightTextureShaderSource.js's quadShadowTest edge-fade
     // and raymarchShadowTest's soft-distance accumulation) rather than
     // approximated with multiple CPU-drawn polygon copies.
     this.softness = softness;

@@ -10,8 +10,9 @@
  *    shadow points the same direction, set purely by this light's
  *    rotation) rather than radiating from a position — exactly like
  *    real sunlight, where the sun's position doesn't matter, only its
- *    angle in the sky. Computed per-pixel by LightingSystem's GPU
- *    shader (see LightingShaderSource.js's directional-light shadow
+ *    angle in the sky. Computed per-pixel in Phase 1 of the two-phase
+ *    lighting pipeline's GPU shader (see
+ *    systems/LightTextureShaderSource.js's directional-light shadow
  *    branch, which derives an effective light position from rotation
  *    alone rather than reading this entity's Transform position).
  *  - Point       : radiates outward from the entity's Transform position
@@ -23,13 +24,15 @@
  *    (`width` x `height`) centered on the entity's Transform position,
  *    with a soft `radius`-sized falloff at the rectangle's edge.
  *
- * All types share color/intensity so the Inspector and LightingSystem
- * can treat them uniformly where the math allows, while type-specific
- * fields (radius/angle/width/height) only apply to the relevant type.
+ * All types share color/intensity so the Inspector and the Phase 1
+ * light-texture shader can treat them uniformly where the math allows,
+ * while type-specific fields (radius/angle/width/height) only apply to
+ * the relevant type.
  *
  * This component is PLAIN DATA ONLY (see RULES.txt #4) — actually
  * darkening/lighting the world and sprites is LightingSystem's job
- * (runtime/systems/LightingSystem.js), not this file's.
+ * (runtime/systems/LightingSystem.js, which now orchestrates a
+ * two-phase pipeline — see that file's header), not this file's.
  *
  * RUNTIME-ONLY FILE.
  */
@@ -67,7 +70,7 @@ export class Light {
     // Point / Spot / Area only: how far the light reaches before fading
     // to nothing (world units / px). For Directional this is unused for
     // the glow itself (a Directional light fills the whole screen
-    // uniformly — see LightingShaderSource.js's typeId==0 branch) but
+    // uniformly — see LightTextureShaderSource.js's typeId==0 branch) but
     // IS used as the base shadow-casting distance when castShadows is
     // on (scaled further per-caster by ShadowCaster.length).
     this.radius = radius;
