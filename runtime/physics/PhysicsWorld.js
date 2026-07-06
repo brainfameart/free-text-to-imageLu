@@ -297,24 +297,30 @@ export class PhysicsWorld {
       .setRestitution(collider.restitution)
       .setDensity(collider.density)
       // Rapier's DEFAULT active-collision-types only computes contacts
-      // for pairs involving at least one Dynamic body — Kinematic-vs-
-      // Static and Kinematic-vs-Kinematic pairs are silently skipped
-      // unless explicitly opted in. A Kinematic-body character
-      // controller (see components/CharacterController.js) needs to be
-      // stopped by static walls/floors and by other kinematic bodies
-      // just like it's stopped by dynamic ones.
+      // for pairs involving at least one Dynamic body — ANY pairing of
+      // two non-dynamic bodies (Kinematic-vs-Static, Kinematic-vs-
+      // Kinematic, Static-vs-Static) is silently skipped unless
+      // explicitly opted in, no matter how the constant is named. A
+      // Kinematic-body character controller (see
+      // components/CharacterController.js) needs to be stopped by
+      // static walls/floors and by other kinematic bodies just like
+      // it's stopped by dynamic ones.
       //
       // IMPORTANT: RAPIER.ActiveCollisionTypes.ALL is NOT actually "all
-      // pairings" despite the name — it's DYNAMIC_DYNAMIC |
-      // DYNAMIC_KINEMATIC | DYNAMIC_FIXED | KINEMATIC_FIXED. It omits
-      // KINEMATIC_KINEMATIC entirely, so two Kinematic bodies (e.g. a
-      // Kinematic player vs a Kinematic moving platform/enemy) would
-      // silently never generate contacts or block each other under
-      // plain ALL — exactly the "kinematic doesn't collide with
-      // kinematic" bug. Static-vs-Static is correctly still left out
-      // (neither side can move, so it can never produce a meaningful
-      // response either way) by not OR-ing in FIXED_FIXED.
-      .setActiveCollisionTypes(RAPIER.ActiveCollisionTypes.ALL | RAPIER.ActiveCollisionTypes.KINEMATIC_KINEMATIC);
+      // pairings" despite the name — per Rapier's own docs, the default
+      // only enables collisions between a dynamic body and a body of
+      // ANY type; it enables NO collisions between two non-dynamic
+      // bodies. That means it omits BOTH Kinematic-vs-Fixed AND
+      // Kinematic-vs-Kinematic — a kinematic body would otherwise pass
+      // straight through a static collider, exactly the "kinematic vs
+      // static doesn't collide" bug. Static-vs-Static is correctly
+      // still left out (neither side can move, so it can never produce
+      // a meaningful response either way) by not OR-ing in FIXED_FIXED.
+      .setActiveCollisionTypes(
+        RAPIER.ActiveCollisionTypes.ALL |
+          RAPIER.ActiveCollisionTypes.KINEMATIC_KINEMATIC |
+          RAPIER.ActiveCollisionTypes.KINEMATIC_FIXED
+      );
 
     handle.collider = this.rapierWorld.createCollider(desc, handle.body);
     handle.colliderSig = sig;

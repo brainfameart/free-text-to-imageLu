@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ZenEngine — Collision Test</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.2/pixi.min.js"></script>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #111;
+    color: #eee;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  #layout { display: flex; height: 100vh; }
+  #game-canvas { width: 480px; height: 480px; flex: none; border-right: 1px solid #333; }
+  #game-canvas canvas { display: block; }
+  #report { flex: 1; padding: 16px 24px; overflow-y: auto; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  #summary { font-size: 15px; margin: 8px 0 16px; font-weight: 600; }
+  .case {
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 10px;
+  }
+  .case.pass { border-color: #2e7d32; background: #10240f; }
+  .case.fail { border-color: #b71c1c; background: #240a0a; }
+  .case.pending { border-color: #555; }
+  .case h2 { font-size: 14px; margin: 0 0 4px; }
+  .case p { font-size: 12px; margin: 2px 0; color: #ccc; }
+  .status { font-weight: 700; }
+  .status.pass { color: #66bb6a; }
+  .status.fail { color: #ef5350; }
+  .status.pending { color: #999; }
+</style>
+</head>
+<body>
+  <div id="layout">
+    <div id="game-canvas"></div>
+    <div id="report">
+      <h1>ZenEngine Physics — Collision Regression Test</h1>
+      <p style="color:#999; font-size:12px; max-width:640px;">
+        Spawns real Rigidbody2D + Collider2D entities through the SAME
+        runtime the editor and shipped game use, drives each mover into a
+        wall for a fixed number of physics steps, and checks whether it
+        actually stopped/blocked instead of passing through. If a case
+        goes green here, the same body-type pairing will behave the same
+        way inside the full engine (editor or player) — it's not a
+        separate simulation.
+      </p>
+      <div id="summary">Running…</div>
+      <div id="cases"></div>
+    </div>
+  </div>
+  <script type="module" src="./test-collisions.js"></script>
+</body>
+</html>
