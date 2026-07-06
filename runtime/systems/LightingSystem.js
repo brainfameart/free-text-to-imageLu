@@ -350,6 +350,14 @@ export class LightingSystem extends System {
     if (this._glowSprite.width !== w) this._glowSprite.width = w;
     if (this._glowSprite.height !== h) this._glowSprite.height = h;
 
+    // Same fix as _renderLightTexture's filterArea assignment: this
+    // filter also has autoFit = false (see LightGlowFilter.js), so
+    // without an explicit filterArea its working area falls back to
+    // this sprite's own global bounds, which drift out of sync with the
+    // real screen rect as the editor pans — causing the glow to vanish
+    // once a light crossed specific screen offsets.
+    this._glowSprite.filterArea = this.pixiApp.renderer.screen;
+
     const f = this._glowFilter;
     f.uniforms.uLightTexture = this._lightRenderTexture;
     f.uniforms.uLightTexSize[0] = w;
@@ -383,6 +391,21 @@ export class LightingSystem extends System {
       this._lightQuad.width = w;
       this._lightQuad.height = h;
     }
+
+    // autoFit is false on this filter (see LightTextureShaderSource.js's
+    // buildLightTextureFilter), which means PIXI will NOT automatically
+    // size the filter's working area to the renderer's screen — without
+    // an explicit filterArea, the FilterSystem instead falls back to the
+    // light quad's own GLOBAL bounding box, which only reliably matches
+    // the full screen while the quad sits at its default (0,0) position.
+    // That fallback is what caused lights to vanish once panned near
+    // specific screen offsets: the quad's computed bounds no longer
+    // lined up with the actual visible canvas rect at those positions.
+    // Setting filterArea explicitly every frame (matching the previous
+    // single-pass system's _syncFilterArea) pins the shader's working
+    // area to the renderer's real full screen rect regardless of any
+    // pan/zoom, so this can never happen again.
+    this._lightQuad.filterArea = this.pixiApp.renderer.screen;
 
     this.pixiApp.renderer.render(this._lightSourceContainer, {
       renderTexture: this._lightRenderTexture,
