@@ -51,7 +51,15 @@ function rapierBodyType(RAPIER, bodyType) {
     case BodyType.STATIC:
       return RAPIER.RigidBodyType.Fixed;
     case BodyType.KINEMATIC:
-      return RAPIER.RigidBodyType.KinematicVelocityBased;
+      // Position-based (not velocity-based): a KinematicVelocityBased
+      // body's trajectory is NEVER corrected by Rapier no matter what
+      // it hits — that body type only generates contact events, it
+      // does not get blocked (see Rapier's own docs: kinematic bodies
+      // are moved by the user and are "independent from any contact").
+      // Position-based is what lets us use KinematicCharacterController
+      // below to sweep-test the desired movement against obstacles
+      // and get back a corrected (blocked/slid) movement to apply.
+      return RAPIER.RigidBodyType.KinematicPositionBased;
     case BodyType.DYNAMIC:
     default:
       return RAPIER.RigidBodyType.Dynamic;
@@ -69,10 +77,22 @@ export class PhysicsWorld {
     /** @type {Map<string, { body: object, collider: object|null, bodyType: string, colliderSig: string }>} entityId -> handles */
     this._handles = new Map();
 
+    // Small skin/offset gap (in world pixels) the character controller
+    // keeps between a kinematic body and whatever it's sweeping
+    // against — Rapier requires a nonzero value for solver stability.
+    // 0.5px is imperceptible but avoids the controller reporting
+    // "stuck" from exact zero-distance contact.
+    this._characterControllerOffset = 0.5;
+    /** @type {import('@dimforge/rapier2d-compat').KinematicCharacterController|null} shared across every KINEMATIC body — the controller only needs the collider + desired movement per call, so one instance is enough for the whole world. */
+    this._characterController = null;
+
     this._readyPromise = loadRapier().then((RAPIER) => {
       this.RAPIER = RAPIER;
       this.rapierWorld = new RAPIER.World({ x: 0, y: GRAVITY_Y });
       this.rapierWorld.lengthUnit = LENGTH_UNIT_PX_PER_METER;
+      this._characterController = this.rapierWorld.createCharacterController(
+        this._characterControllerOffset
+      );
       this.ready = true;
     });
   }
@@ -97,9 +117,10 @@ export class PhysicsWorld {
     );
     const seen = new Set();
 
+    const stepDt = dt > 0 ? dt : 1 / 60;
     for (const entity of entities) {
       seen.add(entity.id);
-      this._syncEntity(entity);
+      this._syncEntity(entity, stepDt);
     }
 
     // remove Rapier bodies for entities that no longer have physics
@@ -111,7 +132,7 @@ export class PhysicsWorld {
       }
     }
 
-    this.rapierWorld.timestep = dt > 0 ? dt : 1 / 60;
+    this.rapierWorld.timestep = stepDt;
     this.rapierWorld.step();
 
     // write results back onto Transform for every DYNAMIC / KINEMATIC body
@@ -128,10 +149,21 @@ export class PhysicsWorld {
       transform.y = pos.y;
       if (!rb.lockRotation) transform.rotation = handle.body.rotation() * RAD2DEG;
 
-      const vel = handle.body.linvel();
-      rb.velocityX = vel.x;
-      rb.velocityY = vel.y;
-      rb.angularVelocity = handle.body.angvel();
+      if (rb.bodyType === BodyType.DYNAMIC) {
+        // Dynamic bodies: Rapier's solver owns velocity outright, so
+        // read it back every frame (as before) so scripts/Inspector see
+        // the true simulated speed (e.g. after gravity, pushes, etc).
+        const vel = handle.body.linvel();
+        rb.velocityX = vel.x;
+        rb.velocityY = vel.y;
+        rb.angularVelocity = handle.body.angvel();
+      }
+      // KINEMATIC: rb.velocityX/Y are left as whatever the character-
+      // controller sweep in _syncEntity already wrote (the ACTUAL,
+      // possibly-blocked/slid velocity for this step) — a
+      // KinematicPositionBased body has no meaningful linvel() from
+      // Rapier's solver to read back here, since we drive it via
+      // setNextKinematicTranslation rather than forces/velocity.
     }
   }
 
@@ -140,7 +172,7 @@ export class PhysicsWorld {
    * match its current components, creating or recreating as needed, and
    * pushes any editor-driven Transform/velocity changes onto the body.
    */
-  _syncEntity(entity) {
+  _syncEntity(entity, dt) {
     const RAPIER = this.RAPIER;
     const transform = entity.getComponent(TRANSFORM);
     const rb = entity.getComponent(RIGIDBODY_2D);
@@ -220,13 +252,59 @@ export class PhysicsWorld {
         // stale velocity forever.
         rb.driveVelocityX = null;
         rb.driveVelocityY = null;
-      } else if (effectiveBodyType === BodyType.KINEMATIC) {
-        handle.body.setLinvel({ x: rb.velocityX, y: rb.velocityY }, true);
-        handle.body.setAngvel(rb.lockRotation ? 0 : rb.angularVelocity, true);
       }
+      // KINEMATIC is handled below, AFTER _syncCollider — the sweep
+      // needs handle.collider to exist, which isn't guaranteed yet on
+      // the frame a body is first created.
     }
 
     this._syncCollider(handle, collider, transform);
+
+    if (rb && effectiveBodyType === BodyType.KINEMATIC) {
+      this._syncKinematicMovement(handle, rb, dt);
+    }
+  }
+
+  /**
+   * Drives a KINEMATIC body using Rapier's KinematicCharacterController
+   * instead of raw setLinvel/setNextKinematicTranslation: the desired
+   * displacement (velocity * dt) is swept against every obstacle in its
+   * path, sliding along or stopping at anything solid, and ONLY the
+   * corrected/blocked displacement is actually applied. This is what
+   * makes a kinematic mover get stopped by static/kinematic walls —
+   * KinematicPositionBased on its own does not do this (Rapier moves a
+   * kinematic body exactly where it's told, colliding-or-not, unless a
+   * character controller is used to compute the correction first).
+   */
+  _syncKinematicMovement(handle, rb, dt) {
+    if (!handle.collider) return; // no collider yet (created same frame) — nothing to sweep
+
+    const desiredX = rb.velocityX * dt;
+    const desiredY = rb.velocityY * dt;
+
+    this._characterController.computeColliderMovement(handle.collider, {
+      x: desiredX,
+      y: desiredY,
+    });
+    const corrected = this._characterController.computedMovement();
+
+    const current = handle.body.translation();
+    handle.body.setNextKinematicTranslation({
+      x: current.x + corrected.x,
+      y: current.y + corrected.y,
+    });
+
+    if (!rb.lockRotation) {
+      const currentRotation = handle.body.rotation();
+      handle.body.setNextKinematicRotation(currentRotation + rb.angularVelocity * dt);
+    }
+
+    // Report back the ACTUAL (possibly blocked/slid) velocity, not the
+    // requested one, so gameplay code (grounded checks, animation
+    // blending, etc — e.g. ControllerSystem's grounded epsilon check)
+    // sees what really happened this step rather than raw input intent.
+    rb.velocityX = dt > 0 ? corrected.x / dt : 0;
+    rb.velocityY = dt > 0 ? corrected.y / dt : 0;
   }
 
   /**
