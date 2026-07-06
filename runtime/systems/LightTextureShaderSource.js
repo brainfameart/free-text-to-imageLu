@@ -75,10 +75,15 @@ varying vec2 vWorldCoord;
 uniform float uAmbientDarkness;
 uniform int uShadowMode; // 0 = quad, 1 = raymarch
 uniform int uRaymarchSteps;
+// Running scene clock (seconds), fed from LightingSystem.js each
+// frame — only God Rays uses this, to very slowly drift its streak
+// pattern the way real light shafts shimmer as dust/haze in the air
+// moves, instead of looking like a static painted-on cone.
+uniform float uTime;
 
 uniform int uLightCount;
 uniform vec2 uLightPos[${MAX_LIGHTS}];
-uniform int uLightTypeId[${MAX_LIGHTS}];      // 0 Directional, 1 Point, 2 Spot, 3 Area
+uniform int uLightTypeId[${MAX_LIGHTS}];      // 0 Directional, 1 Point, 2 Spot, 3 Area, 4 GodRays
 uniform vec3 uLightColor[${MAX_LIGHTS}];
 uniform float uLightIntensity[${MAX_LIGHTS}];
 uniform float uLightRadius[${MAX_LIGHTS}];
@@ -126,11 +131,96 @@ float radialFalloff(float distT) {
     return 0.92 * (1.0 - pow(clamp(bloomT, 0.0, 1.0), 2.4));
 }
 
+// Strictly contained within the light's own rectangle — matches its
+// gizmo box exactly, with NO glow bleeding past the drawn outline
+// (previously the radius parameter extended the visible glow OUTWARD
+// past the box edges by up to that many world units, which read as
+// the light "shining outside" its own shape). The radius parameter
+// here instead controls how far the soft edge feathers INWARD from
+// the box's own edge, clamped so it can never eat more than half the
+// box.
 float areaFalloff(vec2 localP, vec2 halfSize, float radius) {
     vec2 d = abs(localP) - halfSize;
-    float edgeDist = length(max(d, 0.0));
-    if (radius <= 0.0001) return step(edgeDist, 0.0001);
-    return 1.0 - smoothstep(0.0, radius, edgeDist);
+    if (d.x > 0.0 || d.y > 0.0) return 0.0;
+    float insideEdgeDist = -max(d.x, d.y);
+    float feather = clamp(radius, 0.0001, max(0.0001, min(halfSize.x, halfSize.y)));
+    return smoothstep(0.0, feather, insideEdgeDist);
+}
+
+// Cheap value-noise-ish hash, used only to break up God Rays' streak
+// pattern so it reads as irregular dust/haze rather than a perfectly
+// periodic sine grating (Unity's Light Shaft/Volumetric 2D packages
+// all layer noise on top of a pure radial gradient for this reason).
+float hash1(float n) {
+    return fract(sin(n) * 43758.5453123);
+}
+
+// God Rays realism pass #2 — reworked from scratch to match the
+// attached Unity "2D Lights & Shadows" reference: soft, hazy, layered
+// volumetric shafts breaking through foliage, NOT a hard-edged cone
+// with a barcode of evenly-spaced lines. Three deliberate departures
+// from the previous version:
+//   1. NO hard cone boundary at all. Real light shafts have no visible
+//      edge line — they just gradually dim toward the sides. The cross-
+//      beam profile is a smooth bell curve (soft Gaussian-ish falloff)
+//      instead of a flat-top mask with a thin feathered edge.
+//   2. Far fewer, WIDE, irregular-brightness bands (hashed per-band,
+//      not a continuous sine grating) so it reads as a handful of
+//      distinct hazy shafts of different strength, exactly like the
+//      reference images — never a mechanically even barcode.
+//   3. A gentle low-frequency drift + a much softer/hazier longitudinal
+//      falloff (bright and fairly even along most of the shaft, then a
+//      slow fade) instead of a bright hot core with a steep tail — the
+//      reference shafts stay visible and soft for most of their length.
+float godRaysBrightness(vec2 toPixel, float dist, float radius, float rotation, float halfCone) {
+    float distT = clamp(dist / max(radius, 0.0001), 0.0, 1.0);
+
+    float angleToPixel = atan(toPixel.y, toPixel.x);
+    float rel = angleToPixel - rotation;
+    rel = mod(rel + PI, 2.0 * PI) - PI;
+    float coneT = rel / max(halfCone, 0.0001); // unclamped: lets the bell curve tail off naturally
+
+    // Soft, edgeless cross-beam profile — brightest along the light's
+    // aim direction, smoothly (not linearly) dimming toward the sides
+    // with no visible boundary line, matching the hazy, undefined edges
+    // of the reference shafts.
+    float coneMask = exp(-coneT * coneT * 1.15);
+    if (coneMask <= 0.0025) return 0.0;
+
+    // Longitudinal haze: stays fairly bright and even for most of the
+    // shaft's length, then softly washes out — no sharp "hot core then
+    // steep falloff" knee.
+    float longFade = dist > radius ? 0.0 : exp(-distT * distT * 1.15) * mix(1.0, 0.55, distT);
+
+    // A handful (not dozens) of irregular, hashed-brightness bands
+    // spanning the beam's width, blended smoothly into their neighbors
+    // so edges between bands are soft, never a crisp stripe.
+    const float BAND_COUNT = 5.0;
+    float bandF = (coneT * 0.5 + 0.5) * BAND_COUNT + dist * 0.0022 + uTime * 0.035;
+    float bandIdx = floor(bandF);
+    float bandLocal = smoothstep(0.0, 1.0, fract(bandF));
+    float bandA = hash1(bandIdx);
+    float bandB = hash1(bandIdx + 1.0);
+    float bandBrightness = mix(bandA, bandB, bandLocal);
+    // Keep every band visibly hazy — never lets the gaps between rays
+    // go fully dark, matching how the reference shafts overlap into a
+    // continuous glow rather than showing black gaps.
+    bandBrightness = mix(0.6, 1.0, bandBrightness);
+
+    // A finer, slower haze/dust shimmer riding on top of the bands —
+    // wide, soft sine lobes (not a tight barcode) so close-up the shaft
+    // still reads as drifting haze rather than flat bands.
+    float fineF = (coneT * 0.5 + 0.5) * 11.0 + dist * 0.006 - uTime * 0.08;
+    float fine = mix(0.82, 1.0, 0.5 + 0.5 * sin(fineF));
+
+    float brightness = coneMask * longFade * bandBrightness * fine;
+
+    // Gentle glow right at the light source so its origin doesn't look
+    // clipped/flat, softened into the rest of the shaft rather than a
+    // hard bright dot.
+    brightness = max(brightness, coneMask * exp(-distT * distT * 22.0) * 0.7);
+
+    return brightness;
 }
 
 float quadShadowTest(vec2 pixelWorld, vec2 lightPos, vec2 occCenter, vec2 halfExt, float rot, float opacity, float lengthMult, float softness, float reachOverride, float extraFadeOut) {
@@ -141,25 +231,28 @@ float quadShadowTest(vec2 pixelWorld, vec2 lightPos, vec2 occCenter, vec2 halfEx
     if (distToOcc < 0.0001) return 0.0;
     vec2 dir = toOcc / distToOcc;
 
-    vec2 local = toLocal(pixelWorld, occCenter, rot);
-    float sdf = boxSDF(local, halfExt);
-    if (sdf <= 0.0) {
-        return opacity;
-    }
-
     vec2 toPixel = pixelWorld - lightPos;
     float alongAxis = dot(toPixel, dir);
     float apparentHalf = max(halfExt.x, halfExt.y);
-    float nearDist = distToOcc - apparentHalf;
+    // Shadows start at the occluder's FAR edge (relative to the
+    // light), never inside its own silhouette. An object must never
+    // darken ITSELF — only the surfaces behind it — matching Unity's
+    // Shadow Caster 2D, where a sprite never self-shadows from its
+    // own light. (Previously this tested "is the shaded pixel
+    // literally inside this occluder's own box" and returned full
+    // shadow if so, plus started the shadow band at the occluder's
+    // NEAR edge — both of which made an object cast its own shadow
+    // onto its own body.)
+    float farDist = distToOcc + apparentHalf;
     float reach = reachOverride * lengthMult;
-    if (alongAxis < nearDist || alongAxis > nearDist + reach) return 0.0;
+    if (alongAxis < farDist || alongAxis > farDist + reach) return 0.0;
 
     vec2 perpAxis = vec2(-dir.y, dir.x);
     float perpDist = abs(dot(toPixel, perpAxis));
     if (perpDist > apparentHalf + softness) return 0.0;
 
     float edgeFade = softness > 0.0 ? 1.0 - smoothstep(apparentHalf, apparentHalf + softness, perpDist) : step(perpDist, apparentHalf);
-    float lenFade = 1.0 - smoothstep(nearDist + reach * 0.85, nearDist + reach, alongAxis);
+    float lenFade = 1.0 - smoothstep(farDist + reach * 0.85, farDist + reach, alongAxis);
     return opacity * edgeFade * lenFade * extraFadeOut;
 }
 
@@ -169,11 +262,21 @@ float raymarchShadowTest(vec2 pixelWorld, vec2 lightPos, float maxDist) {
     if (dist < 0.0001 || dist > maxDist) return 0.0;
     vec2 dir = toLight / dist;
 
+    // Bias the marched ray's START away from the shaded pixel itself
+    // (a standard shadow-acne-style bias) so an occluder can never
+    // register itself as blocking its own surface — a shadow should
+    // only ever land on OTHER surfaces behind an occluder, never on
+    // the occluder's own body, matching Unity's Shadow Caster 2D.
+    // Without this, a raymarch step at t≈0 that happens to already be
+    // inside the very occluder the shaded pixel belongs to reads as
+    // "occluded," self-shadowing the object for its entire silhouette.
+    float tStart = min(dist, max(2.0, dist * 0.08));
+
     float occlusion = 0.0;
     float softAccum = 0.0;
     for (int i = 1; i <= ${MAX_RAYMARCH_STEPS}; i++) {
         if (i > uRaymarchSteps) break;
-        float t = (float(i) / float(uRaymarchSteps)) * dist;
+        float t = tStart + (float(i) / float(uRaymarchSteps)) * max(0.0, dist - tStart);
         vec2 sample = pixelWorld + dir * t;
 
         for (int o = 0; o < ${MAX_OCCLUDERS}; o++) {
@@ -235,10 +338,16 @@ void main(void) {
                 float rel = angleToPixel - uLightRotation[i];
                 rel = mod(rel + PI, 2.0 * PI) - PI;
                 float halfCone = uLightAngle[i] * 0.5;
+                // Feathers INWARD from the cone's own edge so the lit
+                // area never extends past halfCone — matching the
+                // gizmo's cone outline exactly instead of visibly
+                // "shining outside" it.
                 float coneFadeBand = max(0.03, halfCone * 0.25);
-                float coneMask = 1.0 - smoothstep(halfCone, halfCone + coneFadeBand, abs(rel));
+                float coneMask = 1.0 - smoothstep(halfCone - coneFadeBand, halfCone, abs(rel));
 
                 brightness = radial * coneMask;
+            } else if (typeId == 4) {
+                brightness = godRaysBrightness(toPixel, dist, uLightRadius[i], uLightRotation[i], uLightAngle[i] * 0.5);
             } else {
                 vec2 local = toLocal(pixelWorld, lightPos, 0.0);
                 vec2 halfSize = vec2(uLightWidth[i], uLightHeight[i]) * 0.5;
@@ -302,6 +411,7 @@ export function buildLightTextureFilter() {
     uAmbientDarkness: 0.65,
     uShadowMode: 0,
     uRaymarchSteps: 24,
+    uTime: 0,
     uStageOffset: new Float32Array([0, 0]),
     uStageScale: 1,
 

@@ -23,6 +23,7 @@ const LIGHT_MENU_ITEMS = [
   { type: LightType.POINT, label: "Point Light" },
   { type: LightType.SPOT, label: "Spot Light" },
   { type: LightType.AREA, label: "Area Light" },
+  { type: LightType.GOD_RAYS, label: "God Rays" },
 ];
 
 export function renderToolbar() {

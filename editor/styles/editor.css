@@ -45,7 +45,20 @@
 svg.icon{display:inline-block;vertical-align:middle;flex-shrink:0;}
 
 #app{display:flex;flex-direction:column;height:100vh;width:100vw;overflow:hidden;}
-.unity-window{flex:1;display:flex;flex-direction:column;border:1px solid #111;outline:1px solid #333;outline-offset:-1px;}
+/* min-height:0 is required here for the exact same reason
+   .col-hierarchy/.col-inspector need min-width:0 below: without it, a
+   flex item's automatic minimum size is its CONTENT's natural size,
+   not the size flex layout would otherwise give it. .unity-window is
+   the TOP of the vertical flex chain (#app -> unity-window ->
+   main-layout -> col-center -> col-bottom-wrap) — if a deeply nested
+   Inspector section ever wants more height than the viewport has,
+   that content-minimum bubbles all the way up through any link in
+   this chain missing min-height:0, inflating .unity-window past
+   100vh. Because .col-bottom-wrap is a fixed-height sibling further
+   down that same chain, it was the visible casualty: the inflated
+   layout pushed/clipped it down to nothing instead of the Inspector
+   simply scrolling internally. */
+.unity-window{flex:1;display:flex;flex-direction:column;min-height:0;border:1px solid #111;outline:1px solid #333;outline-offset:-1px;}
 
 /* ––––– Toolbar ––––– */
 .toolbar-wrap{display:flex;flex-direction:column;flex-shrink:0;background:#1e1e1e;border-bottom:1px solid #1a1a1a;}
@@ -85,12 +98,27 @@ svg.icon{display:inline-block;vertical-align:middle;flex-shrink:0;}
 .tab-extra .err{color:#ff6b6b;display:flex;align-items:center;gap:2px;}
 
 /* ––––– Layout ––––– */
-.main-layout{display:flex;flex:1;overflow:hidden;background:#1c1c1c;}
-.col-hierarchy{width:250px;height:100%;min-height:0;display:flex;flex-direction:column;border-right:1px solid #1a1a1a;overflow:hidden;}
-.col-center{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;}
-.col-viewport-wrap{flex:1;display:flex;flex-direction:column;min-height:0;}
-.col-bottom-wrap{height:250px;flex-shrink:0;border-top:1px solid #1a1a1a;overflow:hidden;}
-.col-inspector{width:300px;height:100%;min-height:0;display:flex;flex-direction:column;border-left:1px solid #1a1a1a;overflow:hidden;}
+.main-layout{display:flex;flex:1;overflow:hidden;background:#1c1c1c;min-width:0;min-height:0;}
+/* col-hierarchy and col-inspector are fixed-width side columns. Both
+   need flex-shrink:0 (never get squeezed by the flexible center
+   column) AND min-width:0 (never grow past their own width, which is
+   the flexbox default for anything with un-wrappable content — e.g.
+   a long asset/sprite name or many stacked Inspector components).
+   Without min-width:0, a flex item's "automatic minimum size" is its
+   CONTENT's natural width, not its specified width — so once enough
+   components/rows pushed the Inspector's natural content width past
+   300px, the browser silently widened .col-inspector beyond 300px to
+   fit it, stealing width from .col-center and squeezing the Console/
+   Project tabs (in .col-bottom-wrap, a child of .col-center) down to
+   nothing/off-screen. Pinning both flex-shrink and min-width fixes
+   that structurally: these columns can now only ever be exactly their
+   specified width, no matter how much content is inside — any excess
+   content scrolls/clips internally instead of pushing the layout. */
+.col-hierarchy{width:250px;flex:0 0 250px;min-width:0;max-width:250px;height:100%;min-height:0;display:flex;flex-direction:column;border-right:1px solid #1a1a1a;overflow:hidden;}
+.col-center{flex:1 1 0;display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;}
+.col-viewport-wrap{flex:1;display:flex;flex-direction:column;min-height:0;min-width:0;}
+.col-bottom-wrap{height:250px;flex-shrink:0;border-top:1px solid #1a1a1a;overflow:hidden;min-width:0;}
+.col-inspector{width:300px;flex:0 0 300px;min-width:0;max-width:300px;height:100%;min-height:0;display:flex;flex-direction:column;border-left:1px solid #1a1a1a;overflow:hidden;}
 
 /* ––––– Hierarchy ––––– */
 .hierarchy-panel{width:100%;height:100%;display:flex;flex-direction:column;background:#383838;}
@@ -120,11 +148,11 @@ svg.icon{display:inline-block;vertical-align:middle;flex-shrink:0;}
 .viewport-canvas canvas{display:block;width:100%;height:100%;}
 
 /* ––––– Inspector ––––– */
-.inspector-panel{width:100%;background:#383838;display:flex;flex-direction:column;overflow:hidden;height:100%;}
+.inspector-panel{width:100%;background:#383838;display:flex;flex-direction:column;overflow:hidden;height:100%;min-height:0;}
 .inspector-tabbar{display:flex;align-items:center;background:#282828;border-bottom:1px solid #1a1a1a;justify-content:space-between;padding-right:4px;flex-shrink:0;}
 .inspector-tabbar button.more{padding:4px;color:#aaa;}
 .inspector-tabbar button.more:hover{color:#eee;}
-.inspector-body{flex:1;overflow-y:auto;}
+.inspector-body{flex:1;overflow-y:auto;overflow-x:hidden;min-width:0;min-height:0;}
 .inspector-empty{flex:1;display:flex;align-items:center;justify-content:center;color:#888;font-size:11px;padding:16px;text-align:center;}
 
 .obj-header{padding:8px;border-bottom:1px solid #202020;background:#383838;display:flex;flex-direction:column;gap:8px;}
@@ -151,9 +179,9 @@ svg.icon{display:inline-block;vertical-align:middle;flex-shrink:0;}
 .section-title-row span{font-size:11px;color:#eee;font-weight:bold;}
 .section-settings{padding:0 8px;color:#aaa;}
 .section-settings:hover{color:#eee;}
-.section-body{padding:8px 12px;display:flex;flex-direction:column;gap:4px;background:#383838;}
+.section-body{padding:8px 12px;display:flex;flex-direction:column;gap:4px;background:#383838;min-width:0;}
 
-.row{display:flex;align-items:flex-start;gap:4px;width:100%;}
+.row{display:flex;align-items:flex-start;gap:4px;width:100%;min-width:0;}
 .row-label{font-size:11px;color:#ccc;width:35%;flex-shrink:0;padding-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;-webkit-user-select:none;user-select:none;}
 .row-content{flex:1;min-width:0;}
 
@@ -169,8 +197,8 @@ svg.icon{display:inline-block;vertical-align:middle;flex-shrink:0;}
 .dropdown-input select:hover{border-color:#444;}
 .dropdown-input .chev{position:absolute;right:4px;top:50%;transform:translateY(-50%);color:#888;pointer-events:none;}
 
-.sprite-row{display:flex;align-items:center;gap:4px;width:100%;}
-.sprite-box{flex:1;background:#2a2a2a;border:1px solid #202020;border-radius:2px;padding:1px 4px;font-size:11px;color:#ccc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sprite-row{display:flex;align-items:center;gap:4px;width:100%;min-width:0;}
+.sprite-box{flex:1;min-width:0;background:#2a2a2a;border:1px solid #202020;border-radius:2px;padding:1px 4px;font-size:11px;color:#ccc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .sprite-pick{width:18px;height:18px;background:#333;border:1px solid #202020;border-radius:2px;display:flex;align-items:center;justify-content:center;}
 .sprite-pick:hover{background:#444;}
 .sprite-pick span{width:6px;height:6px;border-radius:50%;background:#ccc;}

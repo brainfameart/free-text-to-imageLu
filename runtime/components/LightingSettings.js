@@ -33,6 +33,17 @@
  *                      dial — most atmospheric/horror-style scenes
  *                      want this high (0.7-0.9); brighter, cartoonish
  *                      scenes want it low (0.2-0.4).
+ *  - glowStrength:     How visible a light's OWN glow is in open air —
+ *                      i.e. how brightly a light shows up over empty
+ *                      background with nothing standing in it, not
+ *                      just where it happens to land on a sprite (see
+ *                      systems/LightGlowFilter.js). 0 = a light is
+ *                      only ever visible through what it lights up
+ *                      (the old behavior); 1 = a normal visible glow,
+ *                      matching Unity's 2D lights actually being
+ *                      visible light sources, not invisible tint
+ *                      generators. Higher values push the glow
+ *                      brighter/further for a more "hot" look.
  *
  * RUNTIME-ONLY FILE. Pure data, no PIXI.
  */
@@ -42,7 +53,12 @@ import { ShadowMode } from "../systems/LightingQuality.js";
 export const LIGHTING_SETTINGS = "LightingSettings";
 
 export class LightingSettings {
-  constructor({ shadowMode = ShadowMode.QUAD, raymarchSteps = 24, ambientDarkness = 0.65 } = {}) {
+  constructor({
+    shadowMode = ShadowMode.QUAD,
+    raymarchSteps = 24,
+    ambientDarkness = 0.65,
+    glowStrength = 1,
+  } = {}) {
     /** @type {string} one of ShadowMode ("quad" | "raymarch") */
     this.shadowMode = shadowMode;
 
@@ -51,5 +67,8 @@ export class LightingSettings {
 
     /** @type {number} 0-1, how dark unlit areas get */
     this.ambientDarkness = ambientDarkness;
+
+    /** @type {number} 0+, how visibly a light glows in open air */
+    this.glowStrength = glowStrength;
   }
 }

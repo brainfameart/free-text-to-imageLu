@@ -158,6 +158,34 @@ function createViewport(mount, render) {
   });
   viewportCamera.attach(mount);
 
+  // Keep lighting (and the light gizmo's screen-constant bulb icon)
+  // synced on EVERY rendered frame, not just whenever the DOM-driven
+  // render() cycle happens to run. Sprites/gizmos are real children of
+  // pixiApp.stage, so PIXI's own ticker already re-transforms them
+  // instantly on every frame during a live pan/zoom gesture (wheel
+  // events never call render()). LightingSystem.update() previously
+  // only ran from inside render()'s syncSpriteRender() call, so its
+  // uStageOffset/uStageScale uniforms stayed frozen on whatever value
+  // was current the last time some UNRELATED editor event fired a
+  // render() — during an active zoom-out/in gesture this showed up as
+  // the rendered light glow visibly lagging behind/detaching from its
+  // own gizmo until the gesture ended and some other event finally
+  // re-synced it. Ticking it here guarantees the light texture is
+  // recomputed with THIS frame's real stage transform every single
+  // frame, so it can never drift out of alignment with its gizmo.
+  pixiApp.ticker.add(() => {
+    if (lightingSystem && editorState.world) {
+      try {
+        lightingSystem.update(editorState.world, 0);
+      } catch (err) {
+        pushLog("error", "Lighting sync failed: " + (err && err.message ? err.message : err));
+      }
+    }
+    if (lightGizmoContainer) {
+      drawLightGizmo(lightGizmoContainer, editorState.world, editorState.selectedId, _worldPerPixel());
+    }
+  });
+
   // center the world container like the original mockup did
   pixiApp.stage.x = w / 2;
   pixiApp.stage.y = h / 2;

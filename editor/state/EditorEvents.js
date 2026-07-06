@@ -37,6 +37,7 @@ const LIGHT_ENTITY_NAMES = {
   [LightType.POINT]: "Point Light",
   [LightType.SPOT]: "Spot Light",
   [LightType.AREA]: "Area Light",
+  [LightType.GOD_RAYS]: "God Rays",
 };
 
 /**

@@ -71,6 +71,7 @@ import { LIGHTING_SETTINGS } from "../components/LightingSettings.js";
 import { LightingQuality, ShadowMode } from "./LightingQuality.js";
 import { buildLightTextureFilter, MAX_LIGHTS, MAX_OCCLUDERS, MAX_RAYMARCH_STEPS } from "./LightTextureShaderSource.js";
 import { buildSpriteLightFilter } from "./SpriteLightFilter.js";
+import { buildLightGlowFilter } from "./LightGlowFilter.js";
 
 // Fallback ambient darkness (see components/LightingSettings.js), used
 // only when a scene has no LightingSettings component.
@@ -89,7 +90,12 @@ const LIGHT_TYPE_ID = Object.freeze({
   [LightType.POINT]: 1,
   [LightType.SPOT]: 2,
   [LightType.AREA]: 3,
+  [LightType.GOD_RAYS]: 4,
 });
+
+// Fallback glow strength (see components/LightingSettings.js), used
+// only when a scene has no LightingSettings component.
+const GLOW_STRENGTH = 1;
 
 export class LightingSystem extends System {
   /**
@@ -118,6 +124,13 @@ export class LightingSystem extends System {
 
     this._filterBroken = false;
 
+    // Free-running clock (seconds since this LightingSystem was
+    // created), used ONLY to drive God Rays' animated streak drift
+    // (see uTime in LightTextureShaderSource.js). Uses performance.now()
+    // rather than an accumulated dt sum so it stays correct even across
+    // any paused/resumed editor frames.
+    this._startTimeMs = (typeof performance !== "undefined" ? performance.now() : Date.now());
+
     // PHASE 1 state: an offscreen container (never attached to the
     // real stage) holding one full-screen quad with the light-texture
     // filter applied, plus the RenderTexture it gets rendered into
@@ -132,8 +145,31 @@ export class LightingSystem extends System {
     // tracked-sprite set every frame (see _syncSpriteFilters).
     this._spriteFilters = new Map();
 
+    // PHASE 3 state: a single full-screen ADDITIVE sprite (see
+    // LightGlowFilter.js) that makes every light type visibly glow
+    // over the whole screen — background included — not just where
+    // it happens to land on a sprite. Built alongside Phase 1's
+    // resources since it also needs pixiApp.renderer.screen.
+    this._glowFilter = this._buildLightGlowFilterSafely();
+    this._glowSprite = null;
+
     if (this._lightTextureFilter && this.pixiApp && this.pixiApp.renderer) {
       this._setupLightTextureResources();
+    }
+  }
+
+  /**
+   * Wraps buildLightGlowFilter() the same defensive way as the light-
+   * texture filter — a Phase 3 shader failure should never take down
+   * Phase 1/2 lighting, it should just leave lights invisible over
+   * empty background (falling back to the pre-glow behavior).
+   */
+  _buildLightGlowFilterSafely() {
+    try {
+      return buildLightGlowFilter();
+    } catch (err) {
+      console.error("[Lighting] Failed to compile light-glow shader — lights won't glow over empty background this session:", err);
+      return null;
     }
   }
 
@@ -184,6 +220,38 @@ export class LightingSystem extends System {
     // Deliberately NEVER added to pixiApp.stage — rendered manually
     // into _lightRenderTexture via renderer.render() each frame
     // instead, so it's never part of the normal visible draw pass.
+
+    if (this._glowFilter) {
+      // This sprite IS added to the real visible stage — it's Phase
+      // 3's actual on-screen output. It must be a SIBLING of
+      // worldContainer (== gameContentContainer), not a CHILD of it:
+      // worldContainer is panned/scaled (editor pan-zoom / camera
+      // follow), but the light texture it samples is screen-space
+      // (same convention as _lightQuad above), so this sprite needs
+      // to cover the raw screen untransformed. Inserted immediately
+      // after worldContainer in the stage's child order — in every
+      // host (editor, player, play-mode popup) worldContainer is
+      // added to pixiApp.stage BEFORE any other sibling exists yet
+      // (see runtime/index.js), so this lands right above game
+      // content and below any editor-only chrome added afterwards
+      // (grid/gizmo containers — see SceneViewport.js), never
+      // touching that chrome.
+      this._glowSprite = new PIXI.Sprite(PIXI.Texture.WHITE);
+      this._glowSprite.blendMode = PIXI.BLEND_MODES.ADD;
+      this._glowSprite.filters = [this._glowFilter];
+      this._glowSprite.width = screen.width;
+      this._glowSprite.height = screen.height;
+      this._glowSprite.visible = false;
+      if (this.worldContainer.parent) {
+        const idx = this.worldContainer.parent.getChildIndex(this.worldContainer);
+        this.worldContainer.parent.addChildAt(this._glowSprite, idx + 1);
+      } else {
+        // Extremely defensive fallback — shouldn't happen given the
+        // construction order documented above, but avoids a hard
+        // crash if it ever does.
+        this.pixiApp.stage.addChild(this._glowSprite);
+      }
+    }
   }
 
   update(world) {
@@ -229,16 +297,25 @@ export class LightingSystem extends System {
     }
 
     try {
-      this._fillLightUniforms(lightEntities, occluders);
-      this._fillOccluderUniforms(occluders);
-
       const filter = this._lightTextureFilter;
+      // Computed BEFORE filling shadow uniforms (not after, like the old
+      // ordering) specifically so _fillOccluderUniforms/_fillLightUniforms
+      // can use THIS frame's stage scale, not last frame's, to keep
+      // shadow softness/reach a constant on-screen size (see their doc
+      // comments) — a one-frame-stale scale would visibly "swim" for a
+      // moment on every zoom step.
+      const stageScale = this._syncStageTransform(filter);
+
+      this._fillLightUniforms(lightEntities, occluders, stageScale);
+      this._fillOccluderUniforms(occluders, stageScale);
+
       filter.uniforms.uLightCount = Math.min(MAX_LIGHTS, lightEntities.length);
       filter.uniforms.uOccluderCount = Math.min(MAX_OCCLUDERS, occluders.length);
       filter.uniforms.uShadowMode = settings.shadowMode === ShadowMode.RAYMARCH ? 1 : 0;
       filter.uniforms.uRaymarchSteps = Math.min(MAX_RAYMARCH_STEPS, Math.max(1, settings.raymarchSteps));
       filter.uniforms.uAmbientDarkness = Math.min(1, Math.max(0, settings.ambientDarkness));
-      this._syncStageTransform(filter);
+      const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+      filter.uniforms.uTime = (nowMs - this._startTimeMs) / 1000;
 
       // PHASE 1: render the light texture, once, this frame.
       this._renderLightTexture();
@@ -246,11 +323,46 @@ export class LightingSystem extends System {
       // PHASE 2: make sure every live sprite has an up-to-date
       // SpriteLightFilter pointed at this frame's light texture.
       this._syncSpriteFilters();
+
+      // PHASE 3: refresh the glow overlay so every light type is
+      // visibly a light source, even over empty background.
+      this._updateGlowOverlay(settings);
     } catch (err) {
       this._filterBroken = true;
       this._teardownAllSpriteFilters();
       console.error("[Lighting] Error while updating lighting — lighting disabled for this session:", err);
     }
+  }
+
+  /**
+   * PHASE 3 driver: keeps the glow overlay sprite sized to the screen
+   * and its filter uniforms in sync with this frame's light texture +
+   * scene settings, then makes it visible. Mirrors _renderLightTexture
+   * / _syncSpriteFilters in spirit but has nothing to render offscreen
+   * — it just samples the texture those two already produced.
+   */
+  _updateGlowOverlay(settings) {
+    if (!this._glowSprite || !this._glowFilter) return;
+
+    const screen = this.pixiApp.renderer.screen;
+    const w = Math.max(1, Math.round(screen.width));
+    const h = Math.max(1, Math.round(screen.height));
+    if (this._glowSprite.width !== w) this._glowSprite.width = w;
+    if (this._glowSprite.height !== h) this._glowSprite.height = h;
+
+    const f = this._glowFilter;
+    f.uniforms.uLightTexture = this._lightRenderTexture;
+    f.uniforms.uLightTexSize[0] = w;
+    f.uniforms.uLightTexSize[1] = h;
+    // See the matching note in _syncSpriteFilters() — Phase 1 and this
+    // glow filter both address "position" via PIXI's own FilterSystem
+    // outputFrame convention, which stays orientation-consistent across
+    // render targets, so no manual flip is needed here either.
+    f.uniforms.uLightTexFlipY = 0.0;
+    f.uniforms.uAmbientFloor = 1 - Math.min(1, Math.max(0, settings.ambientDarkness));
+    f.uniforms.uGlowStrength = Math.max(0, settings.glowStrength);
+
+    this._glowSprite.visible = true;
   }
 
   /**
@@ -292,11 +404,24 @@ export class LightingSystem extends System {
 
     const seen = new Set();
     const screen = this.pixiApp.renderer.screen;
-    // PIXI's default WebGL render-to-texture convention is Y-flipped
-    // relative to render-to-screen — this single flag (rather than
-    // duplicating the whole shader) lets SpriteLightFilter correct for
-    // it without needing to know WHY, just whether to.
-    const flipY = 1.0;
+    // NOTE: both Phase 1 (LightTextureShaderSource.js) and this filter
+    // compute their screen-space "position" the SAME way, straight from
+    // PIXI's own outputFrame/aVertexPosition — the FilterSystem keeps
+    // that convention orientation-consistent regardless of whether the
+    // immediate render target is the screen or a RenderTexture (that's
+    // the whole point of the outputFrame abstraction: filters can be
+    // chained across passes/targets and still agree on "where am I").
+    // The generic "raw RenderTexture reads need a manual Y flip" quirk
+    // only applies when UNFILTERED display objects are rendered
+    // straight into a RenderTexture (bypassing the FilterSystem) —
+    // Phase 1 draws through a FILTERED quad, so that quirk doesn't
+    // apply here. A flip was previously hardcoded to 1.0 assuming it
+    // did apply, which mirrored the light buffer vertically relative to
+    // the (correctly-drawn, flip-free) gizmos — that was the actual
+    // cause of "light Y-position inverted vs its gizmo." Left as a
+    // uniform (not deleted) in case a future platform/PIXI version ever
+    // needs it again.
+    const flipY = 0.0;
 
     for (const [entityId, sprite] of this.renderSystem.getTrackedSprites()) {
       seen.add(entityId);
@@ -347,6 +472,7 @@ export class LightingSystem extends System {
       sprite.filters = remaining.length ? remaining : null;
     }
     this._spriteFilters.clear();
+    if (this._glowSprite) this._glowSprite.visible = false;
   }
 
   /**
@@ -360,6 +486,7 @@ export class LightingSystem extends System {
       shadowMode: settings ? settings.shadowMode : this.quality.shadowMode,
       raymarchSteps: settings ? settings.raymarchSteps : this.quality.raymarchSteps,
       ambientDarkness: settings ? settings.ambientDarkness : AMBIENT_DARKNESS,
+      glowStrength: settings && settings.glowStrength != null ? settings.glowStrength : GLOW_STRENGTH,
     };
   }
 
@@ -386,6 +513,7 @@ export class LightingSystem extends System {
     filter.uniforms.uStageOffset[0] = offsetX;
     filter.uniforms.uStageOffset[1] = offsetY;
     filter.uniforms.uStageScale = scale || 1;
+    return scale || 1;
   }
 
   /**
@@ -394,7 +522,7 @@ export class LightingSystem extends System {
    * files (LightTextureShaderSource.js instead of
    * LightingShaderSource.js).
    */
-  _fillLightUniforms(lightEntities, occluders) {
+  _fillLightUniforms(lightEntities, occluders, stageScale) {
     const u = this._lightTextureFilter.uniforms;
     const count = Math.min(MAX_LIGHTS, lightEntities.length);
 
@@ -422,19 +550,43 @@ export class LightingSystem extends System {
       u.uLightShadowColor[i * 3 + 0] = shadowRgb[0];
       u.uLightShadowColor[i * 3 + 1] = shadowRgb[1];
       u.uLightShadowColor[i * 3 + 2] = shadowRgb[2];
-      u.uLightShadowReach[i] =
+      // Divided by stageScale (see _fillOccluderUniforms for the full
+      // rationale): the shadow BAND's reach is a screen-space visual
+      // property, not a world-authored one, so it must shrink in world
+      // units as the editor zooms in (more screen px per world unit) to
+      // hold a constant on-screen length instead of visibly stretching
+      // out as the artist zooms in on a scene.
+      const worldReach =
         light.type === LightType.DIRECTIONAL ? DIRECTIONAL_SHADOW_BASE_DISTANCE : Math.max(0.0001, light.radius || 0);
+      u.uLightShadowReach[i] = worldReach / Math.max(0.0001, stageScale || 1);
     }
   }
 
   /**
    * Fills Phase 1's per-occluder uniform arrays. Identical semantics
    * to the previous version (LightTextureShaderSource.js consumes
-   * this data now instead of the old LightingShaderSource.js).
+   * this data now instead of the old LightingShaderSource.js), EXCEPT
+   * `softness` is now divided by the current editor/game viewport
+   * scale (stageScale) before upload.
+   *
+   * WHY: every occluder/shadow test in LightTextureShaderSource.js
+   * runs in WORLD space (vWorldCoord), which is scale-INDEPENDENT by
+   * construction — a given world position always has the same
+   * vWorldCoord no matter the current zoom. That's exactly right for
+   * the occluder's own box (halfWidth/halfHeight): it's a real object
+   * in the world and should get visibly bigger/smaller on screen as
+   * you zoom, same as its sprite. But the shadow's soft EDGE blur is a
+   * screen-space visual finish, not a world-authored dimension — left
+   * as a flat world-unit value, it reads as an imperceptibly thin line
+   * zoomed out and a huge blurry smear zoomed in. Dividing by
+   * stageScale keeps that edge a constant number of screen pixels
+   * regardless of viewport zoom, matching the requested Unity-like
+   * "shadow always looks the same crispness" behavior.
    */
-  _fillOccluderUniforms(occluders) {
+  _fillOccluderUniforms(occluders, stageScale) {
     const u = this._lightTextureFilter.uniforms;
     const count = Math.min(MAX_OCCLUDERS, occluders.length);
+    const invScale = 1 / Math.max(0.0001, stageScale || 1);
 
     for (let i = 0; i < count; i++) {
       const occ = occluders[i];
@@ -445,7 +597,7 @@ export class LightingSystem extends System {
       u.uOccRotation[i] = (occ.rotationDeg * Math.PI) / 180;
       u.uOccOpacity[i] = occ.opacity;
       u.uOccLength[i] = occ.length;
-      u.uOccSoftness[i] = occ.softness;
+      u.uOccSoftness[i] = occ.softness * invScale;
     }
   }
 
@@ -518,5 +670,10 @@ export class LightingSystem extends System {
     if (this._lightTextureFilter) this._lightTextureFilter.destroy();
     if (this._lightRenderTexture) this._lightRenderTexture.destroy(true);
     if (this._lightSourceContainer) this._lightSourceContainer.destroy({ children: true });
+    if (this._glowFilter) this._glowFilter.destroy();
+    if (this._glowSprite) {
+      if (this._glowSprite.parent) this._glowSprite.parent.removeChild(this._glowSprite);
+      this._glowSprite.destroy();
+    }
   }
 }

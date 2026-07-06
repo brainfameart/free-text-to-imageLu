@@ -23,11 +23,26 @@
  *  - Area        : uniform light emitted from a rectangular region
  *    (`width` x `height`) centered on the entity's Transform position,
  *    with a soft `radius`-sized falloff at the rectangle's edge.
+ *  - GodRays     : a 5th type beyond Unity's stock 4 — bright,
+ *    streaked shafts of light radiating within a cone (`angle` degrees
+ *    wide, aimed along `rotation`, reaching out to `radius`), like
+ *    sunlight breaking through clouds or a window. Uses the same
+ *    fields as Spot (radius/angle/rotation) but the Phase 1 shader
+ *    modulates its brightness with a streak pattern instead of a flat
+ *    cone (see LightTextureShaderSource.js's typeId==4 branch).
  *
  * All types share color/intensity so the Inspector and the Phase 1
  * light-texture shader can treat them uniformly where the math allows,
  * while type-specific fields (radius/angle/width/height) only apply to
  * the relevant type.
+ *
+ * Every light type is also visibly a LIGHT SOURCE, not just an
+ * invisible tint generator: on top of dimming/brightening sprites
+ * (Phase 2, SpriteLightFilter.js), each light's own glow is drawn
+ * additively over the whole screen — background included — by Phase 3
+ * (see systems/LightGlowFilter.js and LightingSystem.js's
+ * _glowSprite), matching Unity's 2D lights actually being visible
+ * where they shine, not just where they happen to land on something.
  *
  * This component is PLAIN DATA ONLY (see RULES.txt #4) — actually
  * darkening/lighting the world and sprites is LightingSystem's job
@@ -44,6 +59,7 @@ export const LightType = Object.freeze({
   POINT: "Point",
   SPOT: "Spot",
   AREA: "Area",
+  GOD_RAYS: "GodRays",
 });
 
 export class Light {
@@ -75,8 +91,8 @@ export class Light {
     // on (scaled further per-caster by ShadowCaster.length).
     this.radius = radius;
 
-    // Spot only: full cone width in degrees, centered on the entity's
-    // Transform.rotation (0 = pointing along +X).
+    // Spot / GodRays only: full cone width in degrees, centered on the
+    // entity's Transform.rotation (0 = pointing along +X).
     this.angle = angle;
 
     // Area only: size in world units / px of the flat-lit rectangle

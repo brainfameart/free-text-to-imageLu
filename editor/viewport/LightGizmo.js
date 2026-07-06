@@ -87,6 +87,8 @@ function _labelFor(light) {
       return "Spot Light  r=" + Math.round(light.radius) + " " + Math.round(light.angle || 45) + "\u00b0";
     case LightType.AREA:
       return "Area Light  " + Math.round(light.width) + "x" + Math.round(light.height);
+    case LightType.GOD_RAYS:
+      return "God Rays  r=" + Math.round(light.radius) + " " + Math.round(light.angle || 45) + "\u00b0";
     case LightType.POINT:
     default:
       return "Point Light  r=" + Math.round(light.radius);
@@ -125,6 +127,27 @@ function _drawRangeIndicator(g, transform, light, alpha, lineWidth) {
       const w = light.width || 200;
       const h = light.height || 200;
       g.drawRect(transform.x - w / 2, transform.y - h / 2, w, h);
+      break;
+    }
+    case LightType.GOD_RAYS: {
+      // Same cone outline as Spot, plus a few inner streak lines so a
+      // God Rays light reads as "shafts of light" rather than a plain
+      // spotlight at a glance, before the fill is even visible.
+      const rot = (transform.rotation * Math.PI) / 180;
+      const halfAngle = ((light.angle || 45) * Math.PI) / 360;
+      const steps = 24;
+      g.moveTo(transform.x, transform.y);
+      for (let i = 0; i <= steps; i++) {
+        const a = rot - halfAngle + (i / steps) * (halfAngle * 2);
+        g.lineTo(transform.x + Math.cos(a) * light.radius, transform.y + Math.sin(a) * light.radius);
+      }
+      g.lineTo(transform.x, transform.y);
+      const rayCount = 5;
+      for (let i = 1; i < rayCount; i++) {
+        const a = rot - halfAngle + (i / rayCount) * (halfAngle * 2);
+        g.moveTo(transform.x, transform.y);
+        g.lineTo(transform.x + Math.cos(a) * light.radius, transform.y + Math.sin(a) * light.radius);
+      }
       break;
     }
     case LightType.DIRECTIONAL:

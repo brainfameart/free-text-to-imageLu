@@ -181,6 +181,17 @@ export function renderInspector() {
             numInput("H", light.height, "Light.height") +
             "</div>"
         ) + row("Falloff Radius", numInput("", light.radius, "Light.radius"));
+    } else if (light.type === LightType.GOD_RAYS) {
+      typeSpecificHtml =
+        row("Radius", numInput("", light.radius, "Light.radius")) +
+        row("Beam Angle", numInput("", light.angle, "Light.angle")) +
+        row(
+          "Direction",
+          '<div class="static-body-note" style="padding:2px 0;color:#8a93a0;font-size:10px;">Aimed using this object\'s Transform &gt; Rotation.</div>'
+        ) +
+        '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
+        "God Rays cast bright, streaked shafts of light through the beam — like sunlight breaking through clouds or a window — instead of a flat cone." +
+        "</div>";
     } else {
       // Directional: no position/radius dependency for its GLOW — it
       // uniformly lights the whole scene — but its rotation still
@@ -313,6 +324,10 @@ export function renderInspector() {
         row("Ambient Darkness", numInput("", lightingSettings.ambientDarkness, "LightingSettings.ambientDarkness")) +
         '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
         "How dark areas with no light get, from 0 (no darkening, full brightness everywhere) to 1 (pitch black outside any light's reach). This is the biggest single dial for how moody/realistic the scene's lighting feels." +
+        "</div>" +
+        row("Glow Strength", numInput("", lightingSettings.glowStrength, "LightingSettings.glowStrength")) +
+        '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
+        "How visibly lights glow in open air — over empty background, not just where they land on a sprite. 0 = lights are only visible through what they light up; 1 = a normal visible glow; higher = a brighter, hotter-looking light source." +
         "</div>" +
         '<button class="removecomp-btn" data-action="remove-component" data-component="LightingSettings" style="margin-top:6px;">Remove Component</button>'
     );
