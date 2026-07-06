@@ -306,20 +306,24 @@ export class PhysicsWorld {
       // static walls/floors and by other kinematic bodies just like
       // it's stopped by dynamic ones.
       //
-      // IMPORTANT: RAPIER.ActiveCollisionTypes.ALL is NOT actually "all
-      // pairings" despite the name — per Rapier's own docs, the default
-      // only enables collisions between a dynamic body and a body of
-      // ANY type; it enables NO collisions between two non-dynamic
-      // bodies. That means it omits BOTH Kinematic-vs-Fixed AND
-      // Kinematic-vs-Kinematic — a kinematic body would otherwise pass
-      // straight through a static collider, exactly the "kinematic vs
-      // static doesn't collide" bug. Static-vs-Static is correctly
+      // IMPORTANT: RAPIER.ActiveCollisionTypes.ALL (despite the name) is
+      // actually Rapier's DEFAULT set — it only enables collisions
+      // between a dynamic body and a body of ANY type; it enables NO
+      // collisions between two non-dynamic bodies. That means it omits
+      // BOTH Kinematic-vs-Static AND Kinematic-vs-Kinematic — a
+      // kinematic body would otherwise pass straight through a static
+      // collider, exactly the "kinematic vs static doesn't collide"
+      // bug. We OR in KINEMATIC_KINEMATIC and KINEMATIC_STATIC (note:
+      // Rapier names the "wall/floor" flag KINEMATIC_STATIC, NOT
+      // KINEMATIC_FIXED — using the wrong name here silently produces
+      // `undefined`, which ORs into NaN and makes the whole call a
+      // no-op, which was the actual bug). Static-vs-Static is correctly
       // still left out (neither side can move, so it can never produce
-      // a meaningful response either way) by not OR-ing in FIXED_FIXED.
+      // a meaningful response either way) by not OR-ing in STATIC_STATIC.
       .setActiveCollisionTypes(
         RAPIER.ActiveCollisionTypes.ALL |
           RAPIER.ActiveCollisionTypes.KINEMATIC_KINEMATIC |
-          RAPIER.ActiveCollisionTypes.KINEMATIC_FIXED
+          RAPIER.ActiveCollisionTypes.KINEMATIC_STATIC
       );
 
     handle.collider = this.rapierWorld.createCollider(desc, handle.body);
