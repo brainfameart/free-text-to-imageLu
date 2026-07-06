@@ -183,9 +183,21 @@ export class ControllerSystem extends System {
     }
 
     let vy = this._verticalVelocity.get(entityId) || 0;
-    const grounded = Math.abs(vy) < 1 && rigidbody.velocityY >= -1;
+    // Real grounded state from PhysicsWorld's character-controller sweep
+    // (see Rigidbody2D.grounded) — NOT a guess from vy itself. The old
+    // guess compared vy (this same accumulator) against a small
+    // epsilon, but vy keeps accumulating GRAVITY_Y*dt every single
+    // frame regardless of whether the sweep actually let the body fall
+    // — so once resting on the ground, vy grows every frame while the
+    // actual movement stays ~0, the guess never reads "grounded" again,
+    // gravity keeps piling up, and the next sweep has to correct a
+    // bigger and bigger penetration each frame: exactly the standing
+    // jitter/slipping symptom. Using the real grounded flag and
+    // zeroing vy the instant it's true breaks that feedback loop.
+    const grounded = rigidbody.grounded;
 
     if (grounded) {
+      vy = 0;
       const jumpsUsed = this._jumpsUsed.get(entityId) || 0;
       if (jumpsUsed > 0) this._jumpsUsed.set(entityId, 0);
     }

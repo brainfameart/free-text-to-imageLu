@@ -93,6 +93,41 @@ export class PhysicsWorld {
       this._characterController = this.rapierWorld.createCharacterController(
         this._characterControllerOffset
       );
+
+      // Sliding: without this, hitting a wall at an angle just stops
+      // the character dead instead of sliding along it — every other
+      // 2D/3D platformer with a character controller has this on.
+      this._characterController.setSlideEnabled(true);
+
+      // Snap-to-ground: this is what kills the "jitters/slips around"
+      // symptom. Without it, a kinematic body standing still on flat
+      // ground can, frame to frame, land a hair's-width above or below
+      // the surface (float rounding + the controller's own offset gap)
+      // and the sweep result flickers between "grounded, 0 movement"
+      // and "falling, tiny movement" — visually a jitter/vibration.
+      // Snap-to-ground forces it back flush with the floor every frame
+      // instead of leaving it to float in that gap.
+      this._characterController.enableSnapToGround(2); // px
+
+      // Autostep: lets a kinematic mover walk over small ledges/steps
+      // instead of catching on their edge — standard platformer feel,
+      // and also prevents a specific jitter case where a mover's own
+      // collider corner clips a 1-2px seam between adjacent tiles.
+      this._characterController.enableAutostep(
+        10, // px — max step height it can climb automatically
+        4, // px — min free width required above the step to allow it
+        true // also allow autostepping onto dynamic bodies
+      );
+
+      // THE fix for "doesn't move dynamic bodies around": by default a
+      // character controller's obstacles are treated as unmovable — it
+      // computes a corrected movement against them but never pushes
+      // back. This opts back into pushing dynamic bodies it runs into,
+      // using each body's own mass (set per-entity below in
+      // _syncKinematicMovement via setCharacterMass) so heavier things
+      // are harder to shove, matching normal Rapier dynamics.
+      this._characterController.setApplyImpulsesToDynamicBodies(true);
+
       this.ready = true;
     });
   }
@@ -279,6 +314,12 @@ export class PhysicsWorld {
   _syncKinematicMovement(handle, rb, dt) {
     if (!handle.collider) return; // no collider yet (created same frame) — nothing to sweep
 
+    // Use this body's own Rigidbody2D.mass as the character mass for
+    // impulse resolution — without this, setApplyImpulsesToDynamicBodies
+    // still works but assumes mass 0 (no push at all) since a kinematic
+    // body has no intrinsic mass of its own in Rapier's eyes.
+    this._characterController.setCharacterMass(Math.max(0.0001, rb.mass));
+
     const desiredX = rb.velocityX * dt;
     const desiredY = rb.velocityY * dt;
 
@@ -287,6 +328,7 @@ export class PhysicsWorld {
       y: desiredY,
     });
     const corrected = this._characterController.computedMovement();
+    const grounded = this._characterController.computedGrounded();
 
     const current = handle.body.translation();
     handle.body.setNextKinematicTranslation({
@@ -305,6 +347,12 @@ export class PhysicsWorld {
     // sees what really happened this step rather than raw input intent.
     rb.velocityX = dt > 0 ? corrected.x / dt : 0;
     rb.velocityY = dt > 0 ? corrected.y / dt : 0;
+    // Real sweep-based grounded state (see the field's doc in
+    // Rigidbody2D.js) — this is what ControllerSystem should check
+    // instead of guessing from a velocity epsilon, which is what
+    // caused jitter: a guess can flip-flop frame to frame near-zero
+    // velocity even while genuinely resting on the ground.
+    rb.grounded = grounded;
   }
 
   /**

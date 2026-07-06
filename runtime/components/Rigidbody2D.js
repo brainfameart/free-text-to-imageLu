@@ -72,6 +72,14 @@ export class Rigidbody2D {
     // null = no override requested; Rapier's own gravity/solver keeps
     // integrating Y normally.
     driveVelocityY = null,
+
+    // KINEMATIC-only, read-only from the caller's perspective: written
+    // every physics step by PhysicsWorld._syncKinematicMovement from
+    // the character controller's own computedGrounded() result — real
+    // sweep-based ground contact, not a velocity-epsilon guess. Always
+    // false for Dynamic/Static bodies (Dynamic has no character
+    // controller sweep; use a separate ground-check for those).
+    grounded = false,
   } = {}) {
     this.bodyType = bodyType;
     this.simulated = simulated;
@@ -89,5 +97,7 @@ export class Rigidbody2D {
 
     this.driveVelocityX = driveVelocityX;
     this.driveVelocityY = driveVelocityY;
+
+    this.grounded = grounded;
   }
 }
