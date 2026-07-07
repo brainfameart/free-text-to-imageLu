@@ -157,10 +157,7 @@ function _renderClipEditor(entity, anim, clip) {
     '<div class="animpanel-preview-col">' +
     '<div class="animpanel-preview">' +
     (previewThumb
-      ? '<div class="animpanel-preview-stage">' +
-        '<img src="' + previewThumb + '" alt="" />' +
-        _renderColliderOverlay(entity, clip, previewFrame) +
-        "</div>"
+      ? _renderPreviewStage(entity, clip, previewFrame, previewThumb)
       : '<div class="animpanel-preview-empty">' + icon("film", 32) + "<span>No frames</span></div>") +
     "</div>" +
     '<div class="animpanel-transport">' +
@@ -226,87 +223,143 @@ function _renderClipEditor(entity, anim, clip) {
 }
 
 /**
- * Draws a red (or cyan for triggers) outline over the preview thumbnail
- * showing how big the collider is RELATIVE TO THIS FRAME's own pixel
- * size — same purpose as the Scene view's ColliderGizmo.js red outline,
- * but here it's a plain CSS overlay (the preview is an <img>, not a
- * Pixi canvas) sized in PERCENTAGES of the frame's width/height so it
- * stays aligned regardless of how the browser scales the <img> down to
- * fit the 150px-tall preview box.
+ * Renders the preview <img> AND (if enabled) its collider outline
+ * together, both scaled by the SAME factor so neither can ever spill
+ * outside the fixed-size preview box — no matter how tall/wide the
+ * source image is, or how large the collider is relative to it.
  *
- * Uses the clip's own colliderOverride when the "Collider Override"
- * toggle is on for this clip (matching what actually applies during
- * playback per AnimationSystem.js), otherwise falls back to the
- * entity's base Collider2D so there's still something to show for
- * clips that don't override it. Draws nothing if the entity has
- * neither, or if the person has the toggle off.
+ * The old approach sized the image with CSS max-width/max-height and
+ * positioned the collider overlay in PERCENTAGES of the image's own
+ * box. That breaks in two ways: (1) an extreme aspect-ratio image (very
+ * tall or very wide) can still overflow the box's cross-axis depending
+ * on browser flex rounding, and (2) a collider bigger than the sprite
+ * itself (e.g. width=500 on a 64px-wide sprite) produces a >100%
+ * overlay size, which visually busts out of the checkered preview area
+ * since it's a child of the image's own (possibly tiny) box.
  *
- * Collider width/height/radius/offset are in the same raw pixel-space
- * units as sprite dimensions (this engine is 1 unit = 1 pixel — see
- * PhysicsWorld.js's header comment), so they can be turned into
- * percentages of frame.width/frame.height directly with no unit
- * conversion.
+ * Fix: compute one bounding box that contains BOTH the frame image and
+ * the collider's full extent (using its offset), in the same local
+ * pixel units, then scale THAT combined box down to fit inside a fixed
+ * stage size. Both the image and the collider div are then emitted as
+ * plain absolutely-positioned pixel rects against that single scale —
+ * so a huge collider just makes the whole preview "zoom out" further
+ * rather than overflowing, and a huge image does the same.
  */
-function _renderColliderOverlay(entity, clip, frame) {
-  if (!editorState.anim.showColliderInPreview) return "";
-  if (!frame || !frame.width || !frame.height) return "";
+const PREVIEW_STAGE_SIZE = 130; // px — fits inside the 150px-tall / 230px-wide preview box with margin
+
+function _renderPreviewStage(entity, clip, frame, thumb) {
+  const fw = frame.width || 1;
+  const fh = frame.height || 1;
 
   const baseCollider = entity.getComponent(COLLIDER_2D);
-  const source = clip.colliderOverride || baseCollider;
-  if (!source) return "";
+  const showCollider = editorState.anim.showColliderInPreview;
+  const source = showCollider ? clip.colliderOverride || baseCollider : null;
 
-  const color = source.isTrigger ? "#2dd4ff" : "#ff2d55";
-  const fw = frame.width;
-  const fh = frame.height;
+  const colliderBounds = source ? _colliderLocalBounds(source) : null;
 
-  // Center of the frame (in its own pixel space) plus the collider's
-  // offset, matching how offsetX/offsetY are applied everywhere else
-  // (ColliderGeometry.js, ColliderGizmo.js) as a local-space shift from
-  // the entity's pivot/origin — assumed to be the frame's center here,
-  // since that's where PIXI anchors a sprite by default in this engine.
-  const centerXPct = (0.5 + (source.offsetX || 0) / fw) * 100;
-  const centerYPct = (0.5 + (source.offsetY || 0) / fh) * 100;
+  // Combined bounding box in local/frame pixel space: the frame image is
+  // centered at (0,0) here (matching the sprite's own default pivot),
+  // and the collider's bounds already account for its offset relative
+  // to that same center — so a union of the two rects is exactly the
+  // "everything that must fit on screen" box.
+  let minX = -fw / 2, maxX = fw / 2, minY = -fh / 2, maxY = fh / 2;
+  if (colliderBounds) {
+    minX = Math.min(minX, colliderBounds.minX);
+    maxX = Math.max(maxX, colliderBounds.maxX);
+    minY = Math.min(minY, colliderBounds.minY);
+    maxY = Math.max(maxY, colliderBounds.maxY);
+  }
 
-  let shapeStyle;
-  if (source.shape === ColliderShape.CIRCLE) {
-    const wPct = ((source.radius * 2) / fw) * 100;
-    const hPct = ((source.radius * 2) / fh) * 100;
-    shapeStyle =
-      "width:" + wPct + "%;height:" + hPct + "%;border-radius:50%;" +
-      "left:" + centerXPct + "%;top:" + centerYPct + "%;transform:translate(-50%,-50%);";
-  } else if (source.shape === ColliderShape.CAPSULE) {
-    const wPct = ((source.capsuleRadius * 2) / fw) * 100;
-    const hPct = (((source.capsuleHalfHeight + source.capsuleRadius) * 2) / fh) * 100;
-    shapeStyle =
-      "width:" + wPct + "%;height:" + hPct + "%;border-radius:999px;" +
-      "left:" + centerXPct + "%;top:" + centerYPct + "%;transform:translate(-50%,-50%);";
-  } else if (source.shape === ColliderShape.TRIANGLE) {
-    // TRIANGLE has no simple box size (its 3 points are user-dragged in
-    // the Scene view, not authored here) — approximate with its
-    // bounding box so there's still a rough size cue on the frame
-    // rather than nothing at all.
-    const pts = source.trianglePoints || [];
-    const xs = pts.map((p) => p.x);
-    const ys = pts.map((p) => p.y);
-    const boxW = xs.length ? Math.max(...xs) - Math.min(...xs) : 1;
-    const boxH = ys.length ? Math.max(...ys) - Math.min(...ys) : 1;
-    const wPct = (boxW / fw) * 100;
-    const hPct = (boxH / fh) * 100;
-    shapeStyle =
-      "width:" + wPct + "%;height:" + hPct + "%;" +
-      "left:" + centerXPct + "%;top:" + centerYPct + "%;transform:translate(-50%,-50%);";
-  } else {
-    // BOX (default)
-    const wPct = (source.width / fw) * 100;
-    const hPct = (source.height / fh) * 100;
-    shapeStyle =
-      "width:" + wPct + "%;height:" + hPct + "%;" +
-      "left:" + centerXPct + "%;top:" + centerYPct + "%;transform:translate(-50%,-50%);";
+  const boundsW = Math.max(1, maxX - minX);
+  const boundsH = Math.max(1, maxY - minY);
+
+  // Single shared scale: whichever axis is more constrained (wider or
+  // taller relative to the stage) decides the zoom level for BOTH the
+  // image and the collider outline, so an oversized sprite OR an
+  // oversized collider each independently trigger a further zoom-out
+  // rather than clipping.
+  const scale = Math.min(PREVIEW_STAGE_SIZE / boundsW, PREVIEW_STAGE_SIZE / boundsH);
+
+  const toPx = (x, y, w, h) => ({
+    left: (x - minX) * scale,
+    top: (y - minY) * scale,
+    width: Math.max(1, w * scale),
+    height: Math.max(1, h * scale),
+  });
+
+  const imgRect = toPx(-fw / 2, -fh / 2, fw, fh);
+  const stageW = boundsW * scale;
+  const stageH = boundsH * scale;
+
+  let overlayHtml = "";
+  if (source && colliderBounds) {
+    overlayHtml = _renderColliderOverlay(source, colliderBounds, minX, minY, scale);
   }
 
   return (
+    '<div class="animpanel-preview-stage" style="position:relative;width:' +
+    stageW + "px;height:" + stageH + 'px;">' +
+    '<img src="' + thumb + '" alt="" style="position:absolute;left:' +
+    imgRect.left + "px;top:" + imgRect.top + "px;width:" + imgRect.width +
+    "px;height:" + imgRect.height + 'px;image-rendering:pixelated;" />' +
+    overlayHtml +
+    "</div>"
+  );
+}
+
+/**
+ * Local-space (frame-center-relative) bounding box of a collider shape,
+ * used both to grow the combined preview bounds and to place the
+ * overlay div. Mirrors the same shape math ColliderGizmo.js/
+ * ColliderGeometry.js use, just without any Transform/rotation (this is
+ * a flat preview thumbnail, not the rotatable Scene view).
+ */
+function _colliderLocalBounds(source) {
+  const ox = source.offsetX || 0;
+  const oy = source.offsetY || 0;
+
+  if (source.shape === ColliderShape.CIRCLE) {
+    const r = source.radius;
+    return { minX: ox - r, maxX: ox + r, minY: oy - r, maxY: oy + r };
+  }
+  if (source.shape === ColliderShape.CAPSULE) {
+    const r = source.capsuleRadius;
+    const hh = source.capsuleHalfHeight;
+    return { minX: ox - r, maxX: ox + r, minY: oy - (hh + r), maxY: oy + (hh + r) };
+  }
+  if (source.shape === ColliderShape.TRIANGLE) {
+    const pts = source.trianglePoints || [];
+    if (!pts.length) return { minX: ox, maxX: ox, minY: oy, maxY: oy };
+    const xs = pts.map((p) => p.x + ox);
+    const ys = pts.map((p) => p.y + oy);
+    return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+  }
+  // BOX
+  const hw = source.width / 2;
+  const hh = source.height / 2;
+  return { minX: ox - hw, maxX: ox + hw, minY: oy - hh, maxY: oy + hh };
+}
+
+/**
+ * Emits the collider outline as an absolutely-positioned pixel rect
+ * using the SAME (minX, minY, scale) the image was placed with, so it
+ * lines up exactly regardless of zoom level.
+ */
+function _renderColliderOverlay(source, bounds, originX, originY, scale) {
+  const color = source.isTrigger ? "#2dd4ff" : "#ff2d55";
+  const left = (bounds.minX - originX) * scale;
+  const top = (bounds.minY - originY) * scale;
+  const w = Math.max(1, (bounds.maxX - bounds.minX) * scale);
+  const h = Math.max(1, (bounds.maxY - bounds.minY) * scale);
+
+  const isRound = source.shape === ColliderShape.CIRCLE || source.shape === ColliderShape.CAPSULE;
+
+  return (
     '<div class="animpanel-collider-overlay" style="position:absolute;pointer-events:none;' +
-    "border:1.5px solid " + color + ";box-sizing:border-box;" + shapeStyle + '"></div>'
+    "left:" + left + "px;top:" + top + "px;width:" + w + "px;height:" + h + "px;" +
+    "border:1.5px solid " + color + ";box-sizing:border-box;" +
+    (isRound ? "border-radius:999px;" : "") +
+    '"></div>'
   );
 }
 
