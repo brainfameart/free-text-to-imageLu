@@ -99,9 +99,29 @@ export class RenderSystem extends System {
       // in Z are visually unaffected by turning the toggle on.
       const depthScale = pseudo3D ? this._depthScaleFor(transform.z) : 1;
 
+      // Animation-frame size compensation: Transform.scaleX/Y is the
+      // user's INTENDED overall size (what SceneViewport's drag-drop
+      // fitSpriteScale() computed against ONE reference image, and what
+      // the Inspector shows/edits). Without correction, PIXI multiplies
+      // that scale directly against whichever texture is currently
+      // assigned — so if a SpriteAnimation clip swaps in a frame whose
+      // raw pixel size differs from the image the entity was originally
+      // scaled against, the sprite visibly shrinks or grows even though
+      // the user never touched Transform.scale (see SpriteRenderer.js's
+      // referenceWidth/Height doc comment for the full explanation).
+      // frameScaleX/Y cancels that out: if this frame is smaller than
+      // the reference, frameScale > 1 to compensate, and vice versa — so
+      // the entity's on-screen size stays visually constant across every
+      // frame of an animation, exactly like Unity's Pixels Per Unit.
+      const tex = sprite.texture;
+      const refW = spriteRenderer.referenceWidth || (tex && tex.width) || 1;
+      const refH = spriteRenderer.referenceHeight || (tex && tex.height) || 1;
+      const frameScaleX = tex && tex.width ? refW / tex.width : 1;
+      const frameScaleY = tex && tex.height ? refH / tex.height : 1;
+
       sprite.scale.set(
-        transform.scaleX * depthScale * (spriteRenderer.flipX ? -1 : 1),
-        transform.scaleY * depthScale * (spriteRenderer.flipY ? -1 : 1)
+        transform.scaleX * frameScaleX * depthScale * (spriteRenderer.flipX ? -1 : 1),
+        transform.scaleY * frameScaleY * depthScale * (spriteRenderer.flipY ? -1 : 1)
       );
       sprite.tint = PIXI.utils ? PIXI.utils.string2hex(spriteRenderer.color) : 0xffffff;
 

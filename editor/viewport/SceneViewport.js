@@ -396,7 +396,10 @@ function attachDropTarget(mount) {
       TRANSFORM,
       new Transform({ x: Math.round(world.x), y: Math.round(world.y), scaleX, scaleY })
     );
-    entity.addComponent(SPRITE_RENDERER, new SpriteRenderer({ spriteKey: asset.key }));
+    entity.addComponent(
+      SPRITE_RENDERER,
+      new SpriteRenderer({ spriteKey: asset.key, referenceWidth: asset.width, referenceHeight: asset.height })
+    );
     editorState.selectedId = entity.id;
     pushLog("log", "Placed sprite '" + asset.name + "' in scene.");
     syncSpriteRender();

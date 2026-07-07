@@ -24,7 +24,7 @@ import {
   importZipImageFrames,
   importSpriteSheetFrames,
 } from "../animation/AnimationImport.js";
-import { importSpriteFiles } from "../../runtime/assets/AssetRegistry.js";
+import { importSpriteFiles, getSpriteAsset } from "../../runtime/assets/AssetRegistry.js";
 import { syncBackgroundColorLive, switchScene } from "../viewport/SceneViewport.js";
 
 const COMPONENT_TYPE_MAP = {
@@ -47,6 +47,52 @@ const LIGHT_ENTITY_NAMES = {
   [LightType.AREA]: "Area Light",
   [LightType.GOD_RAYS]: "God Rays",
 };
+
+/**
+ * Builds sensible starting field overrides for a BRAND NEW Collider2D so
+ * it roughly matches the entity's own sprite size instead of always
+ * being Collider2D's raw default (width=1, height=1, radius=0.5,
+ * trianglePoints ±0.5 — all sized for Rapier's ~1-unit "human scale"
+ * assumption, see PhysicsWorld.js's LENGTH_UNIT_PX_PER_METER comment).
+ * Since this engine treats collider width/height/radius as PIXELS
+ * directly (that constant is just Rapier's internal solver rescaling,
+ * it isn't a units-per-pixel conversion the user ever sees), a fresh
+ * 1px collider next to a 64-256px sprite is invisible in both the
+ * Scene view gizmo and the Animation panel's preview overlay — this is
+ * what produces a collider outline too small to see ("can't even see
+ * the dots" when set to Triangle, since ±0.5 points are ~1px wide).
+ *
+ * Reads the entity's SpriteRenderer.spriteKey (if any) to find its
+ * actual pixel size via the asset registry, and returns override fields
+ * sized to roughly fill that sprite — same "fit the frame" spirit as
+ * the Animation panel's preview-stage scaling, just applied once at
+ * creation time instead of every render. Returns {} (no overrides,
+ * falls back to Collider2D's own defaults) if the entity has no sprite
+ * yet, since there's nothing to size against.
+ */
+function _sizedColliderDefaults(entity) {
+  const renderer = entity.getComponent(SPRITE_RENDERER);
+  if (!renderer || !renderer.spriteKey) return {};
+  const asset = getSpriteAsset(renderer.spriteKey);
+  if (!asset || !asset.width || !asset.height) return {};
+
+  const w = asset.width;
+  const h = asset.height;
+  const shortSide = Math.min(w, h);
+
+  return {
+    width: w,
+    height: h,
+    radius: shortSide / 2,
+    capsuleRadius: shortSide / 4,
+    capsuleHalfHeight: Math.max(1, h / 2 - shortSide / 4),
+    trianglePoints: [
+      { x: -w / 2, y: h / 2 },
+      { x: w / 2, y: h / 2 },
+      { x: 0, y: -h / 2 },
+    ],
+  };
+}
 
 /**
  * @param {() => void} render call this to re-render the editor after a
@@ -214,7 +260,7 @@ export function attachEditorEvents(render, onTogglePlay) {
           // them would require threading one convention into the
           // other's caller for no real benefit.
           const collider = entity.getComponent(COLLIDER_2D);
-          const seed = collider ? new Collider2D({ ...collider }) : new Collider2D();
+          const seed = collider ? new Collider2D({ ...collider }) : new Collider2D(_sizedColliderDefaults(entity));
           clip.colliderOverride = { ...seed };
         } else {
           clip.colliderOverride = null;
@@ -336,7 +382,7 @@ export function attachEditorEvents(render, onTogglePlay) {
           }
         } else if (componentName === "Collider2D") {
           if (!entity.hasComponent(COLLIDER_2D)) {
-            entity.addComponent(COLLIDER_2D, new Collider2D());
+            entity.addComponent(COLLIDER_2D, new Collider2D(_sizedColliderDefaults(entity)));
             pushLog("log", "Added Collider2D to '" + entity.name + "'.");
           }
         } else if (componentName === "CharacterController") {
@@ -388,7 +434,7 @@ export function attachEditorEvents(render, onTogglePlay) {
           // sensible/visible rather than a jarring default — falls back
           // to a plain Box if the entity has no Collider2D at all yet.
           const collider = entity.getComponent(COLLIDER_2D);
-          const seed = collider ? new Collider2D({ ...collider }) : new Collider2D();
+          const seed = collider ? new Collider2D({ ...collider }) : new Collider2D(_sizedColliderDefaults(entity));
           clip.colliderOverride = { ...seed };
         } else {
           clip.colliderOverride = null;
@@ -783,6 +829,35 @@ function applyFieldChange(field, inputEl) {
       const value =
         inputEl.type === "checkbox" ? inputEl.checked : inputEl.type === "number" ? parseFloat(inputEl.value) || 0 : inputEl.value;
       clip.colliderOverride[prop] = value;
+
+      // Switching SHAPE via the dropdown only ever set this one prop —
+      // it never touched the shape-specific size fields (radius,
+      // capsuleRadius/HalfHeight, trianglePoints). Since colliderOverride
+      // is a plain object spread from whatever the base Collider2D had
+      // (not always a full `new Collider2D()`), those fields may be
+      // stale from a PREVIOUS shape, or entirely missing if the base was
+      // never that shape — e.g. a Box-only override switched to Triangle
+      // has no trianglePoints at all, which _colliderLocalBounds() (the
+      // Animation panel's preview overlay) reads as a zero-size box:
+      // invisible outline, exactly the "can't see the dots" bug. Re-seed
+      // the NEW shape's size fields from the entity's actual sprite
+      // dimensions whenever shape itself changes, same sizing logic used
+      // when a collider is first created (see _sizedColliderDefaults).
+      if (prop === "shape") {
+        const sized = _sizedColliderDefaults(entity);
+        if (Object.keys(sized).length) {
+          if (value === ColliderShape.CIRCLE) clip.colliderOverride.radius = sized.radius;
+          else if (value === ColliderShape.CAPSULE) {
+            clip.colliderOverride.capsuleRadius = sized.capsuleRadius;
+            clip.colliderOverride.capsuleHalfHeight = sized.capsuleHalfHeight;
+          } else if (value === ColliderShape.TRIANGLE) {
+            clip.colliderOverride.trianglePoints = sized.trianglePoints;
+          } else {
+            clip.colliderOverride.width = sized.width;
+            clip.colliderOverride.height = sized.height;
+          }
+        }
+      }
       return;
     }
     return;
@@ -821,5 +896,30 @@ function applyFieldChange(field, inputEl) {
     component.scaleY = axis === "y" ? value : component.scaleY;
   } else {
     component[propName] = value;
+
+    // Same reasoning as the clipOverride shape-switch handling above:
+    // changing Collider2D.shape alone leaves whichever size field the
+    // NEW shape needs at its old value, which — if this collider has
+    // never been that shape before, or was itself created before sized
+    // defaults existed — can be the tiny raw constructor default (a 1px
+    // box, 0.5px radius, or ±0.5px triangle points; see
+    // _sizedColliderDefaults' doc comment) rather than anything sized to
+    // the entity's actual sprite. Re-seed the new shape's size fields
+    // from the sprite whenever shape changes on the base Collider2D too.
+    if (componentName === "Collider2D" && propName === "shape") {
+      const sized = _sizedColliderDefaults(entity);
+      if (Object.keys(sized).length) {
+        if (value === ColliderShape.CIRCLE) component.radius = sized.radius;
+        else if (value === ColliderShape.CAPSULE) {
+          component.capsuleRadius = sized.capsuleRadius;
+          component.capsuleHalfHeight = sized.capsuleHalfHeight;
+        } else if (value === ColliderShape.TRIANGLE) {
+          component.trianglePoints = sized.trianglePoints;
+        } else {
+          component.width = sized.width;
+          component.height = sized.height;
+        }
+      }
+    }
   }
 }

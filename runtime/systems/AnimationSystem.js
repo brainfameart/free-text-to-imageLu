@@ -22,6 +22,7 @@ import { System } from "../core/System.js";
 import { SPRITE_ANIMATION } from "../components/SpriteAnimation.js";
 import { SPRITE_RENDERER } from "../components/SpriteRenderer.js";
 import { COLLIDER_2D } from "../components/Collider2D.js";
+import { getSpriteAsset } from "../assets/AssetRegistry.js";
 
 export class AnimationSystem extends System {
   update(world, dt) {
@@ -39,7 +40,28 @@ export class AnimationSystem extends System {
       const frame = clip.frames[Math.min(anim.currentFrameIndex, clip.frames.length - 1)];
 
       const spriteRenderer = entity.getComponent(SPRITE_RENDERER);
-      if (spriteRenderer && frame) spriteRenderer.spriteKey = frame.spriteKey;
+      if (spriteRenderer && frame) {
+        spriteRenderer.spriteKey = frame.spriteKey;
+
+        // Establish a deterministic size reference the FIRST time this
+        // entity ever renders an animation frame, if one wasn't already
+        // captured at placement time (see SpriteRenderer.js's
+        // referenceWidth/Height doc comment). Using clip.frames[0]
+        // specifically — rather than leaving it to fall back to
+        // "whichever frame RenderSystem happens to see first" — means
+        // the reference is always the animation's own first frame,
+        // regardless of playback position, loop state, or which frame
+        // the editor happened to leave currentFrameIndex on when Play
+        // was pressed.
+        if (!spriteRenderer.referenceWidth || !spriteRenderer.referenceHeight) {
+          const firstFrame = clip.frames[0];
+          const firstAsset = firstFrame && getSpriteAsset(firstFrame.spriteKey);
+          if (firstAsset) {
+            spriteRenderer.referenceWidth = firstAsset.width;
+            spriteRenderer.referenceHeight = firstAsset.height;
+          }
+        }
+      }
 
       if (clip.colliderOverride) {
         const collider = entity.getComponent(COLLIDER_2D);
