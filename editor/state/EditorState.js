@@ -68,6 +68,10 @@ export const editorState = {
      *  override for the NEXT sprite-sheet import — set via the panel's
      *  "Slice Sheet" dialog before the file picker's change event fires */
     pendingSheetGrid: null,
+    /** whether the Animation panel's preview overlays the current
+     *  collider (clip override, or else the entity's base Collider2D)
+     *  as a sized outline on top of the frame thumbnail */
+    showColliderInPreview: false,
   },
 };
 

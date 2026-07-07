@@ -148,6 +148,11 @@ export function attachEditorEvents(render, onTogglePlay) {
         render();
         break;
       }
+      case "anim-toggle-show-collider": {
+        editorState.anim.showColliderInPreview = !editorState.anim.showColliderInPreview;
+        render();
+        break;
+      }
       case "anim-delete-clip": {
         const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
         const anim = entity && entity.getComponent(SPRITE_ANIMATION);

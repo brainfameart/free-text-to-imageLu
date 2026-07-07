@@ -19,6 +19,20 @@ import { loadImageAssetFromFile } from "./AssetManager.js";
 /** @type {Map<string, { key: string, name: string, dataUrl: string, width: number, height: number }>} */
 const _assets = new Map();
 
+/**
+ * Separate catalogue for animation-frame textures (see
+ * registerFrameAsset() below). Kept apart from _assets so the Project
+ * panel's Sprites folder — which lists getAllSpriteAssets() — only ever
+ * shows sprites the user explicitly imported as standalone assets, not
+ * the (often dozens of) per-frame images that come out of slicing a
+ * sheet or unzipping a walk-cycle. getSpriteAsset() below still checks
+ * BOTH maps, so thumbnail lookups (used by the Animation panel and by
+ * anything resolving a spriteKey generically) keep working exactly as
+ * before regardless of which catalogue a given key lives in.
+ * @type {Map<string, { key: string, name: string, dataUrl: string, width: number, height: number }>}
+ */
+const _frameAssets = new Map();
+
 let _nextAssetId = 1;
 
 /**
@@ -45,7 +59,7 @@ export function getAllSpriteAssets() {
 }
 
 export function getSpriteAsset(key) {
-  return _assets.get(key) || null;
+  return _assets.get(key) || _frameAssets.get(key) || null;
 }
 
 /**
@@ -55,15 +69,28 @@ export function getSpriteAsset(key) {
  * slicing a sprite sheet or reading images out of a zip, where the
  * texture is registered directly via AssetManager.registerTexture()
  * (not loadImageAssetFromFile) because the pixel data comes from an
- * in-memory canvas, not a raw File. Keeping this in the SAME catalogue
- * (rather than a separate one) means animation frames show up in the
- * Project panel's Sprites folder too, and the Animation panel can look
- * up a frame's thumbnail by spriteKey through the one shared
- * getSpriteAsset() everything else already uses.
+ * in-memory canvas, not a raw File.
  * @param {{key:string,name:string,dataUrl:string,width:number,height:number}} record
  */
 export function registerSpriteAsset(record) {
   _assets.set(record.key, record);
+}
+
+/**
+ * Same as registerSpriteAsset(), but for animation-frame textures —
+ * files/slices imported through the Animation panel (standalone-images,
+ * zip, or sprite-sheet import). Stored in _frameAssets instead of
+ * _assets so these DON'T show up in the Project panel's Sprites folder
+ * (getAllSpriteAssets() only reads _assets) while still being
+ * resolvable by key via getSpriteAsset(), which checks both maps. This
+ * is what keeps an imported walk-cycle's 8 frame images out of the
+ * general sprite browser while the Animation panel's own frame grid
+ * (which calls getSpriteAsset() directly by spriteKey) still finds
+ * them fine.
+ * @param {{key:string,name:string,dataUrl:string,width:number,height:number}} record
+ */
+export function registerFrameAsset(record) {
+  _frameAssets.set(record.key, record);
 }
 
 function stripExtension(filename) {

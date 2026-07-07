@@ -19,7 +19,7 @@
  */
 
 import { registerTexture, loadImageAssetFromFile } from "../../runtime/assets/AssetManager.js";
-import { registerSpriteAsset } from "../../runtime/assets/AssetRegistry.js";
+import { registerFrameAsset } from "../../runtime/assets/AssetRegistry.js";
 import { generateFrameSourceId } from "../../runtime/components/SpriteAnimation.js";
 
 let _nextFrameKeyId = 1;
@@ -41,7 +41,7 @@ export async function importStandaloneImageFrames(files) {
     // uses) — reused here rather than reimplemented so both import
     // paths stay in sync if that helper ever changes.
     const { dataUrl, width, height } = await loadImageAssetFromFile(key, file);
-    registerSpriteAsset({ key, name: _stripExtension(file.name), dataUrl, width, height });
+    registerFrameAsset({ key, name: _stripExtension(file.name), dataUrl, width, height });
     frames.push({ spriteKey: key, dataUrl, width, height, sourceAssetKey });
   }
   return frames;
@@ -76,7 +76,7 @@ export async function importZipImageFrames(zipFile) {
     const file = new File([blob], filename, { type: blob.type || _guessMimeFromName(entry.name) });
     const key = "animframe_" + _nextFrameKeyId++;
     const { dataUrl, width, height } = await loadImageAssetFromFile(key, file);
-    registerSpriteAsset({ key, name: _stripExtension(filename), dataUrl, width, height });
+    registerFrameAsset({ key, name: _stripExtension(filename), dataUrl, width, height });
     frames.push({ spriteKey: key, dataUrl, width, height, sourceAssetKey });
   }
   return frames;
@@ -122,7 +122,7 @@ export async function importSpriteSheetFrames(file, gridOverride) {
     const texture = new PIXI.Texture(PIXI.BaseTexture.from(frameCanvas));
     registerTexture(key, texture);
     const name = baseName + "_" + frameNumber++;
-    registerSpriteAsset({ key, name, dataUrl, width: rect.w, height: rect.h });
+    registerFrameAsset({ key, name, dataUrl, width: rect.w, height: rect.h });
     frames.push({ spriteKey: key, dataUrl, width: rect.w, height: rect.h, sourceAssetKey });
   }
   return frames;

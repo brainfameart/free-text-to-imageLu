@@ -32,7 +32,7 @@ import { icon } from "../icons/IconLibrary.js";
 import { dropdownInput, row, numInput } from "./UIComponents.js";
 import { editorState } from "../state/EditorState.js";
 import { SPRITE_ANIMATION, generateClipId } from "../../runtime/components/SpriteAnimation.js";
-import { ColliderShape } from "../../runtime/components/Collider2D.js";
+import { COLLIDER_2D, ColliderShape } from "../../runtime/components/Collider2D.js";
 import { getSpriteAsset } from "../../runtime/assets/AssetRegistry.js";
 
 /** Resolves a frame's thumbnail dataUrl by spriteKey via the shared
@@ -157,7 +157,10 @@ function _renderClipEditor(entity, anim, clip) {
     '<div class="animpanel-preview-col">' +
     '<div class="animpanel-preview">' +
     (previewThumb
-      ? '<img src="' + previewThumb + '" alt="" />'
+      ? '<div class="animpanel-preview-stage">' +
+        '<img src="' + previewThumb + '" alt="" />' +
+        _renderColliderOverlay(entity, clip, previewFrame) +
+        "</div>"
       : '<div class="animpanel-preview-empty">' + icon("film", 32) + "<span>No frames</span></div>") +
     "</div>" +
     '<div class="animpanel-transport">' +
@@ -174,6 +177,12 @@ function _renderClipEditor(entity, anim, clip) {
     (frameCount ? previewIndex + 1 + " / " + frameCount : "0 / 0") +
     "</span>" +
     "</div>" +
+    '<label class="animpanel-collider-toggle">' +
+    '<input type="checkbox" data-action="anim-toggle-show-collider"' +
+    (editorState.anim.showColliderInPreview ? " checked" : "") +
+    ' style="accent-color:#2C5D87;margin:0;" />' +
+    " Show collider on frame" +
+    "</label>" +
     '<div class="animpanel-clip-settings">' +
     row("FPS", numInput("", clip.fps, "SpriteAnimation.clipFps." + clip.id)) +
     row(
@@ -213,6 +222,91 @@ function _renderClipEditor(entity, anim, clip) {
     "</div>" +
     "</div>" +
     "</div>"
+  );
+}
+
+/**
+ * Draws a red (or cyan for triggers) outline over the preview thumbnail
+ * showing how big the collider is RELATIVE TO THIS FRAME's own pixel
+ * size — same purpose as the Scene view's ColliderGizmo.js red outline,
+ * but here it's a plain CSS overlay (the preview is an <img>, not a
+ * Pixi canvas) sized in PERCENTAGES of the frame's width/height so it
+ * stays aligned regardless of how the browser scales the <img> down to
+ * fit the 150px-tall preview box.
+ *
+ * Uses the clip's own colliderOverride when the "Collider Override"
+ * toggle is on for this clip (matching what actually applies during
+ * playback per AnimationSystem.js), otherwise falls back to the
+ * entity's base Collider2D so there's still something to show for
+ * clips that don't override it. Draws nothing if the entity has
+ * neither, or if the person has the toggle off.
+ *
+ * Collider width/height/radius/offset are in the same raw pixel-space
+ * units as sprite dimensions (this engine is 1 unit = 1 pixel — see
+ * PhysicsWorld.js's header comment), so they can be turned into
+ * percentages of frame.width/frame.height directly with no unit
+ * conversion.
+ */
+function _renderColliderOverlay(entity, clip, frame) {
+  if (!editorState.anim.showColliderInPreview) return "";
+  if (!frame || !frame.width || !frame.height) return "";
+
+  const baseCollider = entity.getComponent(COLLIDER_2D);
+  const source = clip.colliderOverride || baseCollider;
+  if (!source) return "";
+
+  const color = source.isTrigger ? "#2dd4ff" : "#ff2d55";
+  const fw = frame.width;
+  const fh = frame.height;
+
+  // Center of the frame (in its own pixel space) plus the collider's
+  // offset, matching how offsetX/offsetY are applied everywhere else
+  // (ColliderGeometry.js, ColliderGizmo.js) as a local-space shift from
+  // the entity's pivot/origin — assumed to be the frame's center here,
+  // since that's where PIXI anchors a sprite by default in this engine.
+  const centerXPct = (0.5 + (source.offsetX || 0) / fw) * 100;
+  const centerYPct = (0.5 + (source.offsetY || 0) / fh) * 100;
+
+  let shapeStyle;
+  if (source.shape === ColliderShape.CIRCLE) {
+    const wPct = ((source.radius * 2) / fw) * 100;
+    const hPct = ((source.radius * 2) / fh) * 100;
+    shapeStyle =
+      "width:" + wPct + "%;height:" + hPct + "%;border-radius:50%;" +
+      "left:" + centerXPct + "%;top:" + centerYPct + "%;transform:translate(-50%,-50%);";
+  } else if (source.shape === ColliderShape.CAPSULE) {
+    const wPct = ((source.capsuleRadius * 2) / fw) * 100;
+    const hPct = (((source.capsuleHalfHeight + source.capsuleRadius) * 2) / fh) * 100;
+    shapeStyle =
+      "width:" + wPct + "%;height:" + hPct + "%;border-radius:999px;" +
+      "left:" + centerXPct + "%;top:" + centerYPct + "%;transform:translate(-50%,-50%);";
+  } else if (source.shape === ColliderShape.TRIANGLE) {
+    // TRIANGLE has no simple box size (its 3 points are user-dragged in
+    // the Scene view, not authored here) — approximate with its
+    // bounding box so there's still a rough size cue on the frame
+    // rather than nothing at all.
+    const pts = source.trianglePoints || [];
+    const xs = pts.map((p) => p.x);
+    const ys = pts.map((p) => p.y);
+    const boxW = xs.length ? Math.max(...xs) - Math.min(...xs) : 1;
+    const boxH = ys.length ? Math.max(...ys) - Math.min(...ys) : 1;
+    const wPct = (boxW / fw) * 100;
+    const hPct = (boxH / fh) * 100;
+    shapeStyle =
+      "width:" + wPct + "%;height:" + hPct + "%;" +
+      "left:" + centerXPct + "%;top:" + centerYPct + "%;transform:translate(-50%,-50%);";
+  } else {
+    // BOX (default)
+    const wPct = (source.width / fw) * 100;
+    const hPct = (source.height / fh) * 100;
+    shapeStyle =
+      "width:" + wPct + "%;height:" + hPct + "%;" +
+      "left:" + centerXPct + "%;top:" + centerYPct + "%;transform:translate(-50%,-50%);";
+  }
+
+  return (
+    '<div class="animpanel-collider-overlay" style="position:absolute;pointer-events:none;' +
+    "border:1.5px solid " + color + ";box-sizing:border-box;" + shapeStyle + '"></div>'
   );
 }
 
