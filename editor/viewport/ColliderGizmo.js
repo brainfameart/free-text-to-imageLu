@@ -57,6 +57,43 @@ export function drawColliderGizmo(container, world, selectedId) {
       // applied when drawing it — this matches Rapier too: a ball
       // collider's rotation never changes its physical footprint.
       g.drawCircle(geo.centerX, geo.centerY, geo.radius);
+    } else if (geo.shape === ColliderShape.CAPSULE) {
+      // A capsule ("stadium" shape) is a rectangle of width
+      // 2*radius/height 2*halfHeight with its two short ends replaced
+      // by semicircle caps — draw it as two arcs joined by two
+      // straight side segments, rotated as a whole by the entity's
+      // rotation (unlike CIRCLE, a capsule's long axis DOES visibly
+      // change with rotation, so it can't skip the rotation step).
+      const angleRad = (geo.rotationDeg * Math.PI) / 180;
+      const cos = Math.cos(angleRad);
+      const sin = Math.sin(angleRad);
+      const rot = (lx, ly) => [geo.centerX + lx * cos - ly * sin, geo.centerY + lx * sin + ly * cos];
+
+      const topCenter = rot(0, -geo.halfHeight);
+      const bottomCenter = rot(0, geo.halfHeight);
+      // side lines tangent to both caps
+      const topLeft = rot(-geo.radius, -geo.halfHeight);
+      const bottomLeft = rot(-geo.radius, geo.halfHeight);
+      const topRight = rot(geo.radius, -geo.halfHeight);
+      const bottomRight = rot(geo.radius, geo.halfHeight);
+
+      g.moveTo(topLeft[0], topLeft[1]);
+      g.lineTo(bottomLeft[0], bottomLeft[1]);
+      g.moveTo(topRight[0], topRight[1]);
+      g.lineTo(bottomRight[0], bottomRight[1]);
+      // PIXI's Graphics.arc() always sweeps in the shape's own local
+      // (unrotated) angle space, so draw each cap as a full circle
+      // clipped visually by only the two tangent lines above rather
+      // than fighting arc()'s rotation semantics — simplest robust
+      // approach for an editor-only preview outline.
+      g.drawCircle(topCenter[0], topCenter[1], geo.radius);
+      g.drawCircle(bottomCenter[0], bottomCenter[1], geo.radius);
+    } else if (geo.shape === ColliderShape.TRIANGLE) {
+      const pts = geo.worldPoints;
+      g.moveTo(pts[0].x, pts[0].y);
+      g.lineTo(pts[1].x, pts[1].y);
+      g.lineTo(pts[2].x, pts[2].y);
+      g.lineTo(pts[0].x, pts[0].y);
     } else {
       // Draw the box as 4 rotated corner points rather than an
       // axis-aligned drawRect — this is what makes the red outline
@@ -92,14 +129,26 @@ export function drawColliderGizmo(container, world, selectedId) {
       const dims =
         geo.shape === ColliderShape.CIRCLE
           ? "r=" + Math.round(geo.radius)
+          : geo.shape === ColliderShape.CAPSULE
+          ? "r=" + Math.round(geo.radius) + " h=" + Math.round(geo.halfHeight * 2)
+          : geo.shape === ColliderShape.TRIANGLE
+          ? "3pt"
           : Math.round(geo.halfWidth * 2) + "x" + Math.round(geo.halfHeight * 2);
       const label = new PIXI.Text((collider.isTrigger ? "Trigger " : "Collider ") + dims, {
         fontSize: 10,
         fill: color,
         fontFamily: "monospace",
       });
+      const labelTopOffset =
+        geo.shape === ColliderShape.CIRCLE
+          ? geo.radius
+          : geo.shape === ColliderShape.CAPSULE
+          ? geo.halfHeight + geo.radius
+          : geo.shape === ColliderShape.TRIANGLE
+          ? Math.max(...geo.worldPoints.map((p) => geo.centerY - p.y), 0)
+          : geo.halfHeight;
       label.x = geo.centerX + 6;
-      label.y = geo.centerY - (geo.shape === ColliderShape.CIRCLE ? geo.radius : geo.halfHeight) - 14;
+      label.y = geo.centerY - labelTopOffset - 14;
       container.addChild(label);
     }
   }

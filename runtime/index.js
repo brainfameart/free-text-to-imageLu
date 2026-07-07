@@ -14,6 +14,7 @@ import { World } from "./core/World.js";
 import { GameLoop } from "./core/GameLoop.js";
 import { ControllerSystem } from "./systems/ControllerSystem.js";
 import { PhysicsSystem } from "./systems/PhysicsSystem.js";
+import { AnimationSystem } from "./systems/AnimationSystem.js";
 import { RenderSystem } from "./systems/RenderSystem.js";
 import { LightingSystem } from "./systems/LightingSystem.js";
 import { loadSceneFromUrl, loadDefaultScene, validateScene } from "./scene/SceneLoader.js";
@@ -87,6 +88,12 @@ export function createGame({ pixiApp, followMainCamera = false }) {
   const controllerSystem = new ControllerSystem();
   world.addSystem(controllerSystem);
   world.addSystem(new PhysicsSystem());
+  // AnimationSystem runs AFTER physics (so a clip switch driven by a
+  // script reacting to this frame's physics state — e.g. "landed" —
+  // takes effect the same tick) but BEFORE RenderSystem, so the frame
+  // it just picked is what actually gets drawn this tick rather than
+  // lagging one frame behind.
+  world.addSystem(new AnimationSystem());
   world.addSystem(renderSystem);
   // LightingSystem is added AFTER RenderSystem and shares the exact
   // same container (gameContentContainer) so its GPU lighting filter

@@ -48,6 +48,24 @@ export function getSpriteAsset(key) {
   return _assets.get(key) || null;
 }
 
+/**
+ * Records a sprite asset catalogue entry for a texture that was
+ * registered some OTHER way than importSpriteFiles — specifically, used
+ * by editor/animation/AnimationImport.js for frames produced by
+ * slicing a sprite sheet or reading images out of a zip, where the
+ * texture is registered directly via AssetManager.registerTexture()
+ * (not loadImageAssetFromFile) because the pixel data comes from an
+ * in-memory canvas, not a raw File. Keeping this in the SAME catalogue
+ * (rather than a separate one) means animation frames show up in the
+ * Project panel's Sprites folder too, and the Animation panel can look
+ * up a frame's thumbnail by spriteKey through the one shared
+ * getSpriteAsset() everything else already uses.
+ * @param {{key:string,name:string,dataUrl:string,width:number,height:number}} record
+ */
+export function registerSpriteAsset(record) {
+  _assets.set(record.key, record);
+}
+
 function stripExtension(filename) {
   const i = filename.lastIndexOf(".");
   return i > 0 ? filename.slice(0, i) : filename;

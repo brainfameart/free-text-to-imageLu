@@ -12,11 +12,18 @@ import { Transform, TRANSFORM } from "../../runtime/components/Transform.js";
 import { CAMERA } from "../../runtime/components/Camera.js";
 import { SPRITE_RENDERER } from "../../runtime/components/SpriteRenderer.js";
 import { RIGIDBODY_2D, Rigidbody2D } from "../../runtime/components/Rigidbody2D.js";
-import { COLLIDER_2D, Collider2D } from "../../runtime/components/Collider2D.js";
+import { COLLIDER_2D, Collider2D, ColliderShape } from "../../runtime/components/Collider2D.js";
 import { CHARACTER_CONTROLLER, CharacterController } from "../../runtime/components/CharacterController.js";
 import { LIGHT, Light, LightType } from "../../runtime/components/Light.js";
 import { SHADOW_CASTER, ShadowCaster } from "../../runtime/components/ShadowCaster.js";
 import { LIGHTING_SETTINGS, LightingSettings } from "../../runtime/components/LightingSettings.js";
+import { SPRITE_ANIMATION, SpriteAnimation } from "../../runtime/components/SpriteAnimation.js";
+import { createEmptyClip } from "../panels/AnimationWindow.js";
+import {
+  importStandaloneImageFrames,
+  importZipImageFrames,
+  importSpriteSheetFrames,
+} from "../animation/AnimationImport.js";
 import { importSpriteFiles } from "../../runtime/assets/AssetRegistry.js";
 import { syncBackgroundColorLive, switchScene } from "../viewport/SceneViewport.js";
 
@@ -30,6 +37,7 @@ const COMPONENT_TYPE_MAP = {
   Light: LIGHT,
   ShadowCaster: SHADOW_CASTER,
   LightingSettings: LIGHTING_SETTINGS,
+  SpriteAnimation: SPRITE_ANIMATION,
 };
 
 const LIGHT_ENTITY_NAMES = {
@@ -102,12 +110,126 @@ export function attachEditorEvents(render, onTogglePlay) {
       }
       case "open-anim":
         editorState.animOpen = true;
+        // Reset panel-local UI state (not the actual clip DATA, which
+        // lives on the component) so re-opening the panel — possibly
+        // for a DIFFERENT entity than last time — doesn't show a stale
+        // "editing clip" id or preview frame from a previous session.
+        editorState.anim.editingClipId = null;
+        editorState.anim.previewFrameIndex = 0;
+        editorState.anim.previewPlaying = false;
+        editorState.anim.renamingClipId = null;
         render();
         break;
       case "close-anim":
         editorState.animOpen = false;
+        editorState.anim.previewPlaying = false;
         render();
         break;
+      case "anim-new-clip": {
+        const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
+        if (!entity) break;
+        let anim = entity.getComponent(SPRITE_ANIMATION);
+        if (!anim) {
+          anim = new SpriteAnimation();
+          entity.addComponent(SPRITE_ANIMATION, anim);
+        }
+        const clip = createEmptyClip(anim.clips.map((c) => c.name));
+        anim.clips.push(clip);
+        if (!anim.currentClipId) anim.currentClipId = clip.id;
+        editorState.anim.editingClipId = clip.id;
+        editorState.anim.previewFrameIndex = 0;
+        editorState.anim.previewPlaying = false;
+        pushLog("log", "Created animation clip '" + clip.name + "' on '" + entity.name + "'.");
+        render();
+        break;
+      }
+      case "anim-rename-clip": {
+        editorState.anim.renamingClipId = t.dataset.clipId;
+        render();
+        break;
+      }
+      case "anim-delete-clip": {
+        const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
+        const anim = entity && entity.getComponent(SPRITE_ANIMATION);
+        if (!anim) break;
+        const clipId = t.dataset.clipId;
+        const clip = anim.clips.find((c) => c.id === clipId);
+        anim.clips = anim.clips.filter((c) => c.id !== clipId);
+        if (anim.currentClipId === clipId) {
+          anim.currentClipId = anim.clips.length ? anim.clips[0].id : null;
+          anim.currentFrameIndex = 0;
+          anim.frameElapsed = 0;
+        }
+        if (editorState.anim.editingClipId === clipId) {
+          editorState.anim.editingClipId = null; // re-picked to the new first clip on next render
+          editorState.anim.previewFrameIndex = 0;
+        }
+        if (clip) pushLog("log", "Deleted animation clip '" + clip.name + "'.");
+        render();
+        break;
+      }
+      case "anim-preview-step": {
+        const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
+        const anim = entity && entity.getComponent(SPRITE_ANIMATION);
+        const clip = anim && anim.clips.find((c) => c.id === editorState.anim.editingClipId);
+        if (!clip || clip.frames.length === 0) break;
+        const dir = parseInt(t.dataset.dir, 10) || 1;
+        editorState.anim.previewFrameIndex =
+          (editorState.anim.previewFrameIndex + dir + clip.frames.length) % clip.frames.length;
+        render();
+        break;
+      }
+      case "anim-preview-toggle-play": {
+        editorState.anim.previewPlaying = !editorState.anim.previewPlaying;
+        render();
+        break;
+      }
+      case "anim-toggle-loop": {
+        const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
+        const anim = entity && entity.getComponent(SPRITE_ANIMATION);
+        const clip = anim && anim.clips.find((c) => c.id === editorState.anim.editingClipId);
+        if (clip) clip.loop = t.checked;
+        render();
+        break;
+      }
+      case "anim-toggle-collider-override": {
+        const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
+        const anim = entity && entity.getComponent(SPRITE_ANIMATION);
+        const clip = anim && anim.clips.find((c) => c.id === editorState.anim.editingClipId);
+        if (!clip) break;
+        if (t.checked) {
+          // Seed from the entity's OWN current Collider2D (if any) so
+          // the toggle starts from something visible/sensible, same
+          // reasoning as the Inspector's identical toggle in the
+          // "toggle-clip-collider-override" case above — kept as two
+          // separate cases (rather than merged) because this one reads
+          // editorState.anim.editingClipId (the panel's own concept of
+          // "which clip is open") while the Inspector's reads a
+          // data-clip-id straight off the clicked element; unifying
+          // them would require threading one convention into the
+          // other's caller for no real benefit.
+          const collider = entity.getComponent(COLLIDER_2D);
+          const seed = collider ? new Collider2D({ ...collider }) : new Collider2D();
+          clip.colliderOverride = { ...seed };
+        } else {
+          clip.colliderOverride = null;
+        }
+        render();
+        break;
+      }
+      case "anim-delete-frame": {
+        const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
+        const anim = entity && entity.getComponent(SPRITE_ANIMATION);
+        const clip = anim && anim.clips.find((c) => c.id === editorState.anim.editingClipId);
+        if (!clip) break;
+        const idx = parseInt(t.dataset.frameIndex, 10);
+        clip.frames.splice(idx, 1);
+        if (editorState.anim.previewFrameIndex >= clip.frames.length) {
+          editorState.anim.previewFrameIndex = Math.max(0, clip.frames.length - 1);
+        }
+        render();
+        break;
+      }
       case "tab-project":
         editorState.bottomTab = "project";
         render();
@@ -232,6 +354,11 @@ export function attachEditorEvents(render, onTogglePlay) {
             entity.addComponent(LIGHTING_SETTINGS, new LightingSettings());
             pushLog("log", "Added Lighting Settings to '" + entity.name + "'.");
           }
+        } else if (componentName === "SpriteAnimation") {
+          if (!entity.hasComponent(SPRITE_ANIMATION)) {
+            entity.addComponent(SPRITE_ANIMATION, new SpriteAnimation());
+            pushLog("log", "Added Sprite Animation to '" + entity.name + "'.");
+          }
         }
         render();
         break;
@@ -241,6 +368,26 @@ export function attachEditorEvents(render, onTogglePlay) {
         if (!entity) break;
         const componentType = COMPONENT_TYPE_MAP[t.dataset.component];
         if (componentType) entity.removeComponent(componentType);
+        render();
+        break;
+      }
+      case "toggle-clip-collider-override": {
+        const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
+        if (!entity) break;
+        const anim = entity.getComponent(SPRITE_ANIMATION);
+        const clip = anim && anim.clips.find((c) => c.id === t.dataset.clipId);
+        if (!clip) break;
+        if (t.checked) {
+          // Seed the override from the entity's OWN current Collider2D
+          // (if any) so turning the toggle on starts from something
+          // sensible/visible rather than a jarring default — falls back
+          // to a plain Box if the entity has no Collider2D at all yet.
+          const collider = entity.getComponent(COLLIDER_2D);
+          const seed = collider ? new Collider2D({ ...collider }) : new Collider2D();
+          clip.colliderOverride = { ...seed };
+        } else {
+          clip.colliderOverride = null;
+        }
         render();
         break;
       }
@@ -296,6 +443,14 @@ export function attachEditorEvents(render, onTogglePlay) {
         render();
       }
     }
+    if (e.target.dataset && e.target.dataset.action === "anim-rename-clip-input") {
+      if (e.key === "Enter") {
+        e.target.blur(); // triggers the focusout handler below, which commits + re-renders
+      } else if (e.key === "Escape") {
+        editorState.anim.renamingClipId = null;
+        render();
+      }
+    }
   });
 
   document.addEventListener("focusout", (e) => {
@@ -306,15 +461,79 @@ export function attachEditorEvents(render, onTogglePlay) {
       editorState.renamingSceneId = null;
       render();
     }
+    if (e.target.dataset && e.target.dataset.action === "anim-rename-clip-input") {
+      const clipId = e.target.dataset.clipId;
+      const value = e.target.dataset.pendingValue !== undefined ? e.target.dataset.pendingValue : e.target.value;
+      const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
+      const anim = entity && entity.getComponent(SPRITE_ANIMATION);
+      const clip = anim && anim.clips.find((c) => c.id === clipId);
+      if (clip && value.trim()) clip.name = value.trim();
+      editorState.anim.renamingClipId = null;
+      render();
+    }
   });
 
   document.addEventListener("dragstart", (e) => {
-    const t = e.target.closest('[data-action="drag-sprite-asset"]');
-    if (!t) return;
-    const key = t.dataset.spriteKey;
-    if (!key) return;
-    e.dataTransfer.setData("application/x-zengine-sprite-key", key);
-    e.dataTransfer.effectAllowed = "copy";
+    const spriteAssetTarget = e.target.closest('[data-action="drag-sprite-asset"]');
+    if (spriteAssetTarget) {
+      const key = spriteAssetTarget.dataset.spriteKey;
+      if (!key) return;
+      e.dataTransfer.setData("application/x-zengine-sprite-key", key);
+      e.dataTransfer.effectAllowed = "copy";
+      return;
+    }
+
+    const frameTarget = e.target.closest('[data-action="anim-frame-thumb"]');
+    if (frameTarget) {
+      const index = parseInt(frameTarget.dataset.frameIndex, 10);
+      editorState.anim.draggingFrameIndex = index;
+      e.dataTransfer.effectAllowed = "move";
+      // Firefox requires setData to be called for drag to actually
+      // start at all — the value itself isn't read on drop (the
+      // reorder reads editorState.anim.draggingFrameIndex instead,
+      // since that survives across the render() a full HTML rebuild
+      // would otherwise lose track of).
+      e.dataTransfer.setData("text/plain", String(index));
+    }
+  });
+
+  document.addEventListener("dragover", (e) => {
+    if (e.target.closest('[data-action="anim-frame-thumb"]')) {
+      e.preventDefault(); // required for drop to fire on this target at all
+      e.dataTransfer.dropEffect = "move";
+    }
+  });
+
+  document.addEventListener("drop", (e) => {
+    const target = e.target.closest('[data-action="anim-frame-thumb"]');
+    if (!target) return;
+    e.preventDefault();
+    const from = editorState.anim.draggingFrameIndex;
+    const to = parseInt(target.dataset.frameIndex, 10);
+    editorState.anim.draggingFrameIndex = null;
+    if (from === null || from === undefined || from === to) {
+      render();
+      return;
+    }
+    const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
+    const anim = entity && entity.getComponent(SPRITE_ANIMATION);
+    const clip = anim && anim.clips.find((c) => c.id === editorState.anim.editingClipId);
+    if (clip) {
+      const [moved] = clip.frames.splice(from, 1);
+      clip.frames.splice(to, 0, moved);
+    }
+    render();
+  });
+
+  document.addEventListener("dragend", (e) => {
+    if (e.target.closest('[data-action="anim-frame-thumb"]') && editorState.anim.draggingFrameIndex !== null) {
+      // Drop landed somewhere that wasn't a valid frame-thumb target
+      // (e.g. released outside the grid entirely) — clear the
+      // in-progress drag state so the panel doesn't get stuck showing
+      // a stale "dragging" highlight on the next render.
+      editorState.anim.draggingFrameIndex = null;
+      render();
+    }
   });
 
   document.addEventListener("input", (e) => {
@@ -333,6 +552,11 @@ export function attachEditorEvents(render, onTogglePlay) {
     if (e.target.dataset.action === "rename-scene-input") {
       // live-buffer only; committed on blur/Enter (see below) so a
       // full render() doesn't blow away the input mid-keystroke
+      e.target.dataset.pendingValue = e.target.value;
+      return;
+    }
+
+    if (e.target.dataset.action === "anim-rename-clip-input") {
       e.target.dataset.pendingValue = e.target.value;
       return;
     }
@@ -370,12 +594,123 @@ export function attachEditorEvents(render, onTogglePlay) {
       return;
     }
 
+    if (e.target.dataset.action === "anim-import-images" || e.target.dataset.action === "anim-import-zip") {
+      const files = e.target.files;
+      const isZip = e.target.dataset.action === "anim-import-zip";
+      const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
+      const anim = entity && entity.getComponent(SPRITE_ANIMATION);
+      const clip = anim && anim.clips.find((c) => c.id === editorState.anim.editingClipId);
+      if (files && files.length && clip) {
+        const importPromise = isZip ? importZipImageFrames(files[0]) : importStandaloneImageFrames(files);
+        importPromise
+          .then((frames) => {
+            clip.frames.push(...frames);
+            pushLog("log", "Added " + frames.length + " frame(s) to '" + clip.name + "'.");
+            render();
+          })
+          .catch((err) => {
+            pushLog("error", "Failed to import animation frames: " + err.message);
+            render();
+          });
+      }
+      e.target.value = "";
+      return;
+    }
+
+    if (e.target.dataset.action === "anim-import-sheet") {
+      const file = e.target.files && e.target.files[0];
+      const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
+      const anim = entity && entity.getComponent(SPRITE_ANIMATION);
+      const clip = anim && anim.clips.find((c) => c.id === editorState.anim.editingClipId);
+      if (file && clip) {
+        // Auto-detect first (see AnimationImport.js's _autoDetectSpriteRects
+        // doc) — the manual-grid override path is offered separately via
+        // the "Slice with custom grid…" prompt below rather than asked
+        // for up front every time, since auto-detect correctly handles
+        // the common padded-sheet case with zero extra input from the
+        // user, matching the "auto-detect as default, manual grid as
+        // override" behavior this feature was specifically built for.
+        importSpriteSheetFrames(file)
+          .then((frames) => {
+            if (frames.length <= 1) {
+              // Auto-detect found only a single region — almost
+              // certainly means the sheet has no transparent gutters
+              // for it to detect against, so offer the manual grid
+              // override immediately rather than silently importing
+              // what's very likely a wrong single-frame result.
+              const cols = parseInt(window.prompt("Auto-detect found only 1 frame. Enter number of COLUMNS for a manual grid slice (Cancel to keep 1 frame):", "4") || "", 10);
+              if (cols) {
+                const rowsInput = window.prompt("Number of ROWS:", "1");
+                const rows = parseInt(rowsInput || "1", 10) || 1;
+                importSpriteSheetFrames(file, { cols, rows })
+                  .then((gridFrames) => {
+                    clip.frames.push(...gridFrames);
+                    pushLog("log", "Sliced sheet into " + gridFrames.length + " frame(s) (" + cols + "x" + rows + " grid) for '" + clip.name + "'.");
+                    render();
+                  })
+                  .catch((err) => {
+                    pushLog("error", "Failed to slice sprite sheet: " + err.message);
+                    render();
+                  });
+                return;
+              }
+            }
+            clip.frames.push(...frames);
+            pushLog("log", "Sliced sheet into " + frames.length + " frame(s) (auto-detected) for '" + clip.name + "'.");
+            render();
+          })
+          .catch((err) => {
+            pushLog("error", "Failed to slice sprite sheet: " + err.message);
+            render();
+          });
+      }
+      e.target.value = "";
+      return;
+    }
+
     const field = e.target.dataset.field;
     if (field) {
       applyFieldChange(field, e.target);
       render();
     }
   });
+
+  // Animation panel preview playback: a small independent ticker (NOT
+  // tied to the game's own GameLoop/AnimationSystem — the panel needs
+  // to preview a clip's frames even while the game itself isn't
+  // running) that advances editorState.anim.previewFrameIndex at the
+  // EDITING clip's own fps whenever the panel is open and its preview
+  // "play" toggle is on. Mirrors the existing isPlaying/isPaused
+  // polling interval in main.js's boot(), same reasoning: something
+  // needs to keep calling render() on a timer for state that changes
+  // without any user input in between frames.
+  let _lastPreviewTick = performance.now();
+  setInterval(() => {
+    if (!editorState.animOpen || !editorState.anim.previewPlaying) {
+      _lastPreviewTick = performance.now();
+      return;
+    }
+    const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
+    const anim = entity && entity.getComponent(SPRITE_ANIMATION);
+    const clip = anim && anim.clips.find((c) => c.id === editorState.anim.editingClipId);
+    if (!clip || clip.frames.length === 0) return;
+
+    const now = performance.now();
+    const elapsedSec = (now - _lastPreviewTick) / 1000;
+    const secondsPerFrame = 1 / Math.max(0.1, clip.fps);
+    if (elapsedSec < secondsPerFrame) return;
+    _lastPreviewTick = now;
+
+    editorState.anim.previewFrameIndex = (editorState.anim.previewFrameIndex + 1) % clip.frames.length;
+    if (editorState.anim.previewFrameIndex === 0 && !clip.loop) {
+      // Reached the end of a non-looping clip — hold on the last
+      // frame and stop, matching AnimationSystem's own real-playback
+      // behavior for a non-looping clip (see AnimationSystem._advance).
+      editorState.anim.previewFrameIndex = clip.frames.length - 1;
+      editorState.anim.previewPlaying = false;
+    }
+    render();
+  }, 33); // ~30Hz poll is plenty for a UI preview; the fps gate above is what actually paces frame advances
 }
 
 /**
@@ -386,6 +721,67 @@ export function attachEditorEvents(render, onTogglePlay) {
 function applyFieldChange(field, inputEl) {
   const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
   if (!entity) return;
+
+  // SpriteAnimation has two field shapes the generic componentName.propName
+  // split below can't handle: "SpriteAnimation.currentClipName" (needs to
+  // resolve a clip NAME back to its stable id) and
+  // "SpriteAnimation.clipOverride.<clipId>.<prop>" (three dots, needs to
+  // reach into a specific clip's colliderOverride object). Handle both
+  // explicitly before falling through to the generic path everything else
+  // uses.
+  if (field.startsWith("SpriteAnimation.")) {
+    const anim = entity.getComponent(SPRITE_ANIMATION);
+    if (!anim) return;
+    const rest = field.slice("SpriteAnimation.".length);
+
+    if (rest === "currentClipName") {
+      const clip = anim.clips.find((c) => c.name === inputEl.value);
+      if (clip) anim.currentClipId = clip.id;
+      anim.currentFrameIndex = 0;
+      anim.frameElapsed = 0;
+      return;
+    }
+
+    // Distinct from currentClipName above: this is the Animation
+    // panel's OWN clip picker (editorState.anim.editingClipId) —
+    // switching which clip you're EDITING/previewing in the panel must
+    // NOT also change which clip is actually PLAYING in gameplay/the
+    // Inspector; those are intentionally independent (see the doc
+    // comment on editorState.anim.editingClipId in EditorState.js).
+    if (rest === "editingClipName") {
+      const clip = anim.clips.find((c) => c.name === inputEl.value);
+      if (clip) {
+        editorState.anim.editingClipId = clip.id;
+        editorState.anim.previewFrameIndex = 0;
+        editorState.anim.previewPlaying = false;
+      }
+      return;
+    }
+
+    if (rest === "speed") {
+      anim.speed = parseFloat(inputEl.value) || 0;
+      return;
+    }
+
+    const fpsMatch = rest.match(/^clipFps\.(.+)$/);
+    if (fpsMatch) {
+      const clip = anim.clips.find((c) => c.id === fpsMatch[1]);
+      if (clip) clip.fps = Math.max(0.1, parseFloat(inputEl.value) || 12);
+      return;
+    }
+
+    const overrideMatch = rest.match(/^clipOverride\.([^.]+)\.(.+)$/);
+    if (overrideMatch) {
+      const [, clipId, prop] = overrideMatch;
+      const clip = anim.clips.find((c) => c.id === clipId);
+      if (!clip || !clip.colliderOverride) return;
+      const value =
+        inputEl.type === "checkbox" ? inputEl.checked : inputEl.type === "number" ? parseFloat(inputEl.value) || 0 : inputEl.value;
+      clip.colliderOverride[prop] = value;
+      return;
+    }
+    return;
+  }
 
   const [componentName, propName] = field.split(".");
   const componentType = COMPONENT_TYPE_MAP[componentName];

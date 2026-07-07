@@ -20,11 +20,13 @@ import { ViewportCamera } from "./ViewportCamera.js";
 import { drawSceneGrid } from "./SceneGrid.js";
 import { drawCameraGizmo } from "./CameraGizmo.js";
 import { drawColliderGizmo } from "./ColliderGizmo.js";
+import { TriangleColliderGizmo } from "./TriangleColliderGizmo.js";
 import { drawLightGizmo, hitTestLightGizmo } from "./LightGizmo.js";
 import { TransformGizmo } from "./TransformGizmo.js";
 import { editorState, pushLog } from "../state/EditorState.js";
 import { attachPixiDiagnostics } from "../state/ConsoleCapture.js";
 import { TRANSFORM, Transform } from "../../runtime/components/Transform.js";
+import { COLLIDER_2D } from "../../runtime/components/Collider2D.js";
 import { SPRITE_RENDERER, SpriteRenderer } from "../../runtime/components/SpriteRenderer.js";
 import { CAMERA } from "../../runtime/components/Camera.js";
 import { RenderSystem } from "../../runtime/systems/RenderSystem.js";
@@ -38,6 +40,7 @@ let cameraGizmoContainer = null;
 let colliderGizmoContainer = null;
 let lightGizmoContainer = null;
 let transformGizmo = null;
+let triangleColliderGizmo = null;
 let game = null;
 let renderFn = null;
 let renderSystem = null;
@@ -150,6 +153,7 @@ function createViewport(mount, render) {
   drawSceneGrid(gridContainer);
 
   transformGizmo = new TransformGizmo(gizmoContainer);
+  triangleColliderGizmo = new TriangleColliderGizmo(gizmoContainer);
 
   viewportCamera = new ViewportCamera(pixiApp, pixiApp.stage);
   viewportCamera.onZoomChange((percent) => {
@@ -216,6 +220,31 @@ function attachGizmoPointerEvents(mount) {
     const tool = editorState.activeTool;
     if (e.button !== 0) return; // selection/gizmo only responds to left click
 
+    // Triangle collider vertex handles take priority over the
+    // translate/scale/rotate gizmo when both are visually present —
+    // they're small, precise targets that would otherwise often lose
+    // to the bigger transform gizmo's hit region at the same spot.
+    // Checked regardless of activeTool (same as the transform gizmo's
+    // own translate/scale/rotate gating below still applies to IT, but
+    // reshaping a collider is its own direct-manipulation mode, not
+    // tied to a toolbar tool).
+    {
+      const world = clientToWorld(e.clientX, e.clientY);
+      const selected = editorState.world ? editorState.world.getEntity(editorState.selectedId) : null;
+      const transform = selected ? selected.getComponent(TRANSFORM) : null;
+      const collider = selected ? selected.getComponent(COLLIDER_2D) : null;
+      if (transform && collider) {
+        const vertexIndex = triangleColliderGizmo.hitTest(world.x, world.y);
+        if (vertexIndex !== null) {
+          triangleColliderGizmo.beginDrag(vertexIndex, transform);
+          try { el.setPointerCapture(e.pointerId); } catch (err) {}
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+      }
+    }
+
     // Gizmo dragging is exclusive to translate/scale/rotate — but
     // click-to-select on a sprite should work no matter which tool is
     // active (including "pan"), same as every other editor. This used
@@ -260,6 +289,17 @@ function attachGizmoPointerEvents(mount) {
   });
 
   el.addEventListener("pointermove", (e) => {
+    if (triangleColliderGizmo.isDragging()) {
+      const selected = editorState.world ? editorState.world.getEntity(editorState.selectedId) : null;
+      const collider = selected ? selected.getComponent(COLLIDER_2D) : null;
+      if (!collider) return;
+      const world = clientToWorld(e.clientX, e.clientY);
+      triangleColliderGizmo.updateDrag(world.x, world.y, collider);
+      syncSpriteRender();
+      refreshGizmos();
+      return;
+    }
+
     if (!transformGizmo.isDragging()) return;
     const selected = editorState.world ? editorState.world.getEntity(editorState.selectedId) : null;
     const transform = selected ? selected.getComponent(TRANSFORM) : null;
@@ -272,6 +312,12 @@ function attachGizmoPointerEvents(mount) {
   });
 
   const endDrag = (e) => {
+    if (triangleColliderGizmo.isDragging()) {
+      triangleColliderGizmo.endDrag();
+      try { el.releasePointerCapture(e.pointerId); } catch (err) {}
+      if (renderFn) renderFn();
+      return;
+    }
     if (!transformGizmo.isDragging()) return;
     transformGizmo.endDrag();
     try { el.releasePointerCapture(e.pointerId); } catch (err) {}
@@ -405,6 +451,8 @@ function syncBackgroundColor() {
 function refreshGizmos() {
   const selected = editorState.world ? editorState.world.getEntity(editorState.selectedId) : null;
   transformGizmo.draw(selected);
+  const selectedCollider = selected ? selected.getComponent(COLLIDER_2D) : null;
+  triangleColliderGizmo.draw(selected, selectedCollider);
   drawCameraGizmo(cameraGizmoContainer, editorState.world);
   drawColliderGizmo(colliderGizmoContainer, editorState.world, editorState.selectedId);
   drawLightGizmo(lightGizmoContainer, editorState.world, editorState.selectedId, _worldPerPixel());

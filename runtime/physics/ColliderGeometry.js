@@ -56,6 +56,39 @@ export function getColliderWorldGeometry(collider, transform) {
     return { shape: ColliderShape.CIRCLE, centerX, centerY, radius, rotationDeg };
   }
 
+  if (collider.shape === ColliderShape.CAPSULE) {
+    // Capsule scales like a box: halfHeight follows Y scale, radius
+    // follows the larger of the two axes (same convention CIRCLE uses
+    // above) so a non-uniform scale doesn't produce a squashed capsule
+    // Rapier can't actually represent (Rapier's capsule radius is a
+    // single scalar, it can't be elliptical).
+    const halfHeight = collider.capsuleHalfHeight * Math.abs(transform.scaleY);
+    const radius = collider.capsuleRadius * Math.max(Math.abs(transform.scaleX), Math.abs(transform.scaleY));
+    return { shape: ColliderShape.CAPSULE, centerX, centerY, halfHeight, radius, rotationDeg };
+  }
+
+  if (collider.shape === ColliderShape.TRIANGLE) {
+    // Rapier's ColliderDesc.triangle(a, b, c) takes points in the
+    // collider's LOCAL space and applies the parent body's rotation
+    // itself — so the "local" points here are only scaled, NOT
+    // rotated (rotating them here too would double-rotate once Rapier
+    // also applies the body's rotation). We still also hand back
+    // ROTATED, translated worldPoints for ColliderGizmo, which draws
+    // directly in world space and has no separate rotation step of its
+    // own to rely on.
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+    const localPoints = collider.trianglePoints.map((p) => ({
+      x: p.x * transform.scaleX,
+      y: p.y * transform.scaleY,
+    }));
+    const worldPoints = localPoints.map((p) => ({
+      x: centerX + (p.x * cos - p.y * sin),
+      y: centerY + (p.x * sin + p.y * cos),
+    }));
+    return { shape: ColliderShape.TRIANGLE, centerX, centerY, localPoints, worldPoints, rotationDeg };
+  }
+
   const halfWidth = (collider.width * Math.abs(transform.scaleX)) / 2;
   const halfHeight = (collider.height * Math.abs(transform.scaleY)) / 2;
   return { shape: ColliderShape.BOX, centerX, centerY, halfWidth, halfHeight, rotationDeg };

@@ -387,6 +387,9 @@ export class PhysicsWorld {
       geo.halfWidth,
       geo.halfHeight,
       geo.radius,
+      collider.capsuleRadius,
+      collider.capsuleHalfHeight,
+      collider.trianglePoints,
       collider.offsetX,
       collider.offsetY,
       collider.isTrigger,
@@ -412,6 +415,19 @@ export class PhysicsWorld {
     let desc;
     if (geo.shape === ColliderShape.CIRCLE) {
       desc = RAPIER.ColliderDesc.ball(Math.max(0.01, geo.radius));
+    } else if (geo.shape === ColliderShape.CAPSULE) {
+      desc = RAPIER.ColliderDesc.capsule(Math.max(0.01, geo.halfHeight), Math.max(0.01, geo.radius));
+    } else if (geo.shape === ColliderShape.TRIANGLE) {
+      // geo.localPoints are already scaled but NOT rotated/translated —
+      // Rapier applies the parent body's rotation to them itself, and
+      // .setTranslation() below applies the offset, exactly matching
+      // how BOX/CIRCLE/CAPSULE already handle offset+rotation.
+      const [a, b, c] = geo.localPoints;
+      desc = RAPIER.ColliderDesc.triangle(
+        { x: a.x, y: a.y },
+        { x: b.x, y: b.y },
+        { x: c.x, y: c.y }
+      );
     } else {
       desc = RAPIER.ColliderDesc.cuboid(Math.max(0.01, geo.halfWidth), Math.max(0.01, geo.halfHeight));
     }

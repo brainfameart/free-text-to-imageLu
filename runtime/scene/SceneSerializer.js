@@ -17,6 +17,7 @@ import { Light, LIGHT } from "../components/Light.js";
 import { ShadowCaster, SHADOW_CASTER } from "../components/ShadowCaster.js";
 import { CharacterController, CHARACTER_CONTROLLER } from "../components/CharacterController.js";
 import { LightingSettings, LIGHTING_SETTINGS } from "../components/LightingSettings.js";
+import { SpriteAnimation, SPRITE_ANIMATION } from "../components/SpriteAnimation.js";
 
 const COMPONENT_REGISTRY = {
   [TRANSFORM]: Transform,
@@ -28,6 +29,7 @@ const COMPONENT_REGISTRY = {
   [SHADOW_CASTER]: ShadowCaster,
   [CHARACTER_CONTROLLER]: CharacterController,
   [LIGHTING_SETTINGS]: LightingSettings,
+  [SPRITE_ANIMATION]: SpriteAnimation,
 };
 
 /**

@@ -19,6 +19,7 @@ import { CHARACTER_CONTROLLER, ControllerType } from "../../runtime/components/C
 import { LIGHT, LightType } from "../../runtime/components/Light.js";
 import { SHADOW_CASTER } from "../../runtime/components/ShadowCaster.js";
 import { LIGHTING_SETTINGS } from "../../runtime/components/LightingSettings.js";
+import { SPRITE_ANIMATION } from "../../runtime/components/SpriteAnimation.js";
 import { ShadowMode } from "../../runtime/systems/LightingQuality.js";
 import { getCameraResolution } from "../../runtime/core/CameraUtils.js";
 import { getSpriteAsset } from "../../runtime/assets/AssetRegistry.js";
@@ -333,6 +334,79 @@ export function renderInspector() {
     );
   }
 
+  const spriteAnimation = entity.getComponent(SPRITE_ANIMATION);
+  if (spriteAnimation) {
+    const currentClip = spriteAnimation.clips.find((c) => c.id === spriteAnimation.currentClipId) || null;
+    const clipOptions = spriteAnimation.clips.map((c) => c.name);
+
+    let overrideHtml = "";
+    if (currentClip) {
+      const ov = currentClip.colliderOverride;
+      overrideHtml =
+        row(
+          "Collider Override",
+          '<input type="checkbox" data-action="toggle-clip-collider-override" data-clip-id="' +
+            currentClip.id +
+            '" style="accent-color:#2C5D87;margin:0;"' +
+            (ov ? " checked" : "") +
+            "/>"
+        ) +
+        '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
+        "When on, THIS clip uses its own collision shape while playing — other clips (or turning this off) leave the entity's main Collider2D shape above untouched." +
+        "</div>";
+
+      if (ov) {
+        overrideHtml +=
+          row(
+            "Shape",
+            dropdownInput(Object.values(ColliderShape), ov.shape, "SpriteAnimation.clipOverride." + currentClip.id + ".shape")
+          ) +
+          (ov.shape === ColliderShape.CIRCLE
+            ? row("Radius", numInput("", ov.radius, "SpriteAnimation.clipOverride." + currentClip.id + ".radius"))
+            : ov.shape === ColliderShape.CAPSULE
+            ? row(
+                "Size",
+                '<div style="display:flex;gap:4px;width:100%;">' +
+                  numInput("Half H", ov.capsuleHalfHeight, "SpriteAnimation.clipOverride." + currentClip.id + ".capsuleHalfHeight") +
+                  numInput("Radius", ov.capsuleRadius, "SpriteAnimation.clipOverride." + currentClip.id + ".capsuleRadius") +
+                  "</div>"
+              )
+            : ov.shape === ColliderShape.TRIANGLE
+            ? '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
+              "Open this clip in the Animation panel to edit its triangle points."
+              + "</div>"
+            : row(
+                "Size",
+                '<div style="display:flex;gap:4px;width:100%;">' +
+                  numInput("W", ov.width, "SpriteAnimation.clipOverride." + currentClip.id + ".width") +
+                  numInput("H", ov.height, "SpriteAnimation.clipOverride." + currentClip.id + ".height") +
+                  "</div>"
+              ));
+      }
+    }
+
+    body += section(
+      editorState.sectionsOpen,
+      "spriteanimation",
+      "Sprite Animation",
+      "film",
+      (spriteAnimation.clips.length
+        ? row("Clip", dropdownInput(clipOptions, currentClip ? currentClip.name : "", "SpriteAnimation.currentClipName")) +
+          row(
+            "Speed",
+            numInput("", spriteAnimation.speed, "SpriteAnimation.speed")
+          ) +
+          overrideHtml
+        : '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
+          "No clips yet — open the Animation panel to import frames and create one." +
+          "</div>") +
+        '<button class="anim-open-btn" data-action="open-anim" style="margin-top:6px;width:100%;">' +
+        icon("film", 12) +
+        " Open Animation Editor</button>" +
+        '<button class="removecomp-btn" data-action="remove-component" data-component="SpriteAnimation" style="margin-top:6px;">Remove Component</button>'
+    );
+  }
+
   const rigidbody = entity.getComponent(RIGIDBODY_2D);
   if (rigidbody) {
     let bodyTypeFieldsHtml = "";
@@ -401,6 +475,20 @@ export function renderInspector() {
     const shapeFieldsHtml =
       collider.shape === ColliderShape.CIRCLE
         ? row("Radius", numInput("", collider.radius, "Collider2D.radius"))
+        : collider.shape === ColliderShape.CAPSULE
+        ? row(
+            "Size",
+            '<div style="display:flex;gap:4px;width:100%;">' +
+              numInput("Half H", collider.capsuleHalfHeight, "Collider2D.capsuleHalfHeight") +
+              numInput("Radius", collider.capsuleRadius, "Collider2D.capsuleRadius") +
+              "</div>"
+          )
+        : collider.shape === ColliderShape.TRIANGLE
+        ? row(
+            "Points",
+            '<div style="color:#888;font-size:11px;line-height:1.4;">Drag the 3 yellow handles ' +
+              "directly in the Scene view to reshape.</div>"
+          )
         : row(
             "Size",
             '<div style="display:flex;gap:4px;width:100%;">' +
@@ -512,6 +600,7 @@ export function renderInspector() {
     !rigidbody && { name: "Rigidbody2D", label: "Rigidbody 2D" },
     !collider && { name: "Collider2D", label: "Collider 2D" },
     !controller && { name: "CharacterController", label: "Movement Type" },
+    !spriteAnimation && { name: "SpriteAnimation", label: "Sprite Animation" },
     !light && { name: "Light", label: "Light" },
     !shadowCaster && { name: "ShadowCaster", label: "Shadow Caster" },
     !lightingSettings && { name: "LightingSettings", label: "Lighting Settings" },

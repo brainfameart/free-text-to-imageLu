@@ -20,6 +20,8 @@ export const COLLIDER_2D = "Collider2D";
 export const ColliderShape = Object.freeze({
   BOX: "Box",
   CIRCLE: "Circle",
+  CAPSULE: "Capsule",
+  TRIANGLE: "Triangle",
 });
 
 export class Collider2D {
@@ -28,6 +30,22 @@ export class Collider2D {
     width = 1,
     height = 1,
     radius = 0.5,
+    // Capsule: a "stadium" shape (rectangle with semicircle caps) —
+    // matches Rapier's ColliderDesc.capsule(halfHeight, radius), whose
+    // principal axis is Y (i.e. it's a vertical pill by default, the
+    // conventional orientation for a 2D character collider).
+    capsuleHalfHeight = 0.5,
+    capsuleRadius = 0.3,
+    // Triangle: 3 points in the entity's LOCAL space (same space as
+    // offsetX/offsetY), user-editable via 3 draggable gizmo handles.
+    // Stored as a flat default so a fresh Triangle collider is a
+    // sensible small right-triangle rather than 3 coincident points
+    // (which Rapier would reject as a degenerate/zero-area shape).
+    trianglePoints = [
+      { x: -0.5, y: 0.5 },
+      { x: 0.5, y: 0.5 },
+      { x: 0, y: -0.5 },
+    ],
     offsetX = 0,
     offsetY = 0,
     isTrigger = false,
@@ -41,6 +59,12 @@ export class Collider2D {
     this.height = height;
     // Circle
     this.radius = radius;
+    // Capsule
+    this.capsuleHalfHeight = capsuleHalfHeight;
+    this.capsuleRadius = capsuleRadius;
+    // Triangle — deep-copy so distinct Collider2D instances never share
+    // point objects by accident (e.g. via spread/default-arg reuse)
+    this.trianglePoints = trianglePoints.map((p) => ({ x: p.x, y: p.y }));
     // Shared
     this.offsetX = offsetX;
     this.offsetY = offsetY;
