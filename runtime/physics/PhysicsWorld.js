@@ -26,6 +26,46 @@ import { TRANSFORM } from "../components/Transform.js";
 import { RIGIDBODY_2D, BodyType } from "../components/Rigidbody2D.js";
 import { COLLIDER_2D, ColliderShape } from "../components/Collider2D.js";
 import { getColliderWorldGeometry } from "./ColliderGeometry.js";
+
+/**
+ * Rough world-space area (px^2) of a Collider2D's shape, used ONLY to
+ * put a Kinematic body's "Push Mass" (Rigidbody2D.mass — a bare,
+ * user-typed number with no inherent unit) onto the SAME physical
+ * scale as a Dynamic body's real Rapier mass (density * area). Without
+ * this, comparing Push Mass directly against another body's density-
+ * derived mass is comparing two different unit systems — e.g. a
+ * "Push Mass" of 10,000 against a 100x100px, density-400 box (real
+ * mass ~400 in Rapier's own units, area ~1 in length-unit-scaled m^2)
+ * looks like it SHOULD dominate completely, but the raw numbers
+ * 10000 vs 400 don't actually mean anything physically comparable
+ * until both are run through the same density*area formula — which is
+ * exactly why dynamic-vs-dynamic pushes already felt intuitive
+ * (Rapier computes both sides identically) while kinematic-vs-dynamic
+ * didn't (one side was a free-floating number, the other was a real
+ * physical quantity).
+ *
+ * Matches Rapier's own area formulas closely enough for this
+ * comparative-only purpose (doesn't need to be exact to the pixel):
+ * Box: width*height. Circle: pi*r^2. Capsule: rectangle + two half-
+ * circle caps = (2*radius * 2*halfHeight) + (pi*radius^2). Triangle:
+ * shoelace formula on its three local points.
+ */
+function estimateColliderArea(collider, transform) {
+  const geo = getColliderWorldGeometry(collider, transform);
+  switch (geo.shape) {
+    case ColliderShape.CIRCLE:
+      return Math.PI * geo.radius * geo.radius;
+    case ColliderShape.CAPSULE:
+      return 2 * geo.radius * (2 * geo.halfHeight) + Math.PI * geo.radius * geo.radius;
+    case ColliderShape.TRIANGLE: {
+      const [a, b, c] = geo.localPoints;
+      return Math.abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) / 2;
+    }
+    case ColliderShape.BOX:
+    default:
+      return geo.halfWidth * 2 * (geo.halfHeight * 2);
+  }
+}
 import { loadRapier } from "./RapierLoader.js";
 
 const GRAVITY_Y = 980; // px/s^2 downward — same constant the old stub integrator used
@@ -318,7 +358,7 @@ export class PhysicsWorld {
     this._syncCollider(handle, collider, transform);
 
     if (rb && effectiveBodyType === BodyType.KINEMATIC) {
-      this._syncKinematicMovement(handle, rb, dt);
+      this._syncKinematicMovement(handle, rb, collider, transform, dt);
     }
   }
 
@@ -356,7 +396,7 @@ export class PhysicsWorld {
    * behavior the person asked for — "push dynamic bodies based on
    * where they're moving" — regardless of the offset-gap timing issue.
    */
-  _syncKinematicMovement(handle, rb, dt) {
+  _syncKinematicMovement(handle, rb, collider, transform, dt) {
     if (!handle.collider) return; // no collider yet (created same frame) — nothing to sweep
 
     // Use this body's own Rigidbody2D.mass as the character mass for
@@ -375,7 +415,7 @@ export class PhysicsWorld {
     const corrected = this._characterController.computedMovement();
     const grounded = this._characterController.computedGrounded();
 
-    const onlyDynamicBlocking = this._bulldozeDynamicBodies(handle, rb, desiredX, desiredY, dt);
+    const onlyDynamicBlocking = this._bulldozeDynamicBodies(handle, rb, collider, transform, desiredX, desiredY, dt);
 
     // If everything currently touching the sweep is a Dynamic body the
     // bulldozer push just handled (no static/kinematic obstruction is
@@ -469,12 +509,14 @@ export class PhysicsWorld {
    * throwing and breaking physics entirely.
    *
    * @param {{body:object,collider:object}} handle the kinematic's own handle
-   * @param {import('../components/Rigidbody2D.js').Rigidbody2D} rb kinematic's own Rigidbody2D (for mass + speed)
+   * @param {import('../components/Rigidbody2D.js').Rigidbody2D} rb kinematic's own Rigidbody2D (for Push Mass + speed)
+   * @param {import('../components/Collider2D.js').Collider2D} collider kinematic's own Collider2D (for area, to scale Push Mass into a density-equivalent unit)
+   * @param {import('../components/Transform.js').Transform} transform kinematic's own Transform (world-space scale affects collider area)
    * @param {number} desiredX raw requested displacement this frame (px), i.e. rb.velocityX * dt, BEFORE the controller's own blocking/sliding correction
    * @param {number} desiredY same, Y axis
    * @param {number} dt
    */
-  _bulldozeDynamicBodies(handle, rb, desiredX, desiredY, dt) {
+  _bulldozeDynamicBodies(handle, rb, collider, transform, desiredX, desiredY, dt) {
     if (dt <= 0) return false;
 
     const speed = Math.hypot(desiredX, desiredY) / dt; // px/s, the kinematic's actual travel speed this frame
@@ -545,31 +587,51 @@ export class PhysicsWorld {
       // heavier dynamic body at full speed — but a LIGHT dynamic body
       // should be able to get shoved FASTER than the kinematic's own
       // travel speed (a bowling ball rolling into a pebble sends the
-      // pebble flying faster than the ball itself is moving; the old
-      // `Math.min(1, ratio)` cap made pushSpeed <= speed ALWAYS, no
-      // matter how extreme the mass difference — a 10:1 mass ratio
-      // behaved identically to a 1:1 ratio, which is why pushes felt
-      // weak/flat regardless of how light the target was).
-      // otherBody.mass() is Rapier's own computed mass — normally
-      // density * colliderArea (Collider2D.density, the Inspector's
-      // real per-object mass knob for Dynamic bodies), or density*area
-      // PLUS an explicit additional-mass override if the person set
-      // Rigidbody2D.mass away from its default (see the
-      // hasExplicitMassOverride check in _syncEntity above).
-      const pusherMass = Math.max(0.0001, rb.mass);
+      // pebble flying faster than the ball itself is moving).
+      //
+      // UNITS FIX: Rigidbody2D.mass on a Kinematic body ("Push Mass" in
+      // the Inspector) used to be compared directly against
+      // otherBody.mass() as if they were the same unit — they weren't.
+      // A Dynamic body's real Rapier mass is density * colliderArea, so
+      // even a modest density (e.g. 400) on a normal-sized collider
+      // produces a real mass in the hundreds, while "Push Mass" was a
+      // bare typed number with no area factored in at all — so a push
+      // mass of 10,000 against a real mass of ~400 LOOKED like it
+      // should completely dominate, but the two numbers were never on
+      // comparable footing to begin with (this is why the person's
+      // "10,000 barely did anything" case was actually the multiplier
+      // cap below silently kicking in, not the mass math itself being
+      // wrong). Fix: treat "Push Mass" as a density-equivalent value —
+      // multiply it by the kinematic's OWN collider area
+      // (estimateColliderArea, same shape-area formulas Rapier itself
+      // effectively uses) so pusherMass is expressed in the exact same
+      // physical unit as targetMass. Now a density-equivalent
+      // comparison against a real Dynamic body's density*area mass
+      // means what it looks like it means, the same way comparing two
+      // Dynamic bodies' densities already does.
+      const pusherArea = Math.max(0.0001, estimateColliderArea(collider, transform));
+      const pusherMass = Math.max(0.0001, rb.mass * pusherArea);
       const targetMass = Math.max(0.0001, otherBody.mass());
-      // Uncapped ratio: >1 when the target is lighter than the
-      // pusher (→ pushed faster than the pusher's own speed), <1 when
-      // heavier (→ pushed slower / barely moved), exactly 1 at equal
-      // mass. MAX_PUSH_MULTIPLIER is a sanity ceiling only — it exists
-      // so an extreme mass mismatch (e.g. density 0.001 dust mote)
-      // can't fling a target at physically-absurd, solver-destabilizing
-      // speed; it is NOT the "same speed as pusher" cap the old code
-      // effectively enforced.
-      const MAX_PUSH_MULTIPLIER = 6; // target can be shoved up to 6x the pusher's own speed
-      const massRatio = Math.min(MAX_PUSH_MULTIPLIER, pusherMass / targetMass);
+      // Uncapped ratio: >1 when the target is lighter than the pusher
+      // (pushed faster than the pusher's own speed), <1 when heavier
+      // (pushed slower), 1 at equal mass. No artificial ceiling now
+      // that both sides are genuinely the same physical unit — a real
+      // mass mismatch (this is the whole point of exposing Push Mass)
+      // should be able to produce a dramatic, obviously-different
+      // result, the same way two Dynamic bodies of very different
+      // density already do.
+      const massRatio = pusherMass / targetMass;
 
       const pushSpeed = speed * massRatio;
+      // Absolute (not ratio) safety clamp: even with a legitimate,
+      // extreme mass mismatch, don't hand Rapier's solver a velocity
+      // so large it risks tunneling/instability in one step. This is
+      // set far above any normal gameplay speed so it only engages at
+      // genuinely extreme values — it should never be the thing
+      // limiting an ordinary "heavy kinematic pushes light box"
+      // interaction.
+      const MAX_PUSH_SPEED = 20000; // px/s
+      const clampedPushSpeed = Math.min(MAX_PUSH_SPEED, pushSpeed);
 
       // Set velocity along the kinematic's OWN travel direction — this
       // is the actual fix for "pushes along contact normal, not travel
@@ -580,8 +642,8 @@ export class PhysicsWorld {
       // horizontal) is left alone so this doesn't fight gravity or
       // cancel out unrelated motion on the other axis.
       const current = otherBody.linvel();
-      const nextX = Math.abs(dirX) > 0.001 ? dirX * pushSpeed : current.x;
-      const nextY = Math.abs(dirY) > 0.001 ? dirY * pushSpeed : current.y;
+      const nextX = Math.abs(dirX) > 0.001 ? dirX * clampedPushSpeed : current.x;
+      const nextY = Math.abs(dirY) > 0.001 ? dirY * clampedPushSpeed : current.y;
       otherBody.setLinvel({ x: nextX, y: nextY }, true);
       otherBody.wakeUp();
     }
