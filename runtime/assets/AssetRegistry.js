@@ -58,6 +58,22 @@ export function getAllSpriteAssets() {
   return Array.from(_assets.values());
 }
 
+/**
+ * Same idea as getAllSpriteAssets(), but for the separate _frameAssets
+ * catalogue (animation frames — see registerFrameAsset()'s doc comment
+ * for why they're kept apart from _assets). Needed anywhere that must
+ * rebuild EVERY registered texture from its dataUrl, not just the ones
+ * the Project panel's Sprites folder shows — e.g. PlayWindow.js's popup
+ * payload, which boots a completely separate module realm with an empty
+ * texture cache and has to re-register every image byte-for-byte before
+ * loading the scene, or animation frames resolve to the pink/black
+ * missing-texture placeholder in Play mode even though they render fine
+ * in the editor (where the textures were already decoded once already).
+ */
+export function getAllFrameAssets() {
+  return Array.from(_frameAssets.values());
+}
+
 export function getSpriteAsset(key) {
   return _assets.get(key) || _frameAssets.get(key) || null;
 }
