@@ -375,7 +375,27 @@ export class PhysicsWorld {
     const corrected = this._characterController.computedMovement();
     const grounded = this._characterController.computedGrounded();
 
-    this._bulldozeDynamicBodies(handle, rb, desiredX, desiredY, dt);
+    const onlyDynamicBlocking = this._bulldozeDynamicBodies(handle, rb, desiredX, desiredY, dt);
+
+    // If everything currently touching the sweep is a Dynamic body the
+    // bulldozer push just handled (no static/kinematic obstruction is
+    // involved), don't let the controller's "corrected" (blocked/
+    // reduced) movement stand in for the kinematic's own reported
+    // velocity below — that reduction only exists because the sweep
+    // treats the dynamic body as an obstacle for ITS OWN movement
+    // calculation, but the bulldozer push already resolves that contact
+    // by moving the dynamic body out of the way instead. Without this,
+    // rb.velocityX/Y would erode every single frame the kinematic is in
+    // contact with something it's actively pushing, even though nothing
+    // ever told it to slow down — a real, reproducible bug (the
+    // kinematic visibly loses speed mid-push).
+    // Real obstructions (static walls, other kinematics) are NOT
+    // affected by this — onlyDynamicBlocking is false whenever a
+    // non-dynamic body is also part of the contact, so `corrected`
+    // still correctly reflects being blocked/slid in that case.
+    const effectiveCorrected = onlyDynamicBlocking
+      ? { x: desiredX, y: desiredY }
+      : corrected;
 
     const current = handle.body.translation();
     handle.body.setNextKinematicTranslation({
@@ -388,12 +408,20 @@ export class PhysicsWorld {
       handle.body.setNextKinematicRotation(currentRotation + rb.angularVelocity * dt);
     }
 
-    // Report back the ACTUAL (possibly blocked/slid) velocity, not the
-    // requested one, so gameplay code (grounded checks, animation
-    // blending, etc — e.g. ControllerSystem's grounded epsilon check)
-    // sees what really happened this step rather than raw input intent.
-    rb.velocityX = dt > 0 ? corrected.x / dt : 0;
-    rb.velocityY = dt > 0 ? corrected.y / dt : 0;
+    // Report back velocity: normally the ACTUAL (possibly blocked/slid)
+    // corrected velocity, not the requested one, so gameplay code
+    // (grounded checks, animation blending, ControllerSystem's
+    // acceleration lerp) sees what really happened this step rather
+    // than raw input intent — this is what lets a kinematic correctly
+    // slow down/stop when it hits a REAL obstruction (a static wall or
+    // another kinematic). But when the ONLY thing touched this frame
+    // was a Dynamic body the bulldozer push already handled,
+    // effectiveCorrected substitutes the requested desiredX/Y instead —
+    // otherwise the kinematic's own reported speed erodes every frame
+    // it's in contact with something it's actively pushing, even
+    // though nothing ever told it to slow down.
+    rb.velocityX = dt > 0 ? effectiveCorrected.x / dt : 0;
+    rb.velocityY = dt > 0 ? effectiveCorrected.y / dt : 0;
     // Real sweep-based grounded state (see the field's doc in
     // Rigidbody2D.js) — this is what ControllerSystem should check
     // instead of guessing from a velocity epsilon, which is what
@@ -447,10 +475,10 @@ export class PhysicsWorld {
    * @param {number} dt
    */
   _bulldozeDynamicBodies(handle, rb, desiredX, desiredY, dt) {
-    if (dt <= 0) return;
+    if (dt <= 0) return false;
 
     const speed = Math.hypot(desiredX, desiredY) / dt; // px/s, the kinematic's actual travel speed this frame
-    if (speed < 0.01) return; // not moving — nothing to push, matches "based on where they're moving"
+    if (speed < 0.01) return false; // not moving — nothing to push, matches "based on where they're moving"
 
     const dirX = desiredX / dt / speed;
     const dirY = desiredY / dt / speed;
@@ -459,35 +487,59 @@ export class PhysicsWorld {
     try {
       count = this._characterController.numComputedCollisions();
     } catch (err) {
-      return; // API not available on this Rapier build — fail safe, no push
+      return false; // API not available on this Rapier build — fail safe, no push, and don't claim "all dynamic" since we can't actually tell
     }
+
+    if (count === 0) return false; // nothing touched at all this frame — corrected/desired are identical anyway, no special-casing needed
+
+    // Tracks whether EVERY collision entry this frame resolved to a
+    // Dynamic body that got successfully pushed. If even one entry is a
+    // real obstruction (static/kinematic, or a dynamic body we
+    // couldn't resolve/push for some reason), this becomes false and
+    // the caller correctly falls back to the controller's real
+    // corrected/blocked movement for reported velocity — a genuine
+    // wall should still be able to stop/slow the kinematic.
+    let allDynamicAndPushed = true;
 
     for (let i = 0; i < count; i++) {
       let otherBody;
       try {
         const collision = this._characterController.computedCollision(i);
-        if (!collision) continue;
+        if (!collision) {
+          allDynamicAndPushed = false;
+          continue;
+        }
 
         // rapier2d-compat's CharacterCollision does NOT expose a
         // `.collider` object directly — it exposes `.handle`, a plain
         // numeric collider handle, which has to be resolved back into
         // a real Collider via World.getCollider(handle) before you can
-        // call .parent() on it. (The earlier `collision.collider`
-        // check above silently failed this every single frame — that
-        // was the actual reason nothing ever got pushed: every
-        // iteration hit the `continue` and the loop body below never
-        // ran at all.)
+        // call .parent() on it. (An earlier version of this code
+        // assumed a `.collider` object existed directly on the
+        // collision entry; it didn't, so every entry was silently
+        // skipped and nothing was ever pushed — this is the fix for
+        // that.)
         const colliderHandle = collision.handle;
-        if (colliderHandle === undefined || colliderHandle === null) continue;
+        if (colliderHandle === undefined || colliderHandle === null) {
+          allDynamicAndPushed = false;
+          continue;
+        }
 
         const otherCollider = this.rapierWorld.getCollider(colliderHandle);
-        if (!otherCollider) continue;
+        if (!otherCollider) {
+          allDynamicAndPushed = false;
+          continue;
+        }
 
         otherBody = otherCollider.parent();
       } catch (err) {
+        allDynamicAndPushed = false;
         continue; // unexpected shape for this entry — skip it, don't crash the whole pass
       }
-      if (!otherBody || typeof otherBody.isDynamic !== "function" || !otherBody.isDynamic()) continue;
+      if (!otherBody || typeof otherBody.isDynamic !== "function" || !otherBody.isDynamic()) {
+        allDynamicAndPushed = false; // a real static/kinematic obstruction is present this frame
+        continue;
+      }
 
       // Mass gating: a light kinematic mover shouldn't shove a much
       // heavier dynamic body at full speed — but a LIGHT dynamic body
@@ -533,6 +585,8 @@ export class PhysicsWorld {
       otherBody.setLinvel({ x: nextX, y: nextY }, true);
       otherBody.wakeUp();
     }
+
+    return allDynamicAndPushed;
   }
 
   /**
