@@ -143,14 +143,29 @@ function spawnCase(world, c) {
     new Rigidbody2D({
       bodyType: c.wallType,
       simulated: true,
-      // Push case: a light, non-falling box so a successful shove reads
-      // as clean horizontal displacement, not vertical fall confusing
-      // the X-only pass/fail check below.
-      mass: c.pushTest ? 1 : undefined,
+      // Push case: don't fall, so a successful shove reads as clean
+      // horizontal displacement, not vertical fall confusing the
+      // X-only pass/fail check below. Mass itself is intentionally
+      // left at its default (no Rigidbody2D.mass override) — real
+      // mass for a Dynamic body comes from Collider2D.density below,
+      // matching the actual Inspector workflow (this is the exact
+      // "density 0.1" setup that exposed the additional-mass bug).
       gravityScale: c.pushTest ? 0 : undefined,
     })
   );
-  wall.addComponent(COLLIDER_2D, new Collider2D({ width: WALL_HALF * 2, height: 200 }));
+  wall.addComponent(
+    COLLIDER_2D,
+    new Collider2D({
+      width: WALL_HALF * 2,
+      height: 200,
+      // Light density for the push case — low enough that even a
+      // moderate-speed kinematic mover should shove it clearly. Left
+      // at the Collider2D default (1) for every other case since they
+      // don't care about mass at all (Static/Kinematic walls ignore
+      // it, and dynamic-vs-static doesn't push anything).
+      density: c.pushTest ? 0.1 : undefined,
+    })
+  );
 
   const mover = world.createEntity("Mover_" + c.id, "Test");
   mover.addComponent(TRANSFORM, new Transform({ x: START_X, y: 0 }));
@@ -216,7 +231,13 @@ function runCaseVisually(world, c, mover, rb, wall) {
           `[collision-test] "${c.id}" frame ${frameCount} t=${elapsed.toFixed(2)}s mover.x=${t.x.toFixed(1)} box.x=${wt.x.toFixed(1)} boxPushed=${(wt.x - wallStartX).toFixed(1)}`
         );
       }
-      const passedThrough = t.x > WALL_X + WALL_HALF;
+      // For the push case, the wall (box) itself moves, so "mover.x past
+      // the box's ORIGINAL position" is meaningless as an early-exit
+      // signal — the box has usually already been shoved further along,
+      // and ending here just cuts the push short before it can
+      // accumulate. Only the plain blocking cases use that early exit;
+      // the push case always runs the full CASE_TIME_LIMIT.
+      const passedThrough = !c.pushTest && t.x > WALL_X + WALL_HALF;
 
       if (passedThrough || elapsed >= CASE_TIME_LIMIT) {
         resolve({ moverX: t.x, wallX: wt.x, wallPushedBy: wt.x - wallStartX });
@@ -279,11 +300,12 @@ async function run() {
       // Bulldozer check: this case doesn't care where the MOVER ends up
       // (it's expected to keep advancing, shoving the box ahead of it)
       // — it cares whether the box was actually displaced forward.
-      // MIN_PUSH_DISTANCE is deliberately generous (far below what
-      // MOVER_SPEED over CASE_TIME_LIMIT could produce) so this only
-      // fails when the push mechanism is truly inert, not on minor
-      // mass-ratio/timing differences.
-      const MIN_PUSH_DISTANCE = 20; // px
+      // MIN_PUSH_DISTANCE is well below what a real sustained push over
+      // the full CASE_TIME_LIMIT should achieve (mover travels up to
+      // MOVER_SPEED * CASE_TIME_LIMIT = 1200px if totally unobstructed),
+      // but high enough that a single-frame nudge or near-miss contact
+      // can't accidentally pass.
+      const MIN_PUSH_DISTANCE = 80; // px
       const pushed = result.wallPushedBy >= MIN_PUSH_DISTANCE;
       if (pushed) {
         c.status = "pass";

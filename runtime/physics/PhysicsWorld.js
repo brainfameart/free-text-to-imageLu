@@ -262,7 +262,29 @@ export class PhysicsWorld {
         handle.body.setLinearDamping(rb.linearDamping);
         handle.body.setAngularDamping(rb.angularDamping);
         handle.body.lockRotations(!!rb.lockRotation, true);
-        handle.body.setAdditionalMass(Math.max(0.0001, rb.mass), true);
+        // IMPORTANT: do NOT unconditionally call setAdditionalMass(rb.mass)
+        // here. Rapier's real mass source for a Dynamic body is
+        // density * colliderArea (Collider2D.density, applied via
+        // setDensity() in _syncCollider below) — that's what the
+        // Inspector's "Density" field actually controls, matching how
+        // most 2D engines (Unity2D/Box2D included) derive mass. But
+        // setAdditionalMass() doesn't REPLACE that — it's literally
+        // additive on top of the density-derived mass, and calling it
+        // every single frame with rb.mass defaulting to 1 meant a body
+        // with density=0.1 (intended mass ≈0.1×area) was actually
+        // sitting at ≈(0.1×area + 1), i.e. its real mass floor was
+        // pinned near 1 no matter how low density went. That's why the
+        // bulldozer push (_bulldozeDynamicBodies's massRatio =
+        // pusherMass/targetMass) barely moved a "density 0.1" box even
+        // at mover velocity 900 — targetMass was never actually ~0.1,
+        // it was ~1+. Only apply rb.mass as a genuine override when the
+        // person has explicitly moved it off its default (1), signaling
+        // they want a fixed mass regardless of collider density; leave
+        // density as the sole mass source otherwise.
+        const hasExplicitMassOverride = Math.abs(rb.mass - 1) > 1e-6;
+        if (hasExplicitMassOverride) {
+          handle.body.setAdditionalMass(Math.max(0.0001, rb.mass), true);
+        }
 
         // A CharacterController (runtime/systems/ControllerSystem.js)
         // may request a specific horizontal speed and/or override Y
@@ -468,14 +490,32 @@ export class PhysicsWorld {
       if (!otherBody || typeof otherBody.isDynamic !== "function" || !otherBody.isDynamic()) continue;
 
       // Mass gating: a light kinematic mover shouldn't shove a much
-      // heavier dynamic body at full speed. otherBody.mass() is
-      // Rapier's own computed mass (density * area, or setAdditionalMass
-      // — see _syncEntity's setAdditionalMass(rb.mass) call for Dynamic
-      // bodies), so this naturally matches whatever the person set in
-      // the Inspector for both sides without needing a second lookup.
+      // heavier dynamic body at full speed — but a LIGHT dynamic body
+      // should be able to get shoved FASTER than the kinematic's own
+      // travel speed (a bowling ball rolling into a pebble sends the
+      // pebble flying faster than the ball itself is moving; the old
+      // `Math.min(1, ratio)` cap made pushSpeed <= speed ALWAYS, no
+      // matter how extreme the mass difference — a 10:1 mass ratio
+      // behaved identically to a 1:1 ratio, which is why pushes felt
+      // weak/flat regardless of how light the target was).
+      // otherBody.mass() is Rapier's own computed mass — normally
+      // density * colliderArea (Collider2D.density, the Inspector's
+      // real per-object mass knob for Dynamic bodies), or density*area
+      // PLUS an explicit additional-mass override if the person set
+      // Rigidbody2D.mass away from its default (see the
+      // hasExplicitMassOverride check in _syncEntity above).
       const pusherMass = Math.max(0.0001, rb.mass);
       const targetMass = Math.max(0.0001, otherBody.mass());
-      const massRatio = Math.min(1, pusherMass / targetMass);
+      // Uncapped ratio: >1 when the target is lighter than the
+      // pusher (→ pushed faster than the pusher's own speed), <1 when
+      // heavier (→ pushed slower / barely moved), exactly 1 at equal
+      // mass. MAX_PUSH_MULTIPLIER is a sanity ceiling only — it exists
+      // so an extreme mass mismatch (e.g. density 0.001 dust mote)
+      // can't fling a target at physically-absurd, solver-destabilizing
+      // speed; it is NOT the "same speed as pusher" cap the old code
+      // effectively enforced.
+      const MAX_PUSH_MULTIPLIER = 6; // target can be shoved up to 6x the pusher's own speed
+      const massRatio = Math.min(MAX_PUSH_MULTIPLIER, pusherMass / targetMass);
 
       const pushSpeed = speed * massRatio;
 

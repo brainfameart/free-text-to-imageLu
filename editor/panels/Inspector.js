@@ -426,8 +426,16 @@ export function renderInspector() {
             "/>"
         );
     } else if (rigidbody.bodyType === BodyType.KINEMATIC) {
-      // Kinematic: moved by velocity/code, not forces — mass/gravity/
-      // damping don't apply to a body Rapier never applies forces to.
+      // Kinematic: moved by velocity/code, not forces — Rapier itself
+      // never applies gravity/damping/impulses to it. HOWEVER, mass is
+      // NOT purely inert here: PhysicsWorld._bulldozeDynamicBodies uses
+      // this body's own Rigidbody2D.mass as "pusher mass" when shoving
+      // a Dynamic body it walks into — a heavier Kinematic (Push Mass)
+      // shoves harder/faster, a lighter one shoves less. It's a virtual
+      // number (Kinematic bodies have no real Rapier-derived mass of
+      // their own) that exists purely to tune that push, so it's
+      // labeled "Push Mass" here rather than "Mass" to avoid implying
+      // it affects the Kinematic's own movement (it doesn't).
       bodyTypeFieldsHtml =
         row(
           "Velocity",
@@ -437,6 +445,7 @@ export function renderInspector() {
             "</div>"
         ) +
         row("Angular Velocity", numInput("", rigidbody.angularVelocity, "Rigidbody2D.angularVelocity")) +
+        row("Push Mass", numInput("", rigidbody.mass, "Rigidbody2D.mass")) +
         row(
           "Freeze Rotation",
           '<input type="checkbox" data-field="Rigidbody2D.lockRotation" style="accent-color:#2C5D87;margin:0;"' +
