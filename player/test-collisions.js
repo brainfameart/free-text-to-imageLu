@@ -76,6 +76,14 @@ const CASES = [
     wallType: BodyType.STATIC,
     note: "Baseline sanity check — the pairing that always worked.",
   },
+  {
+    id: "kinematic-pushes-dynamic",
+    title: "Kinematic mover PUSHES Dynamic box (bulldozer)",
+    moverType: BodyType.KINEMATIC,
+    wallType: BodyType.DYNAMIC,
+    pushTest: true,
+    note: "Checks the box is actually SHOVED ahead of the mover, not just left in place or merely un-collided-with.",
+  },
 ];
 
 const els = {
@@ -130,7 +138,18 @@ function sleep(ms) {
 function spawnCase(world, c) {
   const wall = world.createEntity("Wall_" + c.id, "Test");
   wall.addComponent(TRANSFORM, new Transform({ x: WALL_X, y: 0 }));
-  wall.addComponent(RIGIDBODY_2D, new Rigidbody2D({ bodyType: c.wallType, simulated: true }));
+  wall.addComponent(
+    RIGIDBODY_2D,
+    new Rigidbody2D({
+      bodyType: c.wallType,
+      simulated: true,
+      // Push case: a light, non-falling box so a successful shove reads
+      // as clean horizontal displacement, not vertical fall confusing
+      // the X-only pass/fail check below.
+      mass: c.pushTest ? 1 : undefined,
+      gravityScale: c.pushTest ? 0 : undefined,
+    })
+  );
   wall.addComponent(COLLIDER_2D, new Collider2D({ width: WALL_HALF * 2, height: 200 }));
 
   const mover = world.createEntity("Mover_" + c.id, "Test");
@@ -156,11 +175,12 @@ function spawnCase(world, c) {
  * CASE_TIME_LIMIT real seconds have elapsed (pass/fail decided from the
  * final resting position).
  */
-function runCaseVisually(world, c, mover, rb) {
+function runCaseVisually(world, c, mover, rb, wall) {
   return new Promise((resolve) => {
     let elapsed = 0;
     let lastT = performance.now();
     let frameCount = 0;
+    const wallStartX = wall.getComponent(TRANSFORM).x;
 
     function frame(now) {
       const dt = Math.min(1 / 30, (now - lastT) / 1000); // clamp huge tab-switch gaps
@@ -190,13 +210,16 @@ function runCaseVisually(world, c, mover, rb) {
       world.update(dt);
 
       const t = mover.getComponent(TRANSFORM);
+      const wt = wall.getComponent(TRANSFORM);
       if (frameCount % 15 === 0) {
-        console.log(`[collision-test] "${c.id}" frame ${frameCount} t=${elapsed.toFixed(2)}s x=${t.x.toFixed(1)}`);
+        console.log(
+          `[collision-test] "${c.id}" frame ${frameCount} t=${elapsed.toFixed(2)}s mover.x=${t.x.toFixed(1)} box.x=${wt.x.toFixed(1)} boxPushed=${(wt.x - wallStartX).toFixed(1)}`
+        );
       }
       const passedThrough = t.x > WALL_X + WALL_HALF;
 
       if (passedThrough || elapsed >= CASE_TIME_LIMIT) {
-        resolve(t.x);
+        resolve({ moverX: t.x, wallX: wt.x, wallPushedBy: wt.x - wallStartX });
         return;
       }
       requestAnimationFrame(frame);
@@ -244,12 +267,38 @@ async function run() {
     // colliders behind if cleanup ever regressed. world.clear() also
     // resets the entity id counter, matching normal scene-load behavior.
     world.clear();
-    const { mover, rb } = spawnCase(world, c);
+    const { wall, mover, rb } = spawnCase(world, c);
 
     console.log(`[collision-test] starting "${c.id}" — mover@${START_X}, wall@${WALL_X}`);
-    const finalX = await runCaseVisually(world, c, mover, rb);
-    console.log(`[collision-test] "${c.id}" finished at x=${finalX.toFixed(1)}`);
+    const result = await runCaseVisually(world, c, mover, rb, wall);
+    console.log(
+      `[collision-test] "${c.id}" finished — mover.x=${result.moverX.toFixed(1)} box.x=${result.wallX.toFixed(1)} pushedBy=${result.wallPushedBy.toFixed(1)}`
+    );
 
+    if (c.pushTest) {
+      // Bulldozer check: this case doesn't care where the MOVER ends up
+      // (it's expected to keep advancing, shoving the box ahead of it)
+      // — it cares whether the box was actually displaced forward.
+      // MIN_PUSH_DISTANCE is deliberately generous (far below what
+      // MOVER_SPEED over CASE_TIME_LIMIT could produce) so this only
+      // fails when the push mechanism is truly inert, not on minor
+      // mass-ratio/timing differences.
+      const MIN_PUSH_DISTANCE = 20; // px
+      const pushed = result.wallPushedBy >= MIN_PUSH_DISTANCE;
+      if (pushed) {
+        c.status = "pass";
+        c.detail = `Box was pushed ${result.wallPushedBy.toFixed(1)}px forward (from x=${WALL_X} to x=${result.wallX.toFixed(1)}) — kinematic mover is correctly shoving dynamic bodies.`;
+      } else {
+        c.status = "fail";
+        c.detail = `Box only moved ${result.wallPushedBy.toFixed(1)}px — expected ≥${MIN_PUSH_DISTANCE}px. The kinematic mover is NOT pushing the dynamic body (bulldozer push is not working).`;
+      }
+      renderCases();
+      updateSummary();
+      await sleep(600);
+      continue;
+    }
+
+    const finalX = result.moverX;
     const passedThrough = finalX > WALL_X + WALL_HALF;
     const blockedCorrectly = Math.abs(finalX - EXPECTED_REST_X) <= SLOP;
 

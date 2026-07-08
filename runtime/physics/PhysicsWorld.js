@@ -401,9 +401,16 @@ export class PhysicsWorld {
    * here holds a persistent force on it.
    *
    * NOTE ON API SURFACE: numComputedCollisions()/computedCollision(i)
-   * and Collider.parent() are rapier2d-compat@0.14.0's documented shape
-   * for reading back what a KinematicCharacterController's sweep just
-   * touched (RapierLoader.js pins this exact version from jsDelivr).
+   * are rapier2d-compat@0.14.0's documented shape for reading back what
+   * a KinematicCharacterController's sweep just touched
+   * (RapierLoader.js pins this exact version from jsDelivr). Each
+   * returned CharacterCollision exposes a numeric collider HANDLE
+   * (`.handle`), not a live Collider object — it must be resolved via
+   * `this.rapierWorld.getCollider(handle)` before `.parent()` gives you
+   * the owning RigidBody. (An earlier version of this code assumed a
+   * `.collider` object existed directly on the collision entry; it
+   * didn't, so every entry was silently skipped and nothing was ever
+   * pushed — this is the fix for that.)
    * Wrapped in try/catch and defensive existence checks below so that
    * IF a future Rapier upgrade renames/reshapes this API, the game
    * silently falls back to "no manual push" (kinematic bodies still
@@ -437,8 +444,24 @@ export class PhysicsWorld {
       let otherBody;
       try {
         const collision = this._characterController.computedCollision(i);
-        if (!collision || !collision.collider) continue;
-        otherBody = collision.collider.parent();
+        if (!collision) continue;
+
+        // rapier2d-compat's CharacterCollision does NOT expose a
+        // `.collider` object directly — it exposes `.handle`, a plain
+        // numeric collider handle, which has to be resolved back into
+        // a real Collider via World.getCollider(handle) before you can
+        // call .parent() on it. (The earlier `collision.collider`
+        // check above silently failed this every single frame — that
+        // was the actual reason nothing ever got pushed: every
+        // iteration hit the `continue` and the loop body below never
+        // ran at all.)
+        const colliderHandle = collision.handle;
+        if (colliderHandle === undefined || colliderHandle === null) continue;
+
+        const otherCollider = this.rapierWorld.getCollider(colliderHandle);
+        if (!otherCollider) continue;
+
+        otherBody = otherCollider.parent();
       } catch (err) {
         continue; // unexpected shape for this entry — skip it, don't crash the whole pass
       }
