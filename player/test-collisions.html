@@ -48,7 +48,11 @@
         actually stopped/blocked instead of passing through. If a case
         goes green here, the same body-type pairing will behave the same
         way inside the full engine (editor or player) — it's not a
-        separate simulation.
+        separate simulation. The final three "Push speed" cases go further
+        than just checking the box got shoved — they sample the box's own
+        live velocity and confirm it matches the expected mass-ratio speed
+        (equal mass, 4x denser target, 4x heavier pusher), the same three
+        scenarios from the manual Inspector test plan.
       </p>
       <div id="summary">Running…</div>
       <div id="cases"></div>
