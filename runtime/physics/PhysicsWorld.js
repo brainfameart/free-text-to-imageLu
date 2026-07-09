@@ -584,7 +584,12 @@ export class PhysicsWorld {
       return false; // API not available on this Rapier build — fail safe, no push, and don't claim "all dynamic" since we can't actually tell
     }
 
-    if (count === 0) return false; // nothing touched at all this frame — corrected/desired are identical anyway, no special-casing needed
+    if (count === 0) {
+      if (typeof window !== "undefined" && window.__ZENGINE_PUSH_DEBUG__) {
+        console.log(`[bulldoze-debug] numComputedCollisions=0 — sweep detected NO contact this frame (speed=${speed.toFixed(1)})`);
+      }
+      return false; // nothing touched at all this frame — corrected/desired are identical anyway, no special-casing needed
+    }
 
     // Tracks whether EVERY collision entry this frame resolved to a
     // Dynamic body that got successfully pushed. If even one entry is a
@@ -664,6 +669,11 @@ export class PhysicsWorld {
       const pusherArea = Math.max(0.0001, estimateColliderArea(collider, transform));
       const pusherMass = Math.max(0.0001, rb.mass * pusherArea);
       const targetMass = Math.max(0.0001, otherBody.mass());
+      if (typeof window !== "undefined" && window.__ZENGINE_PUSH_DEBUG__) {
+        console.log(
+          `[bulldoze-debug] rb.mass=${rb.mass} pusherArea=${pusherArea.toFixed(2)} pusherMass=${pusherMass.toFixed(4)} targetMass=${targetMass.toFixed(4)} bodyType=${otherBody.bodyType ? otherBody.bodyType() : "?"} isDynamic=${otherBody.isDynamic()} isSleeping=${otherBody.isSleeping ? otherBody.isSleeping() : "?"}`
+        );
+      }
       // Uncapped ratio: >1 when the target is lighter than the pusher
       // (pushed faster than the pusher's own speed), <1 when heavier
       // (pushed slower), 1 at equal mass. No artificial ceiling now
