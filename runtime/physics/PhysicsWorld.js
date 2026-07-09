@@ -25,7 +25,6 @@
 import { TRANSFORM } from "../components/Transform.js";
 import { RIGIDBODY_2D, BodyType } from "../components/Rigidbody2D.js";
 import { COLLIDER_2D, ColliderShape } from "../components/Collider2D.js";
-import { CHARACTER_CONTROLLER } from "../components/CharacterController.js";
 import { getColliderWorldGeometry } from "./ColliderGeometry.js";
 import { loadRapier } from "./RapierLoader.js";
 
@@ -299,7 +298,7 @@ export class PhysicsWorld {
     this._syncCollider(handle, collider, transform);
 
     if (rb && effectiveBodyType === BodyType.KINEMATIC) {
-      this._syncKinematicMovement(handle, rb, dt, entity);
+      this._syncKinematicMovement(handle, rb, dt);
     }
   }
 
@@ -314,7 +313,7 @@ export class PhysicsWorld {
    * kinematic body exactly where it's told, colliding-or-not, unless a
    * character controller is used to compute the correction first).
    */
-  _syncKinematicMovement(handle, rb, dt, entity) {
+  _syncKinematicMovement(handle, rb, dt) {
     if (!handle.collider) return; // no collider yet (created same frame) — nothing to sweep
 
     // Use this body's own Rigidbody2D.mass as the character mass for
@@ -336,7 +335,7 @@ export class PhysicsWorld {
     // each hit body up to the kinematic's own travel speed). Done AFTER
     // the sweep so we know which bodies were hit; the sweep itself
     // still stops/slides this kinematic against them exactly as before.
-    this._pushDynamicBodies(rb, desiredX, desiredY, dt, entity);
+    this._pushDynamicBodies(rb, desiredX, desiredY, dt);
 
     const corrected = this._characterController.computedMovement();
     const grounded = this._characterController.computedGrounded();
@@ -369,17 +368,14 @@ export class PhysicsWorld {
   /**
    * Pushes every DYNAMIC body the kinematic mover collided with during
    * the last character-controller sweep, in the direction the kinematic
-   * is moving — always "based on where the kinematic is moving", not
-   * just along the contact normal. The shove strength is the kinematic's
-   * own push mass (CharacterController.pushMass, default 1) relative to
-   * the hit body's mass: the speed a body gains along the travel
-   * direction is pushMass * deltaV / otherMass, so a pushMass:otherMass
-   * ratio of 1:1 reproduces the old "bring it fully up to the kinematic's
-   * speed" behavior, 2 shoves twice as hard, and a heavier body is
-   * pushed proportionally less. STATIC and KINEMATIC obstacles are
-   * skipped (impulses can't move them).
+   * is moving. Each hit body is brought up to the kinematic's own travel
+   * speed along that direction, so the push is always "based on where
+   * the kinematic is moving" — not just along the contact normal. A
+   * kinematic body is effectively infinitely strong (forces never move
+   * it), so the transfer is full regardless of the body's mass. STATIC
+   * and KINEMATIC obstacles are skipped (impulses can't move them).
    */
-  _pushDynamicBodies(rb, desiredX, desiredY, dt, entity) {
+  _pushDynamicBodies(rb, desiredX, desiredY, dt) {
     const RAPIER = this.RAPIER;
     const controller = this._characterController;
 
@@ -394,18 +390,6 @@ export class PhysicsWorld {
     const dirX = desiredX / desiredLen;
     const dirY = desiredY / desiredLen;
     const speed = dt > 0 ? desiredLen / dt : 0; // kinematic speed along the travel dir
-
-    // The kinematic's push strength. Read from its CharacterController
-    // (default 1) so a 1:1 mass ratio reproduces the original push and
-    // larger values shove proportionally harder. A kinematic with no
-    // CharacterController still pushes at the default strength; 0 (or
-    // negative) means no push at all.
-    let pushMass = 1;
-    if (entity) {
-      const cc = entity.getComponent(CHARACTER_CONTROLLER);
-      if (cc && typeof cc.pushMass === "number" && isFinite(cc.pushMass)) pushMass = cc.pushMass;
-    }
-    if (pushMass <= 0) return;
 
     for (let i = 0; i < n; i++) {
       const col = controller.computedCollision(i);
@@ -423,11 +407,10 @@ export class PhysicsWorld {
       const deltaV = speed - vAlong;
       if (deltaV <= 1e-4) continue;
 
-      // Impulse scales with the kinematic's push mass, NOT the body's
-      // mass — so the SPEED the body gains (impulse / its mass) is
-      // pushMass * deltaV / otherMass, i.e. set by the pushMass:otherMass
-      // ratio (see the method doc above).
-      const impulseMag = pushMass * deltaV;
+      const otherMass = Math.max(0.0001, otherBody.mass());
+      // Impulse that brings the body exactly up to the kinematic's speed
+      // along the travel direction (impulse = mass * delta-velocity).
+      const impulseMag = otherMass * deltaV;
       otherBody.applyImpulse({ x: dirX * impulseMag, y: dirY * impulseMag }, true);
       otherBody.wakeUp();
     }

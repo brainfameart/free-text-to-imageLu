@@ -57,14 +57,6 @@ export class CharacterController {
 
     // Input
     useDefaultInput = true, // WASD/Arrows (+ Space to jump) wired automatically
-
-    // Push — how hard this kinematic body shoves DYNAMIC bodies it runs
-    // into (consumed by PhysicsWorld._pushDynamicBodies). Acts as a "push
-    // mass": the speed a hit body reaches along the kinematic's travel
-    // direction scales with pushMass : the body's mass, so a 1:1 ratio
-    // reproduces the original full-transfer push, 2 shoves twice as hard,
-    // and a heavier body is pushed proportionally less. Default 1.
-    pushMass = 1,
   } = {}) {
     this.controllerType = controllerType;
 
@@ -79,7 +71,5 @@ export class CharacterController {
     this.useGravity = useGravity;
 
     this.useDefaultInput = useDefaultInput;
-
-    this.pushMass = pushMass;
   }
 }
