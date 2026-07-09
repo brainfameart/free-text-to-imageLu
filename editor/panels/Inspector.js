@@ -583,6 +583,7 @@ export function renderInspector() {
             "/>"
         ) +
         typeSpecificHtml +
+        row("Push Mass", numInput("", controller.pushMass == null ? 1 : controller.pushMass, "CharacterController.pushMass")) +
         (rigidbody && rigidbody.bodyType === BodyType.STATIC
           ? '<div class="static-body-note" style="padding:6px 4px;color:#c0863a;font-size:11px;">' +
             "This entity's Rigidbody2D Body Type is Static — a Static body never moves. Set Body Type to Dynamic (recommended — gets real collision push-back/landing from Rapier) or Kinematic above for this movement type to take effect." +
