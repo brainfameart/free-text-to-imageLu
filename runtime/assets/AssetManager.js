@@ -139,3 +139,62 @@ export function clearTextureCache() {
   _textureCache.clear();
   _missingTextureCache = null;
 }
+
+/**
+ * Loads an audio File into the audio cache and registers it under
+ * `key`, mirroring loadImageAssetFromFile()'s shape. Audio has no PIXI
+ * texture equivalent, so what's cached is just the dataUrl itself —
+ * resolveAudioSrc() below hands that same string straight to an
+ * <audio> element (see runtime/systems/AudioSystem.js). `duration` is
+ * read once via a throwaway <audio> so the asset browser can show clip
+ * length without every caller needing to load its own element.
+ *
+ * @param {string} key logical audioKey to register the clip under
+ * @param {File} file
+ * @returns {Promise<{ key: string, dataUrl: string, duration: number }>}
+ */
+export function loadAudioAssetFromFile(key, file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error || new Error("Failed to read file"));
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      const probe = new Audio();
+      const finish = (duration) => {
+        registerAudio(key, dataUrl);
+        resolve({ key, dataUrl, duration: duration || 0 });
+      };
+      probe.onerror = () => finish(0); // still usable even if duration can't be probed
+      probe.onloadedmetadata = () => finish(probe.duration);
+      probe.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+const _audioCache = new Map();
+
+/**
+ * Register a raw audio dataUrl under a logical key.
+ * @param {string} key
+ * @param {string} dataUrl
+ */
+export function registerAudio(key, dataUrl) {
+  _audioCache.set(key, dataUrl);
+}
+
+/**
+ * Resolve an audioKey to a playable src string (a data: URL), or null
+ * if the key is unknown/missing — callers (AudioSystem.js) treat null
+ * as "nothing to play" rather than failing.
+ * @param {string|null} key
+ * @returns {string|null}
+ */
+export function resolveAudioSrc(key) {
+  if (!key) return null;
+  return _audioCache.get(key) || null;
+}
+
+export function clearAudioCache() {
+  _audioCache.clear();
+}

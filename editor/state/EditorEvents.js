@@ -18,14 +18,16 @@ import { LIGHT, Light, LightType } from "../../runtime/components/Light.js";
 import { SHADOW_CASTER, ShadowCaster } from "../../runtime/components/ShadowCaster.js";
 import { LIGHTING_SETTINGS, LightingSettings } from "../../runtime/components/LightingSettings.js";
 import { SPRITE_ANIMATION, SpriteAnimation } from "../../runtime/components/SpriteAnimation.js";
+import { AUDIO_SOURCE, AudioSource } from "../../runtime/components/AudioSource.js";
 import { createEmptyClip } from "../panels/AnimationWindow.js";
 import {
   importStandaloneImageFrames,
   importZipImageFrames,
   importSpriteSheetFrames,
 } from "../animation/AnimationImport.js";
-import { importSpriteFiles, getSpriteAsset } from "../../runtime/assets/AssetRegistry.js";
+import { importSpriteFiles, getSpriteAsset, importAudioFiles } from "../../runtime/assets/AssetRegistry.js";
 import { syncBackgroundColorLive, switchScene } from "../viewport/SceneViewport.js";
+import { serializeEntity, instantiateEntity } from "../../runtime/scene/SceneSerializer.js";
 
 const COMPONENT_TYPE_MAP = {
   Transform: TRANSFORM,
@@ -38,6 +40,7 @@ const COMPONENT_TYPE_MAP = {
   ShadowCaster: SHADOW_CASTER,
   LightingSettings: LIGHTING_SETTINGS,
   SpriteAnimation: SPRITE_ANIMATION,
+  AudioSource: AUDIO_SOURCE,
 };
 
 const LIGHT_ENTITY_NAMES = {
@@ -144,10 +147,23 @@ export function attachEditorEvents(render, onTogglePlay) {
           render();
         }
         break;
-      case "select-entity":
-        editorState.selectedId = t.dataset.id;
+      case "select-entity": {
+        const id = t.dataset.id;
+        if (e.shiftKey) {
+          // Shift+click toggles membership for multi-select.
+          const idx = editorState.selectedIds.indexOf(id);
+          if (idx >= 0) editorState.selectedIds.splice(idx, 1);
+          else editorState.selectedIds.push(id);
+          editorState.selectedId = editorState.selectedIds.length
+            ? editorState.selectedIds[editorState.selectedIds.length - 1]
+            : null;
+        } else {
+          editorState.selectedId = id;
+          editorState.selectedIds = [id];
+        }
         render();
         break;
+      }
       case "toggle-section": {
         const k = t.dataset.key;
         editorState.sectionsOpen[k] = !(editorState.sectionsOpen[k] !== false);
@@ -325,6 +341,7 @@ export function attachEditorEvents(render, onTogglePlay) {
         const entity = editorState.world.createEntity("GameObject");
         entity.addComponent(TRANSFORM, new Transform());
         editorState.selectedId = entity.id;
+        editorState.selectedIds = [entity.id];
         pushLog("log", "Created GameObject '" + entity.name + "'.");
         editorState.openMenu = null;
         editorState.openSubmenu = null;
@@ -352,6 +369,7 @@ export function attachEditorEvents(render, onTogglePlay) {
         entity.addComponent(TRANSFORM, new Transform());
         entity.addComponent(LIGHT, new Light({ type: lightType }));
         editorState.selectedId = entity.id;
+        editorState.selectedIds = [entity.id];
         pushLog("log", "Created " + name + ".");
         editorState.openMenu = null;
         editorState.openSubmenu = null;
@@ -409,6 +427,11 @@ export function attachEditorEvents(render, onTogglePlay) {
           if (!entity.hasComponent(SPRITE_ANIMATION)) {
             entity.addComponent(SPRITE_ANIMATION, new SpriteAnimation());
             pushLog("log", "Added Sprite Animation to '" + entity.name + "'.");
+          }
+        } else if (componentName === "AudioSource") {
+          if (!entity.hasComponent(AUDIO_SOURCE)) {
+            entity.addComponent(AUDIO_SOURCE, new AudioSource());
+            pushLog("log", "Added Audio Source to '" + entity.name + "'.");
           }
         }
         render();
@@ -485,6 +508,56 @@ export function attachEditorEvents(render, onTogglePlay) {
     }
   });
 
+  // --- Multi-select + clipboard for Delete / Copy / Paste / Duplicate ---
+  // _clipboard holds serialized entity data (SceneSerializer.serializeEntity)
+  // between a Copy and a Paste. Kept in this closure (not editorState)
+  // because it is not UI state that needs to trigger a re-render.
+  let _clipboard = [];
+
+  function _liveSelectionIds() {
+    if (!editorState.world) return [];
+    const ids = editorState.selectedIds.filter((id) => editorState.world.getEntity(id));
+    return ids.length ? ids : (editorState.selectedId ? [editorState.selectedId] : []);
+  }
+
+  function _setSelection(ids) {
+    editorState.selectedIds = ids.slice();
+    editorState.selectedId = ids.length ? ids[ids.length - 1] : null;
+  }
+
+  function _deleteSelection() {
+    const ids = _liveSelectionIds();
+    if (!ids.length) return;
+    for (const id of ids) editorState.world.destroyEntity(id);
+    pushLog("log", "Deleted " + ids.length + " object" + (ids.length > 1 ? "s" : "") + ".");
+    _setSelection([]);
+  }
+
+  function _copySelection() {
+    const ids = _liveSelectionIds();
+    _clipboard = ids
+      .map((id) => {
+        const ent = editorState.world.getEntity(id);
+        return ent ? serializeEntity(ent) : null;
+      })
+      .filter(Boolean);
+    if (_clipboard.length) pushLog("log", "Copied " + _clipboard.length + " object" + (_clipboard.length > 1 ? "s" : "") + ".");
+  }
+
+  function _pasteSelection() {
+    if (!_clipboard.length || !editorState.world) return;
+    const OFFSET = 24;
+    const newIds = [];
+    for (const data of _clipboard) {
+      const ent = instantiateEntity(editorState.world, data, data.name + " (Copy)");
+      const t = ent.getComponent(TRANSFORM);
+      if (t) { t.x += OFFSET; t.y += OFFSET; }
+      newIds.push(ent.id);
+    }
+    pushLog("log", "Pasted " + newIds.length + " object" + (newIds.length > 1 ? "s" : "") + ".");
+    _setSelection(newIds);
+  }
+
   document.addEventListener("keydown", (e) => {
     if (e.target.dataset && e.target.dataset.action === "rename-scene-input") {
       if (e.key === "Enter") {
@@ -501,6 +574,25 @@ export function attachEditorEvents(render, onTogglePlay) {
         editorState.anim.renamingClipId = null;
         render();
       }
+    }
+
+    // Selection keyboard shortcuts — Delete/Backspace, Copy (Ctrl/Cmd+C),
+    // Paste (Ctrl/Cmd+V), Duplicate (Ctrl/Cmd+D). Skipped while typing in a
+    // field so Backspace and Ctrl+C keep their normal text-editing meaning.
+    const _typing = /^(input|textarea)$/i.test(e.target.tagName) || e.target.isContentEditable;
+    if (_typing || !editorState.world) return;
+    if (e.key === "Delete" || e.key === "Backspace") {
+      e.preventDefault(); // stop Backspace navigating back / Delete scrolling
+      if (_liveSelectionIds().length === 0) return;
+      _deleteSelection();
+      render();
+      return;
+    }
+    if (e.ctrlKey || e.metaKey) {
+      const k = e.key.toLowerCase();
+      if (k === "c") { e.preventDefault(); _copySelection(); return; }
+      if (k === "v") { e.preventDefault(); _pasteSelection(); render(); return; }
+      if (k === "d") { e.preventDefault(); _copySelection(); _pasteSelection(); render(); return; }
     }
   });
 
@@ -530,6 +622,15 @@ export function attachEditorEvents(render, onTogglePlay) {
       const key = spriteAssetTarget.dataset.spriteKey;
       if (!key) return;
       e.dataTransfer.setData("application/x-zengine-sprite-key", key);
+      e.dataTransfer.effectAllowed = "copy";
+      return;
+    }
+
+    const audioAssetTarget = e.target.closest('[data-action="drag-audio-asset"]');
+    if (audioAssetTarget) {
+      const key = audioAssetTarget.dataset.audioKey;
+      if (!key) return;
+      e.dataTransfer.setData("application/x-zengine-audio-key", key);
       e.dataTransfer.effectAllowed = "copy";
       return;
     }
@@ -642,6 +743,25 @@ export function attachEditorEvents(render, onTogglePlay) {
           });
       }
       e.target.value = ""; // allow re-importing the same filename later
+      return;
+    }
+
+    if (e.target.dataset.action === "import-audio-input") {
+      const files = e.target.files;
+      if (files && files.length) {
+        importAudioFiles(files)
+          .then((imported) => {
+            for (const asset of imported) {
+              pushLog("log", "Imported audio '" + asset.name + "'.");
+            }
+            render();
+          })
+          .catch((err) => {
+            pushLog("error", "Failed to import audio: " + err.message);
+            render();
+          });
+      }
+      e.target.value = "";
       return;
     }
 
@@ -860,6 +980,12 @@ function applyFieldChange(field, inputEl) {
       }
       return;
     }
+    return;
+  }
+
+  if (field === "AudioSource.is3DLabel") {
+    const audioSource = entity.getComponent(AUDIO_SOURCE);
+    if (audioSource) audioSource.is3D = inputEl.value === "3D";
     return;
   }
 

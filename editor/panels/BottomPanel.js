@@ -24,9 +24,9 @@
 import { icon } from "../icons/IconLibrary.js";
 import { tabBtn } from "./UIComponents.js";
 import { editorState } from "../state/EditorState.js";
-import { getAllSpriteAssets } from "../../runtime/assets/AssetRegistry.js";
+import { getAllSpriteAssets, getAllAudioAssets } from "../../runtime/assets/AssetRegistry.js";
 
-const FOLDER_LABELS = { scenes: "Scenes", sprites: "Sprites", scripts: "Scripts" };
+const FOLDER_LABELS = { scenes: "Scenes", sprites: "Sprites", audio: "Audio", scripts: "Scripts" };
 
 export function renderBottom() {
   const errCount = editorState.logs.filter((l) => l.type === "error").length;
@@ -72,6 +72,28 @@ export function renderBottom() {
         " Import Sprite" +
         '<input type="file" accept="image/*" multiple data-action="import-sprite-input" style="display:none;" />' +
         "</label>";
+    } else if (folder === "audio") {
+      const audioAssets = getAllAudioAssets();
+      gridHtml = audioAssets.length
+        ? audioAssets
+            .map(
+              (a) =>
+                '<div class="asset-item" draggable="true" data-action="drag-audio-asset" data-audio-key="' +
+                a.key +
+                '" title="Drag into the scene view"><div class="asset-thumb">' +
+                icon("music", 22) +
+                '<div class="asset-ext">AUD</div></div><span class="asset-label">' +
+                a.name +
+                "</span></div>"
+            )
+            .join("")
+        : '<div class="asset-empty-hint">No audio imported yet. Click "Import Audio" to add one.</div>';
+      pathToolbarHtml =
+        '<label class="import-sprite-btn">' +
+        icon("plus", 11) +
+        " Import Audio" +
+        '<input type="file" accept="audio/*" multiple data-action="import-audio-input" style="display:none;" />' +
+        "</label>";
     } else if (folder === "scenes") {
       gridHtml = renderSceneFileGrid();
       pathToolbarHtml =
@@ -91,6 +113,7 @@ export function renderBottom() {
       '</span><span style="font-size:11px;margin-left:4px;">Assets</span></div>' +
       renderFolderRow("scenes", folder) +
       renderFolderRow("sprites", folder) +
+      renderFolderRow("audio", folder) +
       renderFolderRow("scripts", folder) +
       "</div>" +
       '<div class="proj-assets">' +

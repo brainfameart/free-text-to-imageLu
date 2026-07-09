@@ -80,6 +80,21 @@ export class Rigidbody2D {
     // false for Dynamic/Static bodies (Dynamic has no character
     // controller sweep; use a separate ground-check for those).
     grounded = false,
+
+    // KINEMATIC-only, read-only: written every physics step by
+    // PhysicsWorld._syncKinematicMovement with the ACTUAL movement the
+    // character-controller sweep produced (after blocking/sliding
+    // against obstacles), as a velocity. velocityX/Y above stay as the
+    // intended input and are NOT clobbered, so ControllerSystem's
+    // acceleration lerp (and any script driving a kinematic body) keeps
+    // working from intent rather than feeding a collision-blocked value
+    // back into itself — which previously decelerated a kinematic body
+    // every time it pushed a dynamic body (a real kinematic body has
+    // infinite mass and must never slow from a collision). Read this
+    // when you need "did the body actually move / how fast this step",
+    // not velocityX/Y. Always 0 for Dynamic/Static bodies.
+    resolvedVelocityX = 0,
+    resolvedVelocityY = 0,
   } = {}) {
     this.bodyType = bodyType;
     this.simulated = simulated;
@@ -99,5 +114,8 @@ export class Rigidbody2D {
     this.driveVelocityY = driveVelocityY;
 
     this.grounded = grounded;
+
+    this.resolvedVelocityX = resolvedVelocityX;
+    this.resolvedVelocityY = resolvedVelocityY;
   }
 }

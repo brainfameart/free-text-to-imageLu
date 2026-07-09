@@ -19,7 +19,7 @@
 import { CAMERA } from "../../runtime/components/Camera.js";
 import { TRANSFORM } from "../../runtime/components/Transform.js";
 import { getCameraResolution } from "../../runtime/core/CameraUtils.js";
-import { getAllSpriteAssets, getAllFrameAssets } from "../../runtime/assets/AssetRegistry.js";
+import { getAllSpriteAssets, getAllFrameAssets, getAllAudioAssets } from "../../runtime/assets/AssetRegistry.js";
 import { editorState, pushLog } from "../state/EditorState.js";
 
 let playWin = null;
@@ -65,10 +65,17 @@ export function openPlayWindow(game) {
   // source bytes before it loads the scene.
   const spriteAssets = [...getAllSpriteAssets(), ...getAllFrameAssets()];
 
+  // Same reasoning as spriteAssets above: the popup's AssetManager.js
+  // module realm starts with an empty audio cache, so any imported
+  // audio clip must be handed over as raw dataUrls here too, or every
+  // AudioSource in the popup would silently resolve to nothing and
+  // never play.
+  const audioAssets = getAllAudioAssets();
+
   // Hand the payload off through window.__ZENGINE_PLAY_PAYLOAD__ so the
   // popup (a separate document/context) can read it on load, regardless
   // of open/reuse timing.
-  window.__ZENGINE_PLAY_PAYLOAD__ = { sceneData, width, height, spriteAssets };
+  window.__ZENGINE_PLAY_PAYLOAD__ = { sceneData, width, height, spriteAssets, audioAssets };
 
   if (isPlayWindowOpen()) {
     playWin.location.reload();

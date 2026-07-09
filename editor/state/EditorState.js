@@ -16,6 +16,13 @@ export const editorState = {
 
   activeTool: "translate",
   selectedId: null,
+  /** @type {string[]} ids of ALL selected entities (multi-select).
+   *  selectedId is the PRIMARY (last-clicked) — the one the Inspector
+   *  and transform gizmo operate on. selectedIds always contains
+   *  selectedId. Plain click sets both to a single id; Shift+click
+   *  toggles membership (and updates the primary). Delete / Copy /
+   *  Duplicate act on every id in here. */
+  selectedIds: [],
   animOpen: false,
   isPlaying: false,
   isPaused: false,

@@ -22,6 +22,7 @@ import { drawCameraGizmo } from "./CameraGizmo.js";
 import { drawColliderGizmo } from "./ColliderGizmo.js";
 import { TriangleColliderGizmo } from "./TriangleColliderGizmo.js";
 import { drawLightGizmo, hitTestLightGizmo } from "./LightGizmo.js";
+import { drawAudioGizmo, hitTestAudioGizmo } from "./AudioGizmo.js";
 import { TransformGizmo } from "./TransformGizmo.js";
 import { editorState, pushLog } from "../state/EditorState.js";
 import { attachPixiDiagnostics } from "../state/ConsoleCapture.js";
@@ -30,15 +31,18 @@ import { COLLIDER_2D } from "../../runtime/components/Collider2D.js";
 import { SPRITE_RENDERER, SpriteRenderer } from "../../runtime/components/SpriteRenderer.js";
 import { CAMERA } from "../../runtime/components/Camera.js";
 import { RenderSystem } from "../../runtime/systems/RenderSystem.js";
-import { getSpriteAsset } from "../../runtime/assets/AssetRegistry.js";
+import { getSpriteAsset, getAudioAsset } from "../../runtime/assets/AssetRegistry.js";
+import { AUDIO_SOURCE, AudioSource } from "../../runtime/components/AudioSource.js";
 
 let pixiApp = null;
 let viewportCamera = null;
 let gridContainer = null;
 let gizmoContainer = null;
+let selectionOutlineGfx = null;
 let cameraGizmoContainer = null;
 let colliderGizmoContainer = null;
 let lightGizmoContainer = null;
+let audioGizmoContainer = null;
 let transformGizmo = null;
 let triangleColliderGizmo = null;
 let game = null;
@@ -64,8 +68,10 @@ export function switchScene(sceneId) {
   if (!switched) return false;
 
   editorState.selectedId = null;
+  editorState.selectedIds = [];
   const mainCamera = game.world.findFirstByName("Main Camera");
   editorState.selectedId = mainCamera ? mainCamera.id : null;
+  if (editorState.selectedId) editorState.selectedIds = [editorState.selectedId];
 
   syncSpriteRender();
   refreshGizmos();
@@ -116,6 +122,7 @@ function createViewport(mount, render) {
   if (!editorState.selectedId) {
     const mainCamera = game.world.findFirstByName("Main Camera");
     editorState.selectedId = mainCamera ? mainCamera.id : null;
+    if (editorState.selectedId) editorState.selectedIds = [editorState.selectedId];
   }
 
   // editor-only chrome containers, drawn around the runtime's own stage content
@@ -123,7 +130,10 @@ function createViewport(mount, render) {
   cameraGizmoContainer = new PIXI.Container();
   colliderGizmoContainer = new PIXI.Container();
   lightGizmoContainer = new PIXI.Container();
+  audioGizmoContainer = new PIXI.Container();
   gizmoContainer = new PIXI.Container();
+  selectionOutlineGfx = new PIXI.Graphics();
+  gizmoContainer.addChild(selectionOutlineGfx);
   // LightingSystem's GPU lighting filter (see runtime/systems/
   // LightingSystem.js) is applied to createGame's internal
   // gameContentContainer — a child of pixiApp.stage that holds ONLY
@@ -143,11 +153,13 @@ function createViewport(mount, render) {
   cameraGizmoContainer.zIndex = 200000;
   colliderGizmoContainer.zIndex = 200001;
   lightGizmoContainer.zIndex = 200002;
+  audioGizmoContainer.zIndex = 200002;
   gizmoContainer.zIndex = 200003;
   pixiApp.stage.addChildAt(gridContainer, 0); // grid behind everything
   pixiApp.stage.addChild(cameraGizmoContainer); // camera frame above scene content
   pixiApp.stage.addChild(colliderGizmoContainer); // collider outlines above camera frame dimming
   pixiApp.stage.addChild(lightGizmoContainer); // light icons/range above the darkness overlay
+  pixiApp.stage.addChild(audioGizmoContainer); // audio icons/range, same layer as light gizmos
   pixiApp.stage.addChild(gizmoContainer); // selection/transform gizmo above everything
   pixiApp.stage.sortableChildren = true;
   drawSceneGrid(gridContainer);
@@ -187,6 +199,9 @@ function createViewport(mount, render) {
     }
     if (lightGizmoContainer) {
       drawLightGizmo(lightGizmoContainer, editorState.world, editorState.selectedId, _worldPerPixel());
+    }
+    if (audioGizmoContainer) {
+      drawAudioGizmo(audioGizmoContainer, editorState.world, editorState.selectedId, _worldPerPixel());
     }
   });
 
@@ -276,16 +291,28 @@ function attachGizmoPointerEvents(mount) {
     // sprite with a Point light entity centered on it, for example).
     const world = clientToWorld(e.clientX, e.clientY);
     const lightHit = hitTestLightGizmo(editorState.world, world.x, world.y, _worldPerPixel());
-    if (lightHit) {
-      editorState.selectedId = lightHit.id;
-      if (renderFn) renderFn();
-      return;
+    const audioHit = hitTestAudioGizmo(editorState.world, world.x, world.y, _worldPerPixel());
+    const spriteHit = hitTestEntities(world.x, world.y);
+    const hitId = lightHit ? lightHit.id : audioHit ? audioHit.id : (spriteHit ? spriteHit.id : null);
+    if (hitId) {
+      if (e.shiftKey) {
+        const i = editorState.selectedIds.indexOf(hitId);
+        if (i >= 0) editorState.selectedIds.splice(i, 1);
+        else editorState.selectedIds.push(hitId);
+        editorState.selectedId = editorState.selectedIds.length
+          ? editorState.selectedIds[editorState.selectedIds.length - 1]
+          : null;
+      } else {
+        editorState.selectedId = hitId;
+        editorState.selectedIds = [hitId];
+      }
+    } else if (!e.shiftKey) {
+      // Clicked empty space: clear the selection (Shift+click on empty
+      // keeps the current selection, matching standard editor behavior).
+      editorState.selectedId = null;
+      editorState.selectedIds = [];
     }
-    const hit = hitTestEntities(world.x, world.y);
-    if (hit) {
-      editorState.selectedId = hit.id;
-      if (renderFn) renderFn();
-    }
+    if (renderFn) renderFn();
   });
 
   el.addEventListener("pointermove", (e) => {
@@ -384,6 +411,23 @@ function attachDropTarget(mount) {
   el.addEventListener("drop", (e) => {
     e.preventDefault();
     const spriteKey = e.dataTransfer.getData("application/x-zengine-sprite-key");
+    const audioKey = e.dataTransfer.getData("application/x-zengine-audio-key");
+
+    if (audioKey && editorState.world) {
+      const asset = getAudioAsset(audioKey);
+      if (!asset) return;
+      const world = clientToWorld(e.clientX, e.clientY);
+      const entity = editorState.world.createEntity(asset.name || "Audio");
+      entity.addComponent(TRANSFORM, new Transform({ x: Math.round(world.x), y: Math.round(world.y) }));
+      entity.addComponent(AUDIO_SOURCE, new AudioSource({ audioKey: asset.key }));
+      editorState.selectedId = entity.id;
+      editorState.selectedIds = [entity.id];
+      pushLog("log", "Placed audio '" + asset.name + "' in scene.");
+      syncSpriteRender();
+      if (renderFn) renderFn();
+      return;
+    }
+
     if (!spriteKey || !editorState.world) return;
 
     const asset = getSpriteAsset(spriteKey);
@@ -401,6 +445,7 @@ function attachDropTarget(mount) {
       new SpriteRenderer({ spriteKey: asset.key, referenceWidth: asset.width, referenceHeight: asset.height })
     );
     editorState.selectedId = entity.id;
+    editorState.selectedIds = [entity.id];
     pushLog("log", "Placed sprite '" + asset.name + "' in scene.");
     syncSpriteRender();
     if (renderFn) renderFn();
@@ -451,14 +496,33 @@ function syncBackgroundColor() {
  * Redraws just the gizmo layers (called during drag, every pointermove,
  * without going through the full editor render() for performance).
  */
+function drawSelectionOutlines() {
+  if (!selectionOutlineGfx || !editorState.world) return;
+  selectionOutlineGfx.clear();
+  for (const id of editorState.selectedIds) {
+    if (id === editorState.selectedId) continue; // primary already framed by the transform gizmo
+    const ent = editorState.world.getEntity(id);
+    if (!ent) continue;
+    const t = ent.getComponent(TRANSFORM);
+    if (!t) continue;
+    const real = renderSystem ? renderSystem.getSpriteWorldHalfExtents(ent.id) : null;
+    const hw = real ? real.halfWidth : 40 * Math.max(Math.abs(t.scaleX), Math.abs(t.scaleY), 0.2);
+    const hh = real ? real.halfHeight : hw;
+    selectionOutlineGfx.lineStyle(1.5, 0x8fc153, 1);
+    selectionOutlineGfx.drawRect(t.x - hw, t.y - hh, hw * 2, hh * 2);
+  }
+}
+
 function refreshGizmos() {
   const selected = editorState.world ? editorState.world.getEntity(editorState.selectedId) : null;
+  drawSelectionOutlines();
   transformGizmo.draw(selected);
   const selectedCollider = selected ? selected.getComponent(COLLIDER_2D) : null;
   triangleColliderGizmo.draw(selected, selectedCollider);
   drawCameraGizmo(cameraGizmoContainer, editorState.world);
   drawColliderGizmo(colliderGizmoContainer, editorState.world, editorState.selectedId);
   drawLightGizmo(lightGizmoContainer, editorState.world, editorState.selectedId, _worldPerPixel());
+  drawAudioGizmo(audioGizmoContainer, editorState.world, editorState.selectedId, _worldPerPixel());
 }
 
 /**

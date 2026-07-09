@@ -58,7 +58,7 @@ export function renderHierarchy() {
         else if (e.hasComponent(LIGHT)) iconName = "lightbulb";
         return (
           '<div class="entity-row' +
-          (editorState.selectedId === e.id ? " selected" : "") +
+          (editorState.selectedIds.includes(e.id) ? " selected" : "") +
           '" data-action="select-entity" data-id="' +
           e.id +
           '">' +

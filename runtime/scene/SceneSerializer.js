@@ -18,6 +18,7 @@ import { ShadowCaster, SHADOW_CASTER } from "../components/ShadowCaster.js";
 import { CharacterController, CHARACTER_CONTROLLER } from "../components/CharacterController.js";
 import { LightingSettings, LIGHTING_SETTINGS } from "../components/LightingSettings.js";
 import { SpriteAnimation, SPRITE_ANIMATION } from "../components/SpriteAnimation.js";
+import { AudioSource, AUDIO_SOURCE } from "../components/AudioSource.js";
 
 const COMPONENT_REGISTRY = {
   [TRANSFORM]: Transform,
@@ -30,6 +31,7 @@ const COMPONENT_REGISTRY = {
   [CHARACTER_CONTROLLER]: CharacterController,
   [LIGHTING_SETTINGS]: LightingSettings,
   [SPRITE_ANIMATION]: SpriteAnimation,
+  [AUDIO_SOURCE]: AudioSource,
 };
 
 /**
@@ -74,4 +76,49 @@ export function deserializeScene(world, sceneData) {
   }
 
   return world;
+}
+
+/**
+ * Serializes a single entity to plain JSON-serializable data (deep —
+ * nested arrays like trianglePoints / animation clips are cloned, not
+ * shared by reference with the live component). Used by the editor's
+ * copy/paste; reconstruction goes through the same COMPONENT_REGISTRY
+ * deserializeScene uses, so a pasted entity is identical to one loaded
+ * from a scene file.
+ * @param {import('../core/World.js').Entity} entity
+ * @returns {{ name:string, tag:string, active:boolean, components:Record<string,object> }}
+ */
+export function serializeEntity(entity) {
+  return {
+    name: entity.name,
+    tag: entity.tag,
+    active: entity.active,
+    components: Object.fromEntries(
+      Array.from(entity.components.entries()).map(([type, comp]) => [
+        type,
+        JSON.parse(JSON.stringify(comp)),
+      ])
+    ),
+  };
+}
+
+/**
+ * Creates a new entity in `world` from serializeEntity output (or a
+ * single entity entry from a scene file), reconstructing every
+ * component via its registered constructor. Optionally overrides the
+ * name (paste uses this to suffix " (Copy)"). Returns the new entity.
+ * @param {import('../core/World.js').World} world
+ * @param {{ name:string, tag:string, active:boolean, components:Record<string,object> }} data
+ * @param {string} [nameOverride]
+ * @returns {import('../core/World.js').Entity}
+ */
+export function instantiateEntity(world, data, nameOverride) {
+  const entity = world.createEntity(nameOverride || data.name, data.tag);
+  entity.active = data.active !== false;
+  for (const [type, compData] of Object.entries(data.components || {})) {
+    const ComponentClass = COMPONENT_REGISTRY[type];
+    if (!ComponentClass) continue;
+    entity.addComponent(type, new ComponentClass(JSON.parse(JSON.stringify(compData))));
+  }
+  return entity;
 }

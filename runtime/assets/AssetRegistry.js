@@ -14,10 +14,20 @@
  * RUNTIME-ONLY FILE.
  */
 
-import { loadImageAssetFromFile } from "./AssetManager.js";
+import { loadImageAssetFromFile, loadAudioAssetFromFile } from "./AssetManager.js";
 
 /** @type {Map<string, { key: string, name: string, dataUrl: string, width: number, height: number }>} */
 const _assets = new Map();
+
+/**
+ * Separate catalogue for imported audio clips — backs the Project
+ * panel's "Audio" folder and the drag source for placing an AudioSource
+ * entity in a scene. Kept apart from _assets (sprites) for the same
+ * asset-browser-grouping reason _frameAssets is kept apart below: each
+ * folder in BottomPanel.js reads exactly one catalogue.
+ * @type {Map<string, { key: string, name: string, dataUrl: string, duration: number }>}
+ */
+const _audioAssets = new Map();
 
 /**
  * Separate catalogue for animation-frame textures (see
@@ -52,6 +62,34 @@ export async function importSpriteFiles(files) {
     imported.push(record);
   }
   return imported;
+}
+
+/**
+ * Imports one or more audio Files as audio assets, mirroring
+ * importSpriteFiles() exactly: loads each into AssetManager's audio
+ * cache and records a plain-data catalogue entry here.
+ * @param {File[]|FileList} files
+ * @returns {Promise<Array<{key:string,name:string,dataUrl:string,duration:number}>>}
+ */
+export async function importAudioFiles(files) {
+  const imported = [];
+  for (const file of Array.from(files)) {
+    if (!file.type || !file.type.startsWith("audio/")) continue;
+    const key = "audio_" + _nextAssetId++ + "_" + sanitizeName(file.name);
+    const { dataUrl, duration } = await loadAudioAssetFromFile(key, file);
+    const record = { key, name: stripExtension(file.name), dataUrl, duration };
+    _audioAssets.set(key, record);
+    imported.push(record);
+  }
+  return imported;
+}
+
+export function getAllAudioAssets() {
+  return Array.from(_audioAssets.values());
+}
+
+export function getAudioAsset(key) {
+  return _audioAssets.get(key) || null;
 }
 
 export function getAllSpriteAssets() {

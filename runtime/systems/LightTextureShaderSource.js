@@ -213,7 +213,17 @@ float godRaysBrightness(vec2 toPixel, float dist, float radius, float rotation, 
     float fineF = (coneT * 0.5 + 0.5) * 11.0 + dist * 0.006 - uTime * 0.08;
     float fine = mix(0.82, 1.0, 0.5 + 0.5 * sin(fineF));
 
-    float brightness = coneMask * longFade * bandBrightness * fine;
+    // A third, much broader/slower haze layer riding under the bands
+    // and fine shimmer — real dusty light shafts read as a handful of
+    // crisper inner streaks floating inside a wider, softer glow of
+    // suspended haze, not just one layer of texture. This is what
+    // keeps the whole beam looking atmospheric/volumetric even in the
+    // gaps between the brighter inner bands, rather than the bands
+    // being the entire visual story.
+    float broadF = (coneT * 0.5 + 0.5) * 2.0 + dist * 0.0009 + uTime * 0.015;
+    float broadHaze = mix(0.75, 1.0, 0.5 + 0.5 * sin(broadF * PI));
+
+    float brightness = coneMask * longFade * bandBrightness * fine * broadHaze;
 
     // Gentle glow right at the light source so its origin doesn't look
     // clipped/flat, softened into the rest of the shaft rather than a
@@ -382,7 +392,31 @@ void main(void) {
         }
 
         float litBrightness = brightness * (1.0 - shadowAmount);
-        accumulatedLight += color * litBrightness;
+
+        // HDR-ish core brightening: past litBrightness == 1.0 (i.e.
+        // wherever this light's OWN intensity/falloff pushes past a
+        // normal "fully lit" value — always near the light's source,
+        // never out at the dim edge of its falloff), the extra energy
+        // no longer just keeps adding pure "color" linearly (which is
+        // what made cranking Intensity wash the whole lit area toward
+        // flat white — rgb clamps to (1,1,1) at the SAME rate
+        // everywhere brightness>=1, so a wide midtone falloff region
+        // clips to white just as fast as the actual core does).
+        // Instead the excess is Reinhard-style soft-compressed into a
+        // "how hot is this pixel" amount that both nudges the light's
+        // own color toward white-hot AND continues to climb the
+        // overall magnitude a little further (real over-driven light
+        // sources genuinely get brighter AND whiter at their core,
+        // like a filament or the sun's disc) — but both curves
+        // asymptote (hotAmount -> 1, magnitude -> ~1.6) instead of
+        // ever hard-clipping, so no matter how high Intensity is set
+        // this stays a bright hot core surrounded by its normal
+        // colored falloff, never a flat white wash.
+        float over = max(0.0, litBrightness - 1.0);
+        float hotAmount = clamp(over / (1.0 + over), 0.0, 1.0);
+        vec3 litColor = mix(color, vec3(1.0), hotAmount);
+        float litMagnitude = min(litBrightness, 1.0) + hotAmount * 0.6;
+        accumulatedLight += litColor * litMagnitude;
 
         if (shadowAmount > 0.0015) {
             accumulatedShadowTint += uLightShadowColor[i] * shadowAmount * brightness;

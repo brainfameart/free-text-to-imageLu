@@ -20,9 +20,10 @@ import { LIGHT, LightType } from "../../runtime/components/Light.js";
 import { SHADOW_CASTER } from "../../runtime/components/ShadowCaster.js";
 import { LIGHTING_SETTINGS } from "../../runtime/components/LightingSettings.js";
 import { SPRITE_ANIMATION } from "../../runtime/components/SpriteAnimation.js";
+import { AUDIO_SOURCE } from "../../runtime/components/AudioSource.js";
 import { ShadowMode } from "../../runtime/systems/LightingQuality.js";
 import { getCameraResolution } from "../../runtime/core/CameraUtils.js";
-import { getSpriteAsset } from "../../runtime/assets/AssetRegistry.js";
+import { getSpriteAsset, getAudioAsset } from "../../runtime/assets/AssetRegistry.js";
 
 export function renderInspector() {
   const world = editorState.world;
@@ -250,6 +251,49 @@ export function renderInspector() {
         ) +
         shadowFields +
         '<button class="removecomp-btn" data-action="remove-component" data-component="Light" style="margin-top:6px;">Remove Component</button>'
+    );
+  }
+
+  const audioSource = entity.getComponent(AUDIO_SOURCE);
+  if (audioSource) {
+    const audioAsset = audioSource.audioKey ? getAudioAsset(audioSource.audioKey) : null;
+    const audioDisplayName = audioAsset ? audioAsset.name : audioSource.audioKey || "None";
+
+    const distanceFieldsHtml = audioSource.is3D
+      ? row("Min Distance", numInput("", audioSource.minDistance, "AudioSource.minDistance")) +
+        row("Max Distance", numInput("", audioSource.maxDistance, "AudioSource.maxDistance")) +
+        '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
+        "Full volume within Min Distance of the camera, fading out linearly to silent by Max Distance — shown as the two circles around this object in the Scene view." +
+        "</div>"
+      : '<div class="static-body-note" style="padding:6px 4px;color:#8a93a0;font-size:11px;">' +
+        "2D audio plays at a constant volume everywhere in the scene, regardless of this object's position — use it for background music or UI sounds." +
+        "</div>";
+
+    body += section(
+      editorState.sectionsOpen,
+      "audiosource",
+      "Audio Source",
+      "music",
+      row(
+        "Clip",
+        '<div class="sprite-row"><div class="sprite-box">' + audioDisplayName + "</div></div>"
+      ) +
+        row("Mode", dropdownInput(["2D", "3D"], audioSource.is3D ? "3D" : "2D", "AudioSource.is3DLabel")) +
+        row("Volume", numInput("", audioSource.volume, "AudioSource.volume")) +
+        row(
+          "Loop",
+          '<input type="checkbox" data-field="AudioSource.loop" style="accent-color:#2C5D87;margin:0;"' +
+            (audioSource.loop ? " checked" : "") +
+            "/>"
+        ) +
+        row(
+          "Play On Awake",
+          '<input type="checkbox" data-field="AudioSource.autoplay" style="accent-color:#2C5D87;margin:0;"' +
+            (audioSource.autoplay ? " checked" : "") +
+            "/>"
+        ) +
+        distanceFieldsHtml +
+        '<button class="removecomp-btn" data-action="remove-component" data-component="AudioSource" style="margin-top:6px;">Remove Component</button>'
     );
   }
 
@@ -602,6 +646,7 @@ export function renderInspector() {
     !controller && { name: "CharacterController", label: "Movement Type" },
     !spriteAnimation && { name: "SpriteAnimation", label: "Sprite Animation" },
     !light && { name: "Light", label: "Light" },
+    !audioSource && { name: "AudioSource", label: "Audio Source" },
     !shadowCaster && { name: "ShadowCaster", label: "Shadow Caster" },
     !lightingSettings && { name: "LightingSettings", label: "Lighting Settings" },
   ].filter(Boolean);

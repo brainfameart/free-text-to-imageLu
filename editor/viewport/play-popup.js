@@ -19,7 +19,7 @@
  */
 
 import { createGame } from "../../runtime/index.js";
-import { registerTexture } from "../../runtime/assets/AssetManager.js";
+import { registerTexture, registerAudio } from "../../runtime/assets/AssetManager.js";
 import { RenderSystem } from "../../runtime/systems/RenderSystem.js";
 import { CAMERA } from "../../runtime/components/Camera.js";
 import { TRANSFORM } from "../../runtime/components/Transform.js";
@@ -57,6 +57,19 @@ function loadSpriteAssets(spriteAssets) {
   return Promise.all(loads);
 }
 
+/**
+ * Same reasoning as loadSpriteAssets() above, for audio: this popup's
+ * import of AssetManager.js gets a brand new, empty _audioCache, so
+ * any imported audio clip is otherwise unknown here and every
+ * AudioSource would silently resolve to nothing and never play.
+ * @param {Array<{key:string,dataUrl:string}>} audioAssets
+ */
+function loadAudioAssets(audioAssets) {
+  for (const { key, dataUrl } of audioAssets || []) {
+    registerAudio(key, dataUrl);
+  }
+}
+
 async function boot() {
   const payload = window.opener && window.opener.__ZENGINE_PLAY_PAYLOAD__;
   if (!payload) {
@@ -65,12 +78,13 @@ async function boot() {
     return;
   }
 
-  const { sceneData, width, height, spriteAssets } = payload;
+  const { sceneData, width, height, spriteAssets, audioAssets } = payload;
 
   // Register real textures BEFORE the scene loads, so sprite entities
   // resolve to the actual imported images on their very first frame
   // instead of momentarily (or permanently) showing the missing marker.
   await loadSpriteAssets(spriteAssets);
+  loadAudioAssets(audioAssets);
 
   const mount = document.getElementById("game-canvas");
   mount.style.width = width + "px";

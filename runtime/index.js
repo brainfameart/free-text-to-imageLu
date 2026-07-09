@@ -17,6 +17,7 @@ import { PhysicsSystem } from "./systems/PhysicsSystem.js";
 import { AnimationSystem } from "./systems/AnimationSystem.js";
 import { RenderSystem } from "./systems/RenderSystem.js";
 import { LightingSystem } from "./systems/LightingSystem.js";
+import { AudioSystem } from "./systems/AudioSystem.js";
 import { loadSceneFromUrl, loadDefaultScene, validateScene } from "./scene/SceneLoader.js";
 import { serializeScene, deserializeScene } from "./scene/SceneSerializer.js";
 import {
@@ -30,7 +31,7 @@ import {
   deleteScene,
 } from "./scene/SceneManager.js";
 import { ScriptAPI } from "./scripting/ScriptAPI.js";
-import { importSpriteFiles, getAllSpriteAssets, getSpriteAsset } from "./assets/AssetRegistry.js";
+import { importSpriteFiles, getAllSpriteAssets, getSpriteAsset, importAudioFiles, getAllAudioAssets, getAudioAsset } from "./assets/AssetRegistry.js";
 import { getCameraResolution, getCameraWorldRect } from "./core/CameraUtils.js";
 
 /**
@@ -106,6 +107,13 @@ export function createGame({ pixiApp, followMainCamera = false }) {
   const lightingSystem = new LightingSystem(gameContentContainer, renderSystem, pixiApp);
   world.addSystem(lightingSystem);
 
+  // AudioSystem doesn't touch gameContentContainer at all (it drives
+  // plain HTMLAudioElements, not PIXI display objects) so its place in
+  // the system order relative to rendering/lighting doesn't matter —
+  // added last for clarity only.
+  const audioSystem = new AudioSystem();
+  world.addSystem(audioSystem);
+
   const scriptApi = new ScriptAPI(world);
   const loop = new GameLoop(world);
 
@@ -121,6 +129,7 @@ export function createGame({ pixiApp, followMainCamera = false }) {
     destroyRenderer: () => renderSystem.destroy(),
     destroyLighting: () => lightingSystem.destroy(),
     destroyControllers: () => controllerSystem.destroy(),
+    destroyAudio: () => audioSystem.destroy(),
 
     // Multi-scene project management (see scene/SceneManager.js). Sprite
     // assets are NOT scoped per-scene — AssetRegistry.js is one shared
@@ -144,6 +153,9 @@ export {
   importSpriteFiles,
   getAllSpriteAssets,
   getSpriteAsset,
+  importAudioFiles,
+  getAllAudioAssets,
+  getAudioAsset,
   getCameraResolution,
   getCameraWorldRect,
 };

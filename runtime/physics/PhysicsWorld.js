@@ -195,12 +195,12 @@ export class PhysicsWorld {
         rb.velocityY = vel.y;
         rb.angularVelocity = handle.body.angvel();
       }
-      // KINEMATIC: rb.velocityX/Y are left as whatever the character-
-      // controller sweep in _syncEntity already wrote (the ACTUAL,
-      // possibly-blocked/slid velocity for this step) — a
-      // KinematicPositionBased body has no meaningful linvel() from
-      // Rapier's solver to read back here, since we drive it via
-      // setNextKinematicTranslation rather than forces/velocity.
+      // KINEMATIC: rb.velocityX/Y stay as the INTENDED input the
+      // controller/Inspector/script set (they are NOT overwritten here
+      // or by the sweep — see resolvedVelocityX/Y for the actual/blocked
+      // movement). A KinematicPositionBased body has no meaningful
+      // linvel() from Rapier's solver to read back here, since we drive
+      // it via setNextKinematicTranslation rather than forces/velocity.
     }
   }
 
@@ -351,12 +351,17 @@ export class PhysicsWorld {
       handle.body.setNextKinematicRotation(currentRotation + rb.angularVelocity * dt);
     }
 
-    // Report back the ACTUAL (possibly blocked/slid) velocity, not the
-    // requested one, so gameplay code (grounded checks, animation
-    // blending, etc — e.g. ControllerSystem's grounded epsilon check)
-    // sees what really happened this step rather than raw input intent.
-    rb.velocityX = dt > 0 ? corrected.x / dt : 0;
-    rb.velocityY = dt > 0 ? corrected.y / dt : 0;
+    // Report the ACTUAL (possibly blocked/slid) movement to the
+    // resolved* fields so gameplay code (grounded checks, animation,
+    // scripts asking "did I actually move this step?") sees what really
+    // happened — WITHOUT clobbering velocityX/Y, which stay as the
+    // intended input the controller/Inspector/script set. Overwriting
+    // velocityX/Y here used to feed the blocked velocity back into
+    // ControllerSystem's acceleration lerp next frame, decelerating a
+    // kinematic body every time it pushed something (a real kinematic
+    // body has infinite mass and should never slow down from a collision).
+    rb.resolvedVelocityX = dt > 0 ? corrected.x / dt : 0;
+    rb.resolvedVelocityY = dt > 0 ? corrected.y / dt : 0;
     // Real sweep-based grounded state (see the field's doc in
     // Rigidbody2D.js) — this is what ControllerSystem should check
     // instead of guessing from a velocity epsilon, which is what
