@@ -489,10 +489,31 @@ export class PhysicsWorld {
       ? { x: desiredX, y: desiredY }
       : corrected;
 
+    // THE missing half of the fix: this must move using
+    // effectiveCorrected, NOT the raw sweep `corrected` value. Per
+    // Rapier's own docs, computeColliderMovement's sweep treats EVERY
+    // obstacle — dynamic bodies included — as something to stop/slide
+    // against when computing the kinematic's own corrected movement; it
+    // does NOT push them out of the way itself (that's exactly why the
+    // manual bulldozer push above exists). Using raw `corrected` here
+    // meant the kinematic still physically halted/slid at the box's
+    // surface every time (the sweep doesn't know the bulldozer push is
+    // about to shove the box aside), even though _bulldozeDynamicBodies
+    // had already set the box's velocity — so the box just sat there
+    // being effectively used as a wall, dragged along at whatever crawl
+    // speed the mover's slide-response allowed, which is why previous
+    // testing showed the box "moving" at a value that tracked the
+    // mover's stuck position rather than any real massRatio-scaled push
+    // speed. effectiveCorrected already resolves to the FULL requested
+    // desiredX/Y whenever every touched obstacle this frame was a
+    // Dynamic body successfully handed off to the bulldozer push (see
+    // onlyDynamicBlocking above), so the kinematic now actually walks
+    // through/into the space the box is vacating instead of stopping at
+    // its old position.
     const current = handle.body.translation();
     handle.body.setNextKinematicTranslation({
-      x: current.x + corrected.x,
-      y: current.y + corrected.y,
+      x: current.x + effectiveCorrected.x,
+      y: current.y + effectiveCorrected.y,
     });
 
     if (!rb.lockRotation) {
