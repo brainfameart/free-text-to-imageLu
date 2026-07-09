@@ -26,46 +26,6 @@ import { TRANSFORM } from "../components/Transform.js";
 import { RIGIDBODY_2D, BodyType } from "../components/Rigidbody2D.js";
 import { COLLIDER_2D, ColliderShape } from "../components/Collider2D.js";
 import { getColliderWorldGeometry } from "./ColliderGeometry.js";
-
-/**
- * Rough world-space area (px^2) of a Collider2D's shape, used ONLY to
- * put a Kinematic body's "Push Mass" (Rigidbody2D.mass — a bare,
- * user-typed number with no inherent unit) onto the SAME physical
- * scale as a Dynamic body's real Rapier mass (density * area). Without
- * this, comparing Push Mass directly against another body's density-
- * derived mass is comparing two different unit systems — e.g. a
- * "Push Mass" of 10,000 against a 100x100px, density-400 box (real
- * mass ~400 in Rapier's own units, area ~1 in length-unit-scaled m^2)
- * looks like it SHOULD dominate completely, but the raw numbers
- * 10000 vs 400 don't actually mean anything physically comparable
- * until both are run through the same density*area formula — which is
- * exactly why dynamic-vs-dynamic pushes already felt intuitive
- * (Rapier computes both sides identically) while kinematic-vs-dynamic
- * didn't (one side was a free-floating number, the other was a real
- * physical quantity).
- *
- * Matches Rapier's own area formulas closely enough for this
- * comparative-only purpose (doesn't need to be exact to the pixel):
- * Box: width*height. Circle: pi*r^2. Capsule: rectangle + two half-
- * circle caps = (2*radius * 2*halfHeight) + (pi*radius^2). Triangle:
- * shoelace formula on its three local points.
- */
-function estimateColliderArea(collider, transform) {
-  const geo = getColliderWorldGeometry(collider, transform);
-  switch (geo.shape) {
-    case ColliderShape.CIRCLE:
-      return Math.PI * geo.radius * geo.radius;
-    case ColliderShape.CAPSULE:
-      return 2 * geo.radius * (2 * geo.halfHeight) + Math.PI * geo.radius * geo.radius;
-    case ColliderShape.TRIANGLE: {
-      const [a, b, c] = geo.localPoints;
-      return Math.abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) / 2;
-    }
-    case ColliderShape.BOX:
-    default:
-      return geo.halfWidth * 2 * (geo.halfHeight * 2);
-  }
-}
 import { loadRapier } from "./RapierLoader.js";
 
 const GRAVITY_Y = 980; // px/s^2 downward — same constant the old stub integrator used
@@ -117,9 +77,6 @@ export class PhysicsWorld {
     /** @type {Map<string, { body: object, collider: object|null, bodyType: string, colliderSig: string }>} entityId -> handles */
     this._handles = new Map();
 
-    /** @type {Array<{body: object, x: number, y: number}>} bulldozer pushes queued during the current step's sync pass, applied after rapierWorld.step() — see step() and _bulldozeDynamicBodies for why. */
-    this._pendingPushes = [];
-
     // Small skin/offset gap (in world pixels) the character controller
     // keeps between a kinematic body and whatever it's sweeping
     // against — Rapier requires a nonzero value for solver stability.
@@ -162,27 +119,15 @@ export class PhysicsWorld {
         true // also allow autostepping onto dynamic bodies
       );
 
-      // Native push DISABLED on purpose (was: setApplyImpulsesToDynamicBodies(true)).
-      // Originally left "on" on the assumption it was harmless alongside
-      // the manual bulldozer push below, but it isn't: it fires INSIDE
-      // computeColliderMovement's own sweep (before the manual push code
-      // even runs), applying its own contact-normal impulse using
-      // Rapier's internal characterMass-vs-bodyMass resolution — a
-      // completely different formula from _bulldozeDynamicBodies's
-      // massRatio math, and along the contact normal rather than the
-      // kinematic's travel direction. Because rapierWorld.step() (called
-      // by the caller right after this whole sync pass) then does its own
-      // full contact solve on top of THAT, a dynamic body being pushed
-      // could end up at a velocity that's some blend of Rapier's native
-      // impulse and the manual setLinvel override, dominated by whichever
-      // one the solver resolves last — in practice this produced the same
-      // ~constant push speed regardless of Push Mass/density (confirmed
-      // via player/test-collisions.js's speed-verification cases: equal
-      // mass, 4x denser target, and 4x heavier pusher all landed at the
-      // identical ~116px/s instead of the expected 100/25/400px/s). The
-      // manual bulldozer push is the ONLY intended source of push
-      // velocity now; leaving this native path off avoids it injecting a
-      // second, uncontrolled velocity contribution ahead of it.
+      // Dynamic-body pushing is handled MANUALLY in
+      // _syncKinematicMovement._pushDynamicBodies: a directional,
+      // bulldozer-style shove along the kinematic's actual travel
+      // direction. The character controller's built-in
+      // setApplyImpulsesToDynamicBodies is left OFF on purpose — per
+      // Rapier's own docs it only pushes along contact normals and
+      // frequently produces no reaction at all (the controller's offset
+      // gap prevents real contacts), so it can't be relied on for
+      // "push bodies in the direction the kinematic is moving".
       this._characterController.setApplyImpulsesToDynamicBodies(false);
 
       this.ready = true;
@@ -209,19 +154,6 @@ export class PhysicsWorld {
     );
     const seen = new Set();
 
-    // Queue of bulldozer pushes computed during this step's sync pass
-    // (see _bulldozeDynamicBodies) — applied via setLinvel AFTER
-    // rapierWorld.step() below runs, not before. Applying it before the
-    // step let Rapier's own contact solver immediately re-resolve/blend
-    // that velocity with its own collision response during the same
-    // step, so the push speed actually reaching the dynamic body was
-    // never purely massRatio-driven no matter what math computed it here
-    // (confirmed via player/test-collisions.js's speed-verification
-    // cases, which all landed at the same ~116px/s regardless of Push
-    // Mass/density before this fix). Setting it after step() makes this
-    // queued velocity the last word for the frame.
-    this._pendingPushes = [];
-
     const stepDt = dt > 0 ? dt : 1 / 60;
     for (const entity of entities) {
       seen.add(entity.id);
@@ -239,18 +171,6 @@ export class PhysicsWorld {
 
     this.rapierWorld.timestep = stepDt;
     this.rapierWorld.step();
-
-    // Apply queued bulldozer pushes NOW, after the solver has already
-    // resolved this frame's contacts — see the comment on
-    // this._pendingPushes above for why this can't happen before step().
-    // wakeUp() first in case the dynamic body's own contact resolution
-    // this step put it to sleep (e.g. barely-moving edge case) before the
-    // push velocity is set on it.
-    for (const push of this._pendingPushes) {
-      push.body.wakeUp();
-      push.body.setLinvel({ x: push.x, y: push.y }, true);
-    }
-    this._pendingPushes = [];
 
     // write results back onto Transform for every DYNAMIC / KINEMATIC body
     for (const entity of entities) {
@@ -344,29 +264,7 @@ export class PhysicsWorld {
         handle.body.setLinearDamping(rb.linearDamping);
         handle.body.setAngularDamping(rb.angularDamping);
         handle.body.lockRotations(!!rb.lockRotation, true);
-        // IMPORTANT: do NOT unconditionally call setAdditionalMass(rb.mass)
-        // here. Rapier's real mass source for a Dynamic body is
-        // density * colliderArea (Collider2D.density, applied via
-        // setDensity() in _syncCollider below) — that's what the
-        // Inspector's "Density" field actually controls, matching how
-        // most 2D engines (Unity2D/Box2D included) derive mass. But
-        // setAdditionalMass() doesn't REPLACE that — it's literally
-        // additive on top of the density-derived mass, and calling it
-        // every single frame with rb.mass defaulting to 1 meant a body
-        // with density=0.1 (intended mass ≈0.1×area) was actually
-        // sitting at ≈(0.1×area + 1), i.e. its real mass floor was
-        // pinned near 1 no matter how low density went. That's why the
-        // bulldozer push (_bulldozeDynamicBodies's massRatio =
-        // pusherMass/targetMass) barely moved a "density 0.1" box even
-        // at mover velocity 900 — targetMass was never actually ~0.1,
-        // it was ~1+. Only apply rb.mass as a genuine override when the
-        // person has explicitly moved it off its default (1), signaling
-        // they want a fixed mass regardless of collider density; leave
-        // density as the sole mass source otherwise.
-        const hasExplicitMassOverride = Math.abs(rb.mass - 1) > 1e-6;
-        if (hasExplicitMassOverride) {
-          handle.body.setAdditionalMass(Math.max(0.0001, rb.mass), true);
-        }
+        handle.body.setAdditionalMass(Math.max(0.0001, rb.mass), true);
 
         // A CharacterController (runtime/systems/ControllerSystem.js)
         // may request a specific horizontal speed and/or override Y
@@ -400,7 +298,7 @@ export class PhysicsWorld {
     this._syncCollider(handle, collider, transform);
 
     if (rb && effectiveBodyType === BodyType.KINEMATIC) {
-      this._syncKinematicMovement(handle, rb, collider, transform, dt);
+      this._syncKinematicMovement(handle, rb, dt);
     }
   }
 
@@ -414,47 +312,14 @@ export class PhysicsWorld {
    * KinematicPositionBased on its own does not do this (Rapier moves a
    * kinematic body exactly where it's told, colliding-or-not, unless a
    * character controller is used to compute the correction first).
-   *
-   * Pushing dynamic bodies: setApplyImpulsesToDynamicBodies(true) is
-   * Rapier's OWN built-in mechanism for this, but it has two real
-   * limitations documented by Rapier itself and confirmed here:
-   *   1. It only fires when the controller's sweep actually registers a
-   *      contact against its offset "skin" (_characterControllerOffset,
-   *      0.5px) — with normal per-frame movement deltas that contact
-   *      can easily be missed or only partially register, so the push
-   *      is unreliable rather than "pushes whenever touching".
-   *   2. When it DOES fire, the impulse is applied along the CONTACT
-   *      NORMAL (perpendicular to the touched surface), not along the
-   *      kinematic's own direction of travel — so shoving a box from
-   *      the side can nudge it diagonally, barely, or not at all,
-   *      rather than cleanly in the direction the mover is walking.
-   * NOW DISABLED (constructor sets it to false) instead of "left enabled
-   * as harmless": it turned out NOT harmless — it fires during this same
-   * sweep, before the manual bulldozer push below even runs, injecting
-   * its own contact-normal impulse using Rapier's internal characterMass
-   * math. rapierWorld.step() afterward would then blend/override that
-   * with the manual push in ways that had nothing to do with massRatio,
-   * which is why every Push Mass/density combination used to converge on
-   * the same push speed instead of scaling with the ratio (see
-   * player/test-collisions.js's speed-verification cases). Below, a
-   * manual "bulldozer" push is added instead: after the sweep, every
-   * dynamic body the controller actually touched this frame gets its
-   * velocity queued to be set DIRECTLY along the kinematic's own travel
-   * direction (scaled by its speed), mass-gated so heavier things resist
-   * more, and applied AFTER rapierWorld.step() so nothing overwrites it
-   * later in the same frame. This guarantees the felt behavior the
-   * person asked for — "push dynamic bodies based on where they're
-   * moving, at a speed that actually reflects their relative mass" —
-   * regardless of the offset-gap timing issue.
    */
-  _syncKinematicMovement(handle, rb, collider, transform, dt) {
+  _syncKinematicMovement(handle, rb, dt) {
     if (!handle.collider) return; // no collider yet (created same frame) — nothing to sweep
 
-    // Kept in sync even though setApplyImpulsesToDynamicBodies is now
-    // OFF (see constructor) — harmless no-op for the disabled native
-    // push, left set in case that native path is ever re-enabled. It has
-    // NO effect on the manual bulldozer push below, which uses
-    // Rigidbody2D.mass directly via its own massRatio math instead.
+    // Use this body's own Rigidbody2D.mass as the character mass for
+    // impulse resolution — without this, setApplyImpulsesToDynamicBodies
+    // still works but assumes mass 0 (no push at all) since a kinematic
+    // body has no intrinsic mass of its own in Rapier's eyes.
     this._characterController.setCharacterMass(Math.max(0.0001, rb.mass));
 
     const desiredX = rb.velocityX * dt;
@@ -464,56 +329,21 @@ export class PhysicsWorld {
       x: desiredX,
       y: desiredY,
     });
+
+    // Push every DYNAMIC body this kinematic mover ran into, along the
+    // direction it is actually moving (a bulldozer shove that brings
+    // each hit body up to the kinematic's own travel speed). Done AFTER
+    // the sweep so we know which bodies were hit; the sweep itself
+    // still stops/slides this kinematic against them exactly as before.
+    this._pushDynamicBodies(rb, desiredX, desiredY, dt);
+
     const corrected = this._characterController.computedMovement();
     const grounded = this._characterController.computedGrounded();
 
-    const onlyDynamicBlocking = this._bulldozeDynamicBodies(handle, rb, collider, transform, desiredX, desiredY, dt);
-
-    // If everything currently touching the sweep is a Dynamic body the
-    // bulldozer push just handled (no static/kinematic obstruction is
-    // involved), don't let the controller's "corrected" (blocked/
-    // reduced) movement stand in for the kinematic's own reported
-    // velocity below — that reduction only exists because the sweep
-    // treats the dynamic body as an obstacle for ITS OWN movement
-    // calculation, but the bulldozer push already resolves that contact
-    // by moving the dynamic body out of the way instead. Without this,
-    // rb.velocityX/Y would erode every single frame the kinematic is in
-    // contact with something it's actively pushing, even though nothing
-    // ever told it to slow down — a real, reproducible bug (the
-    // kinematic visibly loses speed mid-push).
-    // Real obstructions (static walls, other kinematics) are NOT
-    // affected by this — onlyDynamicBlocking is false whenever a
-    // non-dynamic body is also part of the contact, so `corrected`
-    // still correctly reflects being blocked/slid in that case.
-    const effectiveCorrected = onlyDynamicBlocking
-      ? { x: desiredX, y: desiredY }
-      : corrected;
-
-    // THE missing half of the fix: this must move using
-    // effectiveCorrected, NOT the raw sweep `corrected` value. Per
-    // Rapier's own docs, computeColliderMovement's sweep treats EVERY
-    // obstacle — dynamic bodies included — as something to stop/slide
-    // against when computing the kinematic's own corrected movement; it
-    // does NOT push them out of the way itself (that's exactly why the
-    // manual bulldozer push above exists). Using raw `corrected` here
-    // meant the kinematic still physically halted/slid at the box's
-    // surface every time (the sweep doesn't know the bulldozer push is
-    // about to shove the box aside), even though _bulldozeDynamicBodies
-    // had already set the box's velocity — so the box just sat there
-    // being effectively used as a wall, dragged along at whatever crawl
-    // speed the mover's slide-response allowed, which is why previous
-    // testing showed the box "moving" at a value that tracked the
-    // mover's stuck position rather than any real massRatio-scaled push
-    // speed. effectiveCorrected already resolves to the FULL requested
-    // desiredX/Y whenever every touched obstacle this frame was a
-    // Dynamic body successfully handed off to the bulldozer push (see
-    // onlyDynamicBlocking above), so the kinematic now actually walks
-    // through/into the space the box is vacating instead of stopping at
-    // its old position.
     const current = handle.body.translation();
     handle.body.setNextKinematicTranslation({
-      x: current.x + effectiveCorrected.x,
-      y: current.y + effectiveCorrected.y,
+      x: current.x + corrected.x,
+      y: current.y + corrected.y,
     });
 
     if (!rb.lockRotation) {
@@ -521,20 +351,12 @@ export class PhysicsWorld {
       handle.body.setNextKinematicRotation(currentRotation + rb.angularVelocity * dt);
     }
 
-    // Report back velocity: normally the ACTUAL (possibly blocked/slid)
-    // corrected velocity, not the requested one, so gameplay code
-    // (grounded checks, animation blending, ControllerSystem's
-    // acceleration lerp) sees what really happened this step rather
-    // than raw input intent — this is what lets a kinematic correctly
-    // slow down/stop when it hits a REAL obstruction (a static wall or
-    // another kinematic). But when the ONLY thing touched this frame
-    // was a Dynamic body the bulldozer push already handled,
-    // effectiveCorrected substitutes the requested desiredX/Y instead —
-    // otherwise the kinematic's own reported speed erodes every frame
-    // it's in contact with something it's actively pushing, even
-    // though nothing ever told it to slow down.
-    rb.velocityX = dt > 0 ? effectiveCorrected.x / dt : 0;
-    rb.velocityY = dt > 0 ? effectiveCorrected.y / dt : 0;
+    // Report back the ACTUAL (possibly blocked/slid) velocity, not the
+    // requested one, so gameplay code (grounded checks, animation
+    // blending, etc — e.g. ControllerSystem's grounded epsilon check)
+    // sees what really happened this step rather than raw input intent.
+    rb.velocityX = dt > 0 ? corrected.x / dt : 0;
+    rb.velocityY = dt > 0 ? corrected.y / dt : 0;
     // Real sweep-based grounded state (see the field's doc in
     // Rigidbody2D.js) — this is what ControllerSystem should check
     // instead of guessing from a velocity epsilon, which is what
@@ -544,203 +366,54 @@ export class PhysicsWorld {
   }
 
   /**
-   * Manual push pass: iterates every collision the character controller
-   * sweep just detected (numComputedCollisions/computedCollision — the
-   * SAME sweep _syncKinematicMovement already did above, so this costs
-   * no extra physics query), and for any touched collider that belongs
-   * to a DYNAMIC body, sets that body's velocity directly along the
-   * kinematic's OWN travel direction — not the contact normal — scaled
-   * by how fast the kinematic is moving and gated by relative mass so a
-   * light mover can't shove something far heavier at full speed.
-   *
-   * This intentionally sets velocity (setLinvel) rather than applying
-   * an impulse: an impulse's effect depends on the target's current
-   * velocity/mass in ways that can feel inconsistent frame to frame,
-   * while directly setting velocity along travel direction reliably
-   * produces the "bulldozer" feel — the pushed body moves at (a
-   * fraction of) the pusher's speed, in the pusher's direction, for as
-   * long as contact continues, then falls back to normal Rapier physics
-   * (gravity, other collisions) the instant contact ends since nothing
-   * here holds a persistent force on it.
-   *
-   * NOTE ON API SURFACE: numComputedCollisions()/computedCollision(i)
-   * are rapier2d-compat@0.14.0's documented shape for reading back what
-   * a KinematicCharacterController's sweep just touched
-   * (RapierLoader.js pins this exact version from jsDelivr). Each
-   * returned CharacterCollision exposes a numeric collider HANDLE
-   * (`.handle`), not a live Collider object — it must be resolved via
-   * `this.rapierWorld.getCollider(handle)` before `.parent()` gives you
-   * the owning RigidBody. (An earlier version of this code assumed a
-   * `.collider` object existed directly on the collision entry; it
-   * didn't, so every entry was silently skipped and nothing was ever
-   * pushed — this is the fix for that.)
-   * Wrapped in try/catch and defensive existence checks below so that
-   * IF a future Rapier upgrade renames/reshapes this API, the game
-   * silently falls back to "no manual push" (kinematic bodies still
-   * move/collide correctly via the character controller either way —
-   * this method only ADDS the bulldozer push on top) rather than
-   * throwing and breaking physics entirely.
-   *
-   * @param {{body:object,collider:object}} handle the kinematic's own handle
-   * @param {import('../components/Rigidbody2D.js').Rigidbody2D} rb kinematic's own Rigidbody2D (for Push Mass + speed)
-   * @param {import('../components/Collider2D.js').Collider2D} collider kinematic's own Collider2D (for area, to scale Push Mass into a density-equivalent unit)
-   * @param {import('../components/Transform.js').Transform} transform kinematic's own Transform (world-space scale affects collider area)
-   * @param {number} desiredX raw requested displacement this frame (px), i.e. rb.velocityX * dt, BEFORE the controller's own blocking/sliding correction
-   * @param {number} desiredY same, Y axis
-   * @param {number} dt
+   * Pushes every DYNAMIC body the kinematic mover collided with during
+   * the last character-controller sweep, in the direction the kinematic
+   * is moving. Each hit body is brought up to the kinematic's own travel
+   * speed along that direction, so the push is always "based on where
+   * the kinematic is moving" — not just along the contact normal. A
+   * kinematic body is effectively infinitely strong (forces never move
+   * it), so the transfer is full regardless of the body's mass. STATIC
+   * and KINEMATIC obstacles are skipped (impulses can't move them).
    */
-  _bulldozeDynamicBodies(handle, rb, collider, transform, desiredX, desiredY, dt) {
-    if (dt <= 0) return false;
+  _pushDynamicBodies(rb, desiredX, desiredY, dt) {
+    const RAPIER = this.RAPIER;
+    const controller = this._characterController;
 
-    const speed = Math.hypot(desiredX, desiredY) / dt; // px/s, the kinematic's actual travel speed this frame
-    if (speed < 0.01) return false; // not moving — nothing to push, matches "based on where they're moving"
+    const n = controller.numComputedCollisions();
+    if (n === 0) return;
 
-    const dirX = desiredX / dt / speed;
-    const dirY = desiredY / dt / speed;
+    // The direction the kinematic is moving this step — the basis for
+    // the push direction ("where it is moving").
+    const desiredLen = Math.hypot(desiredX, desiredY);
+    if (desiredLen < 1e-6) return; // not moving anywhere this step
 
-    let count = 0;
-    try {
-      count = this._characterController.numComputedCollisions();
-    } catch (err) {
-      return false; // API not available on this Rapier build — fail safe, no push, and don't claim "all dynamic" since we can't actually tell
+    const dirX = desiredX / desiredLen;
+    const dirY = desiredY / desiredLen;
+    const speed = dt > 0 ? desiredLen / dt : 0; // kinematic speed along the travel dir
+
+    for (let i = 0; i < n; i++) {
+      const col = controller.computedCollision(i);
+      if (!col || !col.collider) continue;
+
+      const otherBody = col.collider.parent();
+      if (!otherBody) continue;
+      if (otherBody.bodyType() !== RAPIER.RigidBodyType.Dynamic) continue;
+
+      // Only add the speed the body doesn't already have along the
+      // travel direction — once it matches the kinematic's pace we stop
+      // shoving, letting Rapier's solver/gravity/friction own the rest.
+      const v = otherBody.linvel();
+      const vAlong = v.x * dirX + v.y * dirY;
+      const deltaV = speed - vAlong;
+      if (deltaV <= 1e-4) continue;
+
+      const otherMass = Math.max(0.0001, otherBody.mass());
+      // Impulse that brings the body exactly up to the kinematic's speed
+      // along the travel direction (impulse = mass * delta-velocity).
+      const impulseMag = otherMass * deltaV;
+      otherBody.applyImpulse({ x: dirX * impulseMag, y: dirY * impulseMag }, true);
+      otherBody.wakeUp();
     }
-
-    if (count === 0) {
-      if (typeof window !== "undefined" && window.__ZENGINE_PUSH_DEBUG__) {
-        console.log(`[bulldoze-debug] numComputedCollisions=0 — sweep detected NO contact this frame (speed=${speed.toFixed(1)})`);
-      }
-      return false; // nothing touched at all this frame — corrected/desired are identical anyway, no special-casing needed
-    }
-
-    // Tracks whether EVERY collision entry this frame resolved to a
-    // Dynamic body that got successfully pushed. If even one entry is a
-    // real obstruction (static/kinematic, or a dynamic body we
-    // couldn't resolve/push for some reason), this becomes false and
-    // the caller correctly falls back to the controller's real
-    // corrected/blocked movement for reported velocity — a genuine
-    // wall should still be able to stop/slow the kinematic.
-    let allDynamicAndPushed = true;
-
-    for (let i = 0; i < count; i++) {
-      let otherBody;
-      try {
-        const collision = this._characterController.computedCollision(i);
-        if (!collision) {
-          allDynamicAndPushed = false;
-          continue;
-        }
-
-        // rapier2d-compat's CharacterCollision does NOT expose a
-        // `.collider` object directly — it exposes `.handle`, a plain
-        // numeric collider handle, which has to be resolved back into
-        // a real Collider via World.getCollider(handle) before you can
-        // call .parent() on it. (An earlier version of this code
-        // assumed a `.collider` object existed directly on the
-        // collision entry; it didn't, so every entry was silently
-        // skipped and nothing was ever pushed — this is the fix for
-        // that.)
-        const colliderHandle = collision.handle;
-        if (colliderHandle === undefined || colliderHandle === null) {
-          allDynamicAndPushed = false;
-          continue;
-        }
-
-        const otherCollider = this.rapierWorld.getCollider(colliderHandle);
-        if (!otherCollider) {
-          allDynamicAndPushed = false;
-          continue;
-        }
-
-        otherBody = otherCollider.parent();
-      } catch (err) {
-        allDynamicAndPushed = false;
-        continue; // unexpected shape for this entry — skip it, don't crash the whole pass
-      }
-      if (!otherBody || typeof otherBody.isDynamic !== "function" || !otherBody.isDynamic()) {
-        allDynamicAndPushed = false; // a real static/kinematic obstruction is present this frame
-        continue;
-      }
-
-      // Mass gating: a light kinematic mover shouldn't shove a much
-      // heavier dynamic body at full speed — but a LIGHT dynamic body
-      // should be able to get shoved FASTER than the kinematic's own
-      // travel speed (a bowling ball rolling into a pebble sends the
-      // pebble flying faster than the ball itself is moving).
-      //
-      // UNITS FIX: Rigidbody2D.mass on a Kinematic body ("Push Mass" in
-      // the Inspector) used to be compared directly against
-      // otherBody.mass() as if they were the same unit — they weren't.
-      // A Dynamic body's real Rapier mass is density * colliderArea, so
-      // even a modest density (e.g. 400) on a normal-sized collider
-      // produces a real mass in the hundreds, while "Push Mass" was a
-      // bare typed number with no area factored in at all — so a push
-      // mass of 10,000 against a real mass of ~400 LOOKED like it
-      // should completely dominate, but the two numbers were never on
-      // comparable footing to begin with (this is why the person's
-      // "10,000 barely did anything" case was actually the multiplier
-      // cap below silently kicking in, not the mass math itself being
-      // wrong). Fix: treat "Push Mass" as a density-equivalent value —
-      // multiply it by the kinematic's OWN collider area
-      // (estimateColliderArea, same shape-area formulas Rapier itself
-      // effectively uses) so pusherMass is expressed in the exact same
-      // physical unit as targetMass. Now a density-equivalent
-      // comparison against a real Dynamic body's density*area mass
-      // means what it looks like it means, the same way comparing two
-      // Dynamic bodies' densities already does.
-      const pusherArea = Math.max(0.0001, estimateColliderArea(collider, transform));
-      const pusherMass = Math.max(0.0001, rb.mass * pusherArea);
-      const targetMass = Math.max(0.0001, otherBody.mass());
-      if (typeof window !== "undefined" && window.__ZENGINE_PUSH_DEBUG__) {
-        console.log(
-          `[bulldoze-debug] rb.mass=${rb.mass} pusherArea=${pusherArea.toFixed(2)} pusherMass=${pusherMass.toFixed(4)} targetMass=${targetMass.toFixed(4)} bodyType=${otherBody.bodyType ? otherBody.bodyType() : "?"} isDynamic=${otherBody.isDynamic()} isSleeping=${otherBody.isSleeping ? otherBody.isSleeping() : "?"}`
-        );
-      }
-      // Uncapped ratio: >1 when the target is lighter than the pusher
-      // (pushed faster than the pusher's own speed), <1 when heavier
-      // (pushed slower), 1 at equal mass. No artificial ceiling now
-      // that both sides are genuinely the same physical unit — a real
-      // mass mismatch (this is the whole point of exposing Push Mass)
-      // should be able to produce a dramatic, obviously-different
-      // result, the same way two Dynamic bodies of very different
-      // density already do.
-      const massRatio = pusherMass / targetMass;
-
-      const pushSpeed = speed * massRatio;
-      // Absolute (not ratio) safety clamp: even with a legitimate,
-      // extreme mass mismatch, don't hand Rapier's solver a velocity
-      // so large it risks tunneling/instability in one step. This is
-      // set far above any normal gameplay speed so it only engages at
-      // genuinely extreme values — it should never be the thing
-      // limiting an ordinary "heavy kinematic pushes light box"
-      // interaction.
-      const MAX_PUSH_SPEED = 20000; // px/s
-      const clampedPushSpeed = Math.min(MAX_PUSH_SPEED, pushSpeed);
-
-      // Set velocity along the kinematic's OWN travel direction — this
-      // is the actual fix for "pushes along contact normal, not travel
-      // direction" (Rapier's built-in setApplyImpulsesToDynamicBodies
-      // behavior). Only the axis-component the kinematic is actually
-      // moving along gets overridden; the other axis (e.g. the dynamic
-      // body's own existing vertical fall speed, if the push is purely
-      // horizontal) is left alone so this doesn't fight gravity or
-      // cancel out unrelated motion on the other axis.
-      //
-      // QUEUED, not applied immediately: setLinvel here would get
-      // immediately re-resolved/blended by rapierWorld.step()'s own
-      // contact solver later in the SAME step (this code runs during the
-      // pre-step sync pass), silently diluting or overriding the
-      // massRatio-computed speed with Rapier's own generic collision
-      // response. Queuing it and applying it in PhysicsWorld.step() AFTER
-      // rapierWorld.step() has already resolved contacts makes this
-      // value the actual final velocity for the frame instead of an
-      // input to the solver that competes with its own physics.
-      const current = otherBody.linvel();
-      const nextX = Math.abs(dirX) > 0.001 ? dirX * clampedPushSpeed : current.x;
-      const nextY = Math.abs(dirY) > 0.001 ? dirY * clampedPushSpeed : current.y;
-      this._pendingPushes.push({ body: otherBody, x: nextX, y: nextY });
-    }
-
-    return allDynamicAndPushed;
   }
 
   /**

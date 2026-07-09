@@ -63,16 +63,7 @@ export function openPlayWindow(game) {
   // marker for every imported sprite. Bundling the imported assets'
   // dataUrls here lets the popup rebuild real textures from the same
   // source bytes before it loads the scene.
-  //
-  // Both catalogues are needed: getAllSpriteAssets() (regular,
-  // Project-panel-visible sprites) AND getAllFrameAssets() (animation
-  // frames, kept in a separate registry so they don't clutter the
-  // Sprites folder — see AssetRegistry.js's registerFrameAsset() doc
-  // comment). Frame assets were previously left out of this payload,
-  // which is why a sprite would render fine in the editor but show the
-  // pink/black placeholder in Play mode the moment its SpriteAnimation
-  // started swapping in frame textures the popup had never registered.
-  const spriteAssets = getAllSpriteAssets().concat(getAllFrameAssets());
+  const spriteAssets = [...getAllSpriteAssets(), ...getAllFrameAssets()];
 
   // Hand the payload off through window.__ZENGINE_PLAY_PAYLOAD__ so the
   // popup (a separate document/context) can read it on load, regardless

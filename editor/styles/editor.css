@@ -86,6 +86,8 @@ svg.icon{display:inline-block;vertical-align:middle;flex-shrink:0;}
 .toolbar-right{margin-left:auto;display:flex;align-items:center;gap:8px;}
 .pill-btn{display:flex;align-items:center;gap:4px;background:#2a2a2a;border:1px solid #202020;border-radius:3px;padding:2px 8px;font-size:11px;color:#ccc;}
 .pill-btn:hover{background:#333;}
+.export-zip-btn{display:flex;align-items:center;gap:6px;background:#2f6f3f;border:1px solid #4cbd6a;border-radius:4px;padding:4px 12px;font-size:12px;font-weight:700;color:#eafff0;letter-spacing:.3px;text-transform:uppercase;box-shadow:0 0 6px rgba(76,189,106,.45);}
+.export-zip-btn:hover{background:#4cbd6a;color:#fff;box-shadow:0 0 10px rgba(76,189,106,.85);}
 
 /* ––––– Tabs ––––– */
 .tabbar{display:flex;align-items:center;background:#282828;border-bottom:1px solid #1a1a1a;}
