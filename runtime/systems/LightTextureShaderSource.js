@@ -39,6 +39,23 @@
 export const MAX_LIGHTS = 32;
 export const MAX_OCCLUDERS = 24;
 export const MAX_RAYMARCH_STEPS = 48;
+// Freeform lights (typeId 5): each light's polygon outline is uploaded
+// as up to this many LOCAL-space {x,y} points, flattened into one big
+// per-light-slot array (see uPolyPoints below) rather than a real 2D
+// uniform array, since GLSL ES 1.00 (WebGL1) has no dynamic-length
+// arrays-of-arrays. 16 points is generous for a hand-drawn shape while
+// keeping the uniform budget (32 lights * 16 points * 2 floats = 1024
+// floats) well within typical WebGL1 fragment-uniform limits.
+export const MAX_FREEFORM_POINTS = 16;
+
+// Each light gets MAX_FREEFORM_POINTS + 1 slots in uPolyPoints: the actual
+// polygon points plus a duplicate of the first point right after the last.
+// This lets the shader iterate polygon edges as simple (p, p+1) pairs
+// including the wrap-around (last->first) edge, avoiding computed array
+// indices -- GLSL ES 1.00 only allows const/loop-variable expressions as
+// array indices, so the old helper functions that took `base` (a function
+// parameter) and `j` (a computed ternary) as indices failed to compile.
+export const FREEFORM_STRIDE = MAX_FREEFORM_POINTS + 1;
 
 const VERTEX_SRC = `
 attribute vec2 aVertexPosition;
@@ -83,7 +100,7 @@ uniform float uTime;
 
 uniform int uLightCount;
 uniform vec2 uLightPos[${MAX_LIGHTS}];
-uniform int uLightTypeId[${MAX_LIGHTS}];      // 0 Directional, 1 Point, 2 Spot, 3 Area, 4 GodRays
+uniform int uLightTypeId[${MAX_LIGHTS}];      // 0 Directional, 1 Point, 2 Spot, 3 Area, 4 GodRays, 5 Freeform
 uniform vec3 uLightColor[${MAX_LIGHTS}];
 uniform float uLightIntensity[${MAX_LIGHTS}];
 uniform float uLightRadius[${MAX_LIGHTS}];
@@ -95,6 +112,11 @@ uniform int uLightCastsShadows[${MAX_LIGHTS}];
 uniform float uLightShadowStrength[${MAX_LIGHTS}];
 uniform vec3 uLightShadowColor[${MAX_LIGHTS}];
 uniform float uLightShadowReach[${MAX_LIGHTS}];
+
+// Freeform-only polygon data, flattened as described above uOccluderCount:
+// point j of light i lives at uPolyPoints[i * ${MAX_FREEFORM_POINTS} + j].
+uniform int uLightPointCount[${MAX_LIGHTS}];
+uniform vec2 uPolyPoints[${MAX_LIGHTS * FREEFORM_STRIDE}];
 
 uniform int uOccluderCount;
 uniform vec2 uOccPos[${MAX_OCCLUDERS}];
@@ -358,6 +380,47 @@ void main(void) {
                 brightness = radial * coneMask;
             } else if (typeId == 4) {
                 brightness = godRaysBrightness(toPixel, dist, uLightRadius[i], uLightRotation[i], uLightAngle[i] * 0.5);
+            } else if (typeId == 5) {
+                // Freeform: points are stored local to the light's own
+                // Transform position and NOT rotated (see components/
+                // Light.js), so the polygon test runs directly against
+                // toPixel (pixel position relative to the light), no
+                // toLocal() rotation needed.
+                {
+                // Inline polygon test -- GLSL ES 1.00 only allows const/loop
+                // symbols as array indices, so the old helper functions (which
+                // took base/j as function parameters) failed to compile. Each
+                // edge is iterated as (p, p+1); the duplicated first point at
+                // slot pCount handles the wrap-around (last->first) edge.
+                int pCount = uLightPointCount[i];
+                brightness = 0.0;
+                if (pCount >= 3) {
+                    bool inside = false;
+                    for (int p = 0; p < ${MAX_FREEFORM_POINTS}; p++) {
+                        if (p >= pCount) break;
+                        vec2 pi = uPolyPoints[i * ${FREEFORM_STRIDE} + p];
+                        vec2 pj = uPolyPoints[i * ${FREEFORM_STRIDE} + p + 1];
+                        bool intersects = ((pi.y > toPixel.y) != (pj.y > toPixel.y)) &&
+                            (toPixel.x < (pj.x - pi.x) * (toPixel.y - pi.y) / (pj.y - pi.y) + pi.x);
+                        if (intersects) inside = !inside;
+                    }
+                    if (inside) {
+                        float best = 1e6;
+                        for (int p = 0; p < ${MAX_FREEFORM_POINTS}; p++) {
+                            if (p >= pCount) break;
+                            vec2 a = uPolyPoints[i * ${FREEFORM_STRIDE} + p];
+                            vec2 b = uPolyPoints[i * ${FREEFORM_STRIDE} + p + 1];
+                            vec2 ab = b - a;
+                            float len2 = dot(ab, ab);
+                            float t = len2 > 0.0 ? clamp(dot(toPixel - a, ab) / len2, 0.0, 1.0) : 0.0;
+                        vec2 closest = a + ab * t;
+                        best = min(best, length(toPixel - closest));
+                    }
+                    float feather = max(uLightRadius[i], 0.0001);
+                    brightness = smoothstep(0.0, feather, best);
+                }
+            }
+            }
             } else {
                 vec2 local = toLocal(pixelWorld, lightPos, 0.0);
                 vec2 halfSize = vec2(uLightWidth[i], uLightHeight[i]) * 0.5;
@@ -463,6 +526,9 @@ export function buildLightTextureFilter() {
     uLightShadowStrength: new Float32Array(MAX_LIGHTS),
     uLightShadowColor: new Float32Array(MAX_LIGHTS * 3),
     uLightShadowReach: new Float32Array(MAX_LIGHTS),
+
+    uLightPointCount: new Int32Array(MAX_LIGHTS),
+    uPolyPoints: new Float32Array(MAX_LIGHTS * FREEFORM_STRIDE * 2),
 
     uOccluderCount: 0,
     uOccPos: new Float32Array(MAX_OCCLUDERS * 2),

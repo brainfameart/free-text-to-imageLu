@@ -81,6 +81,8 @@ export class ControllerSystem extends System {
     this._verticalVelocity = new Map();
     /** @type {Map<string, number>} entityId -> jumps used since last grounded */
     this._jumpsUsed = new Map();
+    /** @type {Map<string, number>} entityId -> current forward speed (Car controller) */
+    this._carSpeed = new Map();
   }
 
   update(world, dt) {
@@ -94,7 +96,12 @@ export class ControllerSystem extends System {
       // Static bodies never move — nothing to drive.
       if (rigidbody.bodyType === BodyType.STATIC) continue;
 
-      if (rigidbody.bodyType === BodyType.DYNAMIC) {
+      const type = controller.controllerType;
+      if (type === ControllerType.CAR) {
+        this._applyCar(entity, controller, rigidbody, dt);
+      } else if (type === ControllerType.FOLLOW) {
+        this._applyFollow(entity, controller, rigidbody, dt, world);
+      } else if (rigidbody.bodyType === BodyType.DYNAMIC) {
         this._applyDynamic(entity.id, controller, rigidbody, dt);
       } else {
         this._applyKinematic(entity.id, controller, rigidbody, dt);
@@ -202,7 +209,10 @@ export class ControllerSystem extends System {
       if (jumpsUsed > 0) this._jumpsUsed.set(entityId, 0);
     }
 
-    if (usesGravity) {
+    // Only apply gravity when NOT grounded — otherwise the body
+    // vibrates: gravity pushes it down a hair each frame, snap-to-
+    // ground pulls it back, and the cycle repeats as visible jitter.
+    if (!grounded && usesGravity) {
       vy += GRAVITY_Y * dt;
     } else if (controller.controllerType === ControllerType.CHARACTER) {
       // Character Controller with gravity off: vertical is direct move
@@ -221,6 +231,106 @@ export class ControllerSystem extends System {
 
     this._verticalVelocity.set(entityId, vy);
     rigidbody.velocityY = vy;
+  }
+
+  /**
+   * CAR controller: arcade-style car movement. Up/Down (W/S)
+   * accelerate / brake-and-reverse; Left/Right (A/D) steer. Steering
+   * is proportional to speed (can't turn when stopped). The car moves
+   * along its own forward direction (derived from Transform rotation,
+   * 0 deg = up, clockwise). Works on both Kinematic (velocityX/Y +
+   * angularVelocity) and Dynamic (driveVelocityX/Y +
+   * driveAngularVelocity) bodies.
+   */
+  _applyCar(entity, controller, rigidbody, dt) {
+    const transform = entity.getComponent(TRANSFORM);
+    if (!transform) return;
+
+    const accelerate = this.input.isDown("ArrowUp", "KeyW");
+    const brake = this.input.isDown("ArrowDown", "KeyS");
+    const steerLeft = this.input.isDown("ArrowLeft", "KeyA");
+    const steerRight = this.input.isDown("ArrowRight", "KeyD");
+
+    let speed = this._carSpeed.get(entity.id) || 0;
+
+    if (accelerate) {
+      speed += controller.carAcceleration * dt;
+    } else if (brake) {
+      speed -= controller.brakeForce * dt;
+    } else {
+      // Natural deceleration when no throttle/brake input
+      const decay = 200 * dt;
+      if (speed > 0) speed = Math.max(0, speed - decay);
+      else if (speed < 0) speed = Math.min(0, speed + decay);
+    }
+    // Clamp: full maxSpeed forward, half maxSpeed in reverse
+    speed = Math.max(-controller.maxSpeed * 0.5, Math.min(controller.maxSpeed, speed));
+    this._carSpeed.set(entity.id, speed);
+
+    // Steering proportional to speed (can't turn when stopped)
+    const speedFactor = Math.abs(speed) / controller.maxSpeed;
+    const steer = (steerRight ? 1 : 0) - (steerLeft ? 1 : 0);
+    const angVel = steer * controller.turnSpeed * speedFactor;
+
+    // Forward direction from rotation (0 deg = up, clockwise)
+    const rad = (transform.rotation * Math.PI) / 180;
+    const forwardX = Math.sin(rad);
+    const forwardY = -Math.cos(rad);
+    const vx = forwardX * speed;
+    const vy = forwardY * speed;
+
+    if (rigidbody.bodyType === BodyType.DYNAMIC) {
+      rigidbody.driveVelocityX = vx;
+      rigidbody.driveVelocityY = vy;
+      rigidbody.driveAngularVelocity = angVel;
+    } else {
+      rigidbody.velocityX = vx;
+      rigidbody.velocityY = vy;
+      rigidbody.angularVelocity = angVel;
+    }
+  }
+
+  /**
+   * FOLLOW controller: moves toward a named target entity at a set
+   * speed, stopping when within followDistance. Useful for simple AI
+   * pursuit, escort NPCs, or camera followers. The target is looked
+   * up by name every frame via World.findFirstByName.
+   */
+  _applyFollow(entity, controller, rigidbody, dt, world) {
+    if (!controller.targetName) return;
+    const target = world.findFirstByName(controller.targetName);
+    if (!target) return;
+    const targetTransform = target.getComponent(TRANSFORM);
+    if (!targetTransform) return;
+
+    const transform = entity.getComponent(TRANSFORM);
+    if (!transform) return;
+
+    const dx = targetTransform.x - transform.x;
+    const dy = targetTransform.y - transform.y;
+    const dist = Math.hypot(dx, dy);
+
+    if (dist <= controller.followDistance) {
+      if (rigidbody.bodyType === BodyType.DYNAMIC) {
+        rigidbody.driveVelocityX = 0;
+        rigidbody.driveVelocityY = 0;
+      } else {
+        rigidbody.velocityX = 0;
+        rigidbody.velocityY = 0;
+      }
+      return;
+    }
+
+    const vx = (dx / dist) * controller.followSpeed;
+    const vy = (dy / dist) * controller.followSpeed;
+
+    if (rigidbody.bodyType === BodyType.DYNAMIC) {
+      rigidbody.driveVelocityX = vx;
+      rigidbody.driveVelocityY = vy;
+    } else {
+      rigidbody.velocityX = vx;
+      rigidbody.velocityY = vy;
+    }
   }
 
   destroy() {

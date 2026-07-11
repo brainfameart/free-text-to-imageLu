@@ -69,7 +69,14 @@ import { LIGHT, LightType } from "../components/Light.js";
 import { SHADOW_CASTER } from "../components/ShadowCaster.js";
 import { LIGHTING_SETTINGS } from "../components/LightingSettings.js";
 import { LightingQuality, ShadowMode } from "./LightingQuality.js";
-import { buildLightTextureFilter, MAX_LIGHTS, MAX_OCCLUDERS, MAX_RAYMARCH_STEPS } from "./LightTextureShaderSource.js";
+import {
+  buildLightTextureFilter,
+  MAX_LIGHTS,
+  MAX_OCCLUDERS,
+  MAX_RAYMARCH_STEPS,
+  MAX_FREEFORM_POINTS,
+  FREEFORM_STRIDE,
+} from "./LightTextureShaderSource.js";
 import { buildSpriteLightFilter } from "./SpriteLightFilter.js";
 import { buildLightGlowFilter } from "./LightGlowFilter.js";
 
@@ -91,6 +98,7 @@ const LIGHT_TYPE_ID = Object.freeze({
   [LightType.SPOT]: 2,
   [LightType.AREA]: 3,
   [LightType.GOD_RAYS]: 4,
+  [LightType.FREEFORM]: 5,
 });
 
 // Fallback glow strength (see components/LightingSettings.js), used
@@ -582,6 +590,30 @@ export class LightingSystem extends System {
       const worldReach =
         light.type === LightType.DIRECTIONAL ? DIRECTIONAL_SHADOW_BASE_DISTANCE : Math.max(0.0001, light.radius || 0);
       u.uLightShadowReach[i] = worldReach / Math.max(0.0001, stageScale || 1);
+
+      // Freeform polygon points, flattened into this light's slot of
+      // the shared uPolyPoints array (see LightTextureShaderSource.js's
+      // MAX_FREEFORM_POINTS doc comment). Points beyond the cap are
+      // silently dropped rather than erroring — matches uLightCount's
+      // own "just stop uploading past the uniform budget" behavior.
+      const points = light.type === LightType.FREEFORM ? light.points || [] : null;
+      const pointCount = points ? Math.min(MAX_FREEFORM_POINTS, points.length) : 0;
+      u.uLightPointCount[i] = pointCount;
+      if (points) {
+        const base = i * FREEFORM_STRIDE;
+        for (let p = 0; p < pointCount; p++) {
+          u.uPolyPoints[(base + p) * 2 + 0] = points[p].x;
+          u.uPolyPoints[(base + p) * 2 + 1] = points[p].y;
+        }
+        // Duplicate first point right after the last so the shader can
+        // iterate polygon edges as (p, p+1) including the wrap-around
+        // (last->first) without a computed array index (GLSL ES 1.00
+        // only allows const/loop-variable expressions as indices).
+        if (pointCount > 0) {
+          u.uPolyPoints[(base + pointCount) * 2 + 0] = points[0].x;
+          u.uPolyPoints[(base + pointCount) * 2 + 1] = points[0].y;
+        }
+      }
     }
   }
 

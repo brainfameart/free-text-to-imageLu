@@ -24,6 +24,7 @@ const LIGHT_MENU_ITEMS = [
   { type: LightType.SPOT, label: "Spot Light" },
   { type: LightType.AREA, label: "Area Light" },
   { type: LightType.GOD_RAYS, label: "God Rays" },
+  { type: LightType.FREEFORM, label: "Freeform Light" },
 ];
 
 export function renderToolbar() {

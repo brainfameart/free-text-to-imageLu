@@ -89,6 +89,8 @@ function _labelFor(light) {
       return "Area Light  " + Math.round(light.width) + "x" + Math.round(light.height);
     case LightType.GOD_RAYS:
       return "God Rays  r=" + Math.round(light.radius) + " " + Math.round(light.angle || 45) + "\u00b0";
+    case LightType.FREEFORM:
+      return "Freeform Light  " + (light.points ? light.points.length : 0) + " pts";
     case LightType.POINT:
     default:
       return "Point Light  r=" + Math.round(light.radius);
@@ -147,6 +149,21 @@ function _drawRangeIndicator(g, transform, light, alpha, lineWidth) {
         const a = rot - halfAngle + (i / rayCount) * (halfAngle * 2);
         g.moveTo(transform.x, transform.y);
         g.lineTo(transform.x + Math.cos(a) * light.radius, transform.y + Math.sin(a) * light.radius);
+      }
+      break;
+    }
+    case LightType.FREEFORM: {
+      // Actual polygon vertex dragging/handles are drawn separately by
+      // FreeformLightGizmo.js (only when this light is the selected
+      // entity); this just gives every Freeform light — selected or
+      // not — a lightweight outline so its shape reads at a glance.
+      const points = light.points;
+      if (points && points.length >= 2) {
+        g.moveTo(transform.x + points[0].x, transform.y + points[0].y);
+        for (let i = 1; i < points.length; i++) {
+          g.lineTo(transform.x + points[i].x, transform.y + points[i].y);
+        }
+        g.lineTo(transform.x + points[0].x, transform.y + points[0].y);
       }
       break;
     }

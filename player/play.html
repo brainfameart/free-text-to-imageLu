@@ -10,6 +10,53 @@
   #game-canvas { width: 100vw; height: 100vh; }
   #game-canvas canvas { display: block; }
 </style>
+<script>
+// Auto-recovery: if a JS module fails to parse (e.g. "Unexpected end of
+// input" from a stale/truncated cached file), automatically reload once
+// with cache-busting. If the retry also fails, show a visible fallback
+// instead of a black screen.
+(function () {
+  var p = new URLSearchParams(location.search);
+  var recovered = p.get("recovered") === "1";
+  function reload() {
+    p.set("recovered", "1");
+    p.set("t", Date.now().toString());
+    location.replace(location.pathname + "?" + p.toString());
+  }
+  function showFallback() {
+    var el = document.getElementById("game-canvas") || document.body;
+    el.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;background:#1a1a2e;color:#fff;font-family:system-ui;text-align:center;padding:20px;">' +
+      '<h2 style="margin:0 0 8px;font-size:18px;">Game failed to load</h2>' +
+      '<p style="margin:0 0 16px;color:#999;font-size:13px;max-width:340px;">A JavaScript module failed to parse — this is usually a stale cache issue. Click Reload on the home page to force-refresh all engine files.</p>' +
+      '<button onclick="location.replace(location.pathname)" style="padding:8px 24px;background:#6366f1;border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:13px;">Reload</button>' +
+      "</div>";
+  }
+  function handleError(msg) {
+    if (
+      msg &&
+      (msg.indexOf("Unexpected end of input") !== -1 ||
+        msg.indexOf("SyntaxError") !== -1)
+    ) {
+      if (!recovered) reload();
+      else showFallback();
+    }
+  }
+  window.addEventListener("error", function (e) {
+    handleError((e.error && e.error.message) || e.message || "");
+  });
+  window.addEventListener("unhandledrejection", function (e) {
+    handleError((e.reason && (e.reason.message || e.reason.toString())) || "");
+  });
+  setTimeout(function () {
+    var c = document.getElementById("game-canvas");
+    if (c && c.children.length === 0) {
+      if (!recovered) reload();
+      else showFallback();
+    }
+  }, 10000);
+})();
+</script>
 </head>
 <body>
   <div id="game-canvas"></div>

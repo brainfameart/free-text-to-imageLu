@@ -60,7 +60,20 @@ export const LightType = Object.freeze({
   SPOT: "Spot",
   AREA: "Area",
   GOD_RAYS: "GodRays",
+  FREEFORM: "Freeform",
 });
+
+// Default Freeform shape: a simple diamond, in LOCAL space (offsets from
+// the entity's own Transform position, world units/px) — matches
+// Unity's 2D Freeform Light, which always starts as an editable polygon
+// rather than a blank shape. Cloned (never shared by reference) every
+// time a new Freeform light is created — see Light's constructor below.
+export const DEFAULT_FREEFORM_POINTS = Object.freeze([
+  { x: 0, y: -80 },
+  { x: 80, y: 0 },
+  { x: 0, y: 80 },
+  { x: -80, y: 0 },
+]);
 
 export class Light {
   constructor({
@@ -75,6 +88,7 @@ export class Light {
     castShadows = false,
     shadowColor = "#000000",
     shadowStrength = 1,
+    points = null,
   } = {}) {
     this.type = type;
     this.color = color;
@@ -137,5 +151,19 @@ export class Light {
     // between a light's own Shadow Strength and a renderer's shadow
     // contribution.
     this.shadowStrength = shadowStrength;
+
+    // Freeform only: an editable polygon outline, drawn by hand in the
+    // Scene view (see editor/viewport/LightGizmo.js's vertex-drag
+    // handling) instead of expressed with a radius/angle/size — Unity's
+    // 2D Freeform Light. Each point is a LOCAL offset {x,y} from this
+    // entity's Transform position (NOT rotated by Transform.rotation —
+    // a deliberate simplification so dragging a vertex in the viewport
+    // always maps 1:1 to world space with no extra rotation math).
+    // Deep-cloned from the shared DEFAULT_FREEFORM_POINTS constant so
+    // every Freeform light gets its own independent, mutable point
+    // array rather than all lights sharing (and corrupting) one array.
+    this.points = points
+      ? points.map((p) => ({ x: p.x, y: p.y }))
+      : DEFAULT_FREEFORM_POINTS.map((p) => ({ x: p.x, y: p.y }));
   }
 }

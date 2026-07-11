@@ -23,7 +23,7 @@ import { SPRITE_ANIMATION } from "../../runtime/components/SpriteAnimation.js";
 import { AUDIO_SOURCE } from "../../runtime/components/AudioSource.js";
 import { ShadowMode } from "../../runtime/systems/LightingQuality.js";
 import { getCameraResolution } from "../../runtime/core/CameraUtils.js";
-import { getSpriteAsset, getAudioAsset } from "../../runtime/assets/AssetRegistry.js";
+import { getSpriteAsset, getAudioAsset, getAllAudioAssets } from "../../runtime/assets/AssetRegistry.js";
 
 export function renderInspector() {
   const world = editorState.world;
@@ -194,6 +194,14 @@ export function renderInspector() {
         '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
         "God Rays cast bright, streaked shafts of light through the beam — like sunlight breaking through clouds or a window — instead of a flat cone." +
         "</div>";
+    } else if (light.type === LightType.FREEFORM) {
+      const pointCount = light.points ? light.points.length : 0;
+      typeSpecificHtml =
+        row("Edge Feather", numInput("", light.radius, "Light.radius")) +
+        '<div class="static-body-note" style="padding:2px 0 6px;color:#8a93a0;font-size:10px;">' +
+        "Shape drawn by dragging points directly in the Scene view (" + pointCount + " points). " +
+        "Double-click an edge to add a point; right-click (or Alt-click) a point to remove it." +
+        "</div>";
     } else {
       // Directional: no position/radius dependency for its GLOW — it
       // uniformly lights the whole scene — but its rotation still
@@ -257,7 +265,39 @@ export function renderInspector() {
   const audioSource = entity.getComponent(AUDIO_SOURCE);
   if (audioSource) {
     const audioAsset = audioSource.audioKey ? getAudioAsset(audioSource.audioKey) : null;
-    const audioDisplayName = audioAsset ? audioAsset.name : audioSource.audioKey || "None";
+    const allAudioAssets = getAllAudioAssets();
+    // Every imported Audio asset becomes a selectable option here, keyed
+    // by its stable asset key (option value) but labeled with its
+    // friendly name (option text) — a plain dropdownInput() can't do
+    // that split (it renders the same string as both value and label),
+    // so this builds the <select> markup directly. Falls back to a
+    // disabled placeholder option when the current audioKey doesn't
+    // match any imported asset (e.g. it was deleted from the project),
+    // so the picker still shows something meaningful instead of quietly
+    // snapping to the first asset in the list.
+    const audioOptionsHtml =
+      (audioSource.audioKey && !audioAsset
+        ? '<option value="' + audioSource.audioKey + '" selected disabled>' +
+          "Missing: " + audioSource.audioKey +
+          "</option>"
+        : !audioSource.audioKey
+          ? '<option value="" selected disabled>None</option>'
+          : "") +
+      allAudioAssets
+        .map(
+          (a) =>
+            '<option value="' + a.key + '"' + (a.key === audioSource.audioKey ? " selected" : "") + ">" +
+            a.name +
+            "</option>"
+        )
+        .join("");
+    const audioClipPickerHtml = allAudioAssets.length
+      ? '<div class="dropdown-input"><select data-field="AudioSource.audioKey">' +
+        audioOptionsHtml +
+        "</select>" +
+        icon("chevrondown", 10, "chev") +
+        "</div>"
+      : '<div class="sprite-row"><div class="sprite-box">No audio imported</div></div>';
 
     const distanceFieldsHtml = audioSource.is3D
       ? row("Min Distance", numInput("", audioSource.minDistance, "AudioSource.minDistance")) +
@@ -274,10 +314,7 @@ export function renderInspector() {
       "audiosource",
       "Audio Source",
       "music",
-      row(
-        "Clip",
-        '<div class="sprite-row"><div class="sprite-box">' + audioDisplayName + "</div></div>"
-      ) +
+      row("Clip", audioClipPickerHtml) +
         row("Mode", dropdownInput(["2D", "3D"], audioSource.is3D ? "3D" : "2D", "AudioSource.is3DLabel")) +
         row("Volume", numInput("", audioSource.volume, "AudioSource.volume")) +
         row(
@@ -573,6 +610,8 @@ export function renderInspector() {
     const isPlatformer = controller.controllerType === ControllerType.PLATFORMER;
     const isFree = controller.controllerType === ControllerType.FREE;
     const isCharacter = controller.controllerType === ControllerType.CHARACTER;
+    const isCar = controller.controllerType === ControllerType.CAR;
+    const isFollow = controller.controllerType === ControllerType.FOLLOW;
     const jumpCapable = (isCharacter || isPlatformer) && controller.canJump;
 
     let typeSpecificHtml = "";
@@ -581,6 +620,18 @@ export function renderInspector() {
         '<div class="static-body-note" style="padding:6px 4px;color:#8a93a0;font-size:11px;">' +
         "Free: no built-in input mapping. A script drives Rigidbody2D directly; the tunables below are still readable from script." +
         "</div>";
+    } else if (isCar) {
+      typeSpecificHtml =
+        row("Max Speed", numInput("", controller.maxSpeed, "CharacterController.maxSpeed")) +
+        row("Acceleration", numInput("", controller.carAcceleration, "CharacterController.carAcceleration")) +
+        row("Brake Force", numInput("", controller.brakeForce, "CharacterController.brakeForce")) +
+        row("Turn Speed", numInput("", controller.turnSpeed, "CharacterController.turnSpeed")) +
+        row("Drift Factor", numInput("", controller.driftFactor, "CharacterController.driftFactor"));
+    } else if (isFollow) {
+      typeSpecificHtml =
+        row("Target Name", '<input type="text" data-field="CharacterController.targetName" value="' + (controller.targetName || "") + '" style="width:100%;background:#2a2a2a;border:1px solid #3a3a3a;color:#dcdcdc;padding:3px 6px;border-radius:3px;font-size:11px;"/>') +
+        row("Follow Speed", numInput("", controller.followSpeed, "CharacterController.followSpeed")) +
+        row("Follow Distance", numInput("", controller.followDistance, "CharacterController.followDistance"));
     } else {
       typeSpecificHtml =
         row("Move Speed", numInput("", controller.moveSpeed, "CharacterController.moveSpeed")) +

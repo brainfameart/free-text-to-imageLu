@@ -49,7 +49,17 @@ const LIGHT_ENTITY_NAMES = {
   [LightType.SPOT]: "Spot Light",
   [LightType.AREA]: "Area Light",
   [LightType.GOD_RAYS]: "God Rays",
+  [LightType.FREEFORM]: "Freeform Light",
 };
+
+// Freeform's `radius` field doubles as its edge FEATHER width (see
+// LightTextureShaderSource.js's freeformFalloff), not a reach distance
+// like every other light type — Light's own constructor default (200)
+// is tuned for Point/Spot/GodRays reach and is far larger than
+// DEFAULT_FREEFORM_POINTS' ~80px shape, which would feather the entire
+// interior down to near-zero brightness instead of a crisp shape with
+// a soft edge. Used only when creating/switching TO Freeform.
+const FREEFORM_DEFAULT_FEATHER = 16;
 
 /**
  * Builds sensible starting field overrides for a BRAND NEW Collider2D so
@@ -104,6 +114,7 @@ function _sizedColliderDefaults(entity) {
  *   main.js can start/stop the GameLoop
  */
 export function attachEditorEvents(render, onTogglePlay) {
+let _lastSceneClick = { id: null, time: 0 };
   document.addEventListener("click", (e) => {
     const t = e.target.closest("[data-action]");
     if (!t) {
@@ -367,7 +378,12 @@ export function attachEditorEvents(render, onTogglePlay) {
         const name = LIGHT_ENTITY_NAMES[lightType] || "Light";
         const entity = editorState.world.createEntity(name);
         entity.addComponent(TRANSFORM, new Transform());
-        entity.addComponent(LIGHT, new Light({ type: lightType }));
+        entity.addComponent(
+          LIGHT,
+          new Light(
+            lightType === LightType.FREEFORM ? { type: lightType, radius: FREEFORM_DEFAULT_FEATHER } : { type: lightType }
+          )
+        );
         editorState.selectedId = entity.id;
         editorState.selectedIds = [entity.id];
         pushLog("log", "Created " + name + ".");
@@ -480,15 +496,26 @@ export function attachEditorEvents(render, onTogglePlay) {
         render();
         break;
       }
-      case "select-scene-file": {
-        // Click switches straight to the scene (matches how every other
-        // asset-browser click works — this used to only "select" the
-        // item without opening it, which read as "clicking does
-        // nothing"). Double-clicking the label still starts a rename
-        // (see the dblclick listener below) and takes priority when it
-        // fires, since renaming is the less-common action.
-        editorState.selectedSceneFileId = t.dataset.sceneId;
+case "select-scene-file": {
+        // Manual double-click detection: the native dblclick event
+        // doesn't survive the full DOM rebuild (app.innerHTML = html)
+        // that happens on the first click's render() — the recreated
+        // element is a different DOM node, so the browser never fires
+        // dblclick. Tracking timestamp + sceneId ourselves works
+        // regardless of DOM replacement, and is more reliable on
+        // laptop touchpads where the OS double-click threshold may
+        // differ from the browser's.
         const sceneId = t.dataset.sceneId;
+        const now = Date.now();
+        if (_lastSceneClick.id === sceneId && now - _lastSceneClick.time < 500) {
+          // Double-click: start rename (takes priority over switching)
+          editorState.renamingSceneId = sceneId;
+          _lastSceneClick = { id: null, time: 0 };
+          render();
+          break;
+        }
+        _lastSceneClick = { id: sceneId, time: now };
+        editorState.selectedSceneFileId = sceneId;
         if (sceneId && editorState.game && sceneId !== editorState.game.getActiveSceneId()) {
           switchScene(sceneId);
         }
@@ -979,6 +1006,22 @@ function applyFieldChange(field, inputEl) {
         }
       }
       return;
+    }
+    return;
+  }
+
+  if (field === "Light.type") {
+    const light = entity.getComponent(LIGHT);
+    if (light) {
+      const wasFreeform = light.type === LightType.FREEFORM;
+      light.type = inputEl.value;
+      // Switching INTO Freeform: re-seed radius to a sane feather width
+      // (see FREEFORM_DEFAULT_FEATHER's doc comment) unless it's
+      // already small enough to be a plausible feather rather than a
+      // leftover Point/Spot/Area reach distance.
+      if (light.type === LightType.FREEFORM && !wasFreeform && light.radius > 60) {
+        light.radius = FREEFORM_DEFAULT_FEATHER;
+      }
     }
     return;
   }

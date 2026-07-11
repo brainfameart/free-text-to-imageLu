@@ -154,7 +154,13 @@ export class PhysicsWorld {
     );
     const seen = new Set();
 
-    const stepDt = dt > 0 ? dt : 1 / 60;
+    // Clamp dt to a maximum of 1/30s — when the tab is backgrounded or
+    // the frame rate stutters, dt can spike to 0.5s+ and a kinematic
+    // body's velocity*dt displacement becomes enormous, causing the
+    // character-controller sweep to teleport the body or produce a huge
+    // correction. Capping at 30fps-equivalent keeps every step's
+    // movement bounded so the body never jumps through walls.
+    const stepDt = Math.min(dt > 0 ? dt : 1 / 60, 1 / 30);
     for (const entity of entities) {
       seen.add(entity.id);
       this._syncEntity(entity, stepDt);
@@ -276,11 +282,14 @@ export class PhysicsWorld {
         // 100% Rapier's solver doing the actual moving/colliding — this
         // just seeds its linear velocity, the same primitive the
         // Inspector's own Kinematic velocity fields use.
-        if (rb.driveVelocityX !== null || rb.driveVelocityY !== null) {
+        if (rb.driveVelocityX !== null || rb.driveVelocityY !== null || rb.driveAngularVelocity !== null) {
           const current = handle.body.linvel();
           const nextX = rb.driveVelocityX !== null ? rb.driveVelocityX : current.x;
           const nextY = rb.driveVelocityY !== null ? rb.driveVelocityY : current.y;
           handle.body.setLinvel({ x: nextX, y: nextY }, true);
+          if (rb.driveAngularVelocity !== null) {
+            handle.body.setAngvel(rb.driveAngularVelocity, true);
+          }
           handle.body.wakeUp();
         }
         // These are one-shot, transient requests — clear them now that
@@ -289,6 +298,7 @@ export class PhysicsWorld {
         // stale velocity forever.
         rb.driveVelocityX = null;
         rb.driveVelocityY = null;
+        rb.driveAngularVelocity = null;
       }
       // KINEMATIC is handled below, AFTER _syncCollider — the sweep
       // needs handle.collider to exist, which isn't guaranteed yet on
@@ -314,7 +324,29 @@ export class PhysicsWorld {
    * character controller is used to compute the correction first).
    */
   _syncKinematicMovement(handle, rb, dt) {
-    if (!handle.collider) return; // no collider yet (created same frame) — nothing to sweep
+    if (!handle.collider) {
+      // No collider: a kinematic body with nothing to sweep against
+      // still moves — just without collision detection (it passes
+      // through everything). This is expected: the character-controller
+      // sweep needs a collider to test against obstacles, so without one
+      // the best we can do is apply the raw velocity. Add a Collider2D
+      // if you want the body to be stopped by walls/floors.
+      const desiredX = rb.velocityX * dt;
+      const desiredY = rb.velocityY * dt;
+      const current = handle.body.translation();
+      handle.body.setNextKinematicTranslation({
+        x: current.x + desiredX,
+        y: current.y + desiredY,
+      });
+      if (!rb.lockRotation) {
+        const currentRotation = handle.body.rotation();
+        handle.body.setNextKinematicRotation(currentRotation + rb.angularVelocity * dt);
+      }
+      rb.resolvedVelocityX = rb.velocityX;
+      rb.resolvedVelocityY = rb.velocityY;
+      rb.grounded = false;
+      return;
+    }
 
     // Use this body's own Rigidbody2D.mass as the character mass for
     // impulse resolution — without this, setApplyImpulsesToDynamicBodies

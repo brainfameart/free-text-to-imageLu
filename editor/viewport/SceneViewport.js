@@ -23,11 +23,13 @@ import { drawColliderGizmo } from "./ColliderGizmo.js";
 import { TriangleColliderGizmo } from "./TriangleColliderGizmo.js";
 import { drawLightGizmo, hitTestLightGizmo } from "./LightGizmo.js";
 import { drawAudioGizmo, hitTestAudioGizmo } from "./AudioGizmo.js";
+import { FreeformLightGizmo } from "./FreeformLightGizmo.js";
 import { TransformGizmo } from "./TransformGizmo.js";
 import { editorState, pushLog } from "../state/EditorState.js";
 import { attachPixiDiagnostics } from "../state/ConsoleCapture.js";
 import { TRANSFORM, Transform } from "../../runtime/components/Transform.js";
 import { COLLIDER_2D } from "../../runtime/components/Collider2D.js";
+import { LIGHT, LightType } from "../../runtime/components/Light.js";
 import { SPRITE_RENDERER, SpriteRenderer } from "../../runtime/components/SpriteRenderer.js";
 import { CAMERA } from "../../runtime/components/Camera.js";
 import { RenderSystem } from "../../runtime/systems/RenderSystem.js";
@@ -45,6 +47,7 @@ let lightGizmoContainer = null;
 let audioGizmoContainer = null;
 let transformGizmo = null;
 let triangleColliderGizmo = null;
+let freeformLightGizmo = null;
 let game = null;
 let renderFn = null;
 let renderSystem = null;
@@ -166,6 +169,7 @@ function createViewport(mount, render) {
 
   transformGizmo = new TransformGizmo(gizmoContainer);
   triangleColliderGizmo = new TriangleColliderGizmo(gizmoContainer);
+  freeformLightGizmo = new FreeformLightGizmo(gizmoContainer);
 
   viewportCamera = new ViewportCamera(pixiApp, pixiApp.stage);
   viewportCamera.onZoomChange((percent) => {
@@ -203,6 +207,11 @@ function createViewport(mount, render) {
     if (audioGizmoContainer) {
       drawAudioGizmo(audioGizmoContainer, editorState.world, editorState.selectedId, _worldPerPixel());
     }
+    if (freeformLightGizmo) {
+      const selected = editorState.world ? editorState.world.getEntity(editorState.selectedId) : null;
+      const light = selected ? selected.getComponent(LIGHT) : null;
+      freeformLightGizmo.draw(selected, light, _worldPerPixel());
+    }
   });
 
   // center the world container like the original mockup did
@@ -231,6 +240,34 @@ function clientToWorld(clientX, clientY) {
 function attachGizmoPointerEvents(mount) {
   const el = pixiApp.view;
 
+  // Manual double-click tracker for freeform light edge insertion.
+  // The native dblclick event is unreliable on laptop touchpads (the
+  // OS double-click threshold can differ from the browser's, so the
+  // browser never fires dblclick). Tracking timestamp + screen position
+  // ourselves on pointerdown works on every device — same approach
+  // already used for scene-rename in EditorEvents.js.
+  let _lastFreeformClick = { time: 0, x: 0, y: 0 };
+
+  el.addEventListener("contextmenu", (e) => {
+    // Right-click delete for a Freeform Light vertex — handled via the
+    // browser's own contextmenu event rather than pointerdown, since
+    // pointerdown's e.button!==0 guard below intentionally ignores
+    // non-left clicks for every other gizmo interaction. preventDefault
+    // suppresses the native right-click menu ONLY when we actually hit
+    // a vertex, so right-clicking empty canvas still gets the browser
+    // menu as normal.
+    const world = clientToWorld(e.clientX, e.clientY);
+    const selected = editorState.world ? editorState.world.getEntity(editorState.selectedId) : null;
+    const light = selected ? selected.getComponent(LIGHT) : null;
+    if (!light || light.type !== LightType.FREEFORM) return;
+    const vertexIndex = freeformLightGizmo.hitTest(world.x, world.y, _worldPerPixel());
+    if (vertexIndex !== null) {
+      e.preventDefault();
+      freeformLightGizmo.removePoint(light, vertexIndex);
+      if (renderFn) renderFn();
+    }
+  });
+
   el.addEventListener("pointerdown", (e) => {
     const tool = editorState.activeTool;
     if (e.button !== 0) return; // selection/gizmo only responds to left click
@@ -256,6 +293,59 @@ function attachGizmoPointerEvents(mount) {
           e.preventDefault();
           e.stopPropagation();
           return;
+        }
+      }
+    }
+
+    // Freeform Light polygon vertex handles — same priority tier as
+    // the triangle collider handles above (checked before the generic
+    // translate/scale/rotate gizmo and before click-to-select), only
+    // when the currently selected entity actually is a Freeform light.
+    // Right-click/alt-click a vertex to delete it; double-click an edge
+    // midpoint to insert a new vertex there — both handled here rather
+    // than the translate/scale/rotate drag path since they're one-shot
+    // edits, not a drag gesture.
+    {
+      const world = clientToWorld(e.clientX, e.clientY);
+      const selected = editorState.world ? editorState.world.getEntity(editorState.selectedId) : null;
+      const transform = selected ? selected.getComponent(TRANSFORM) : null;
+      const light = selected ? selected.getComponent(LIGHT) : null;
+      if (transform && light && light.type === LightType.FREEFORM) {
+        const vertexIndex = freeformLightGizmo.hitTest(world.x, world.y, _worldPerPixel());
+        if (vertexIndex !== null) {
+          if (e.altKey) {
+            // Alt-click as a left-button-only alternative to the
+            // right-click contextmenu handler above (some trackpads/
+            // browsers make right-click awkward).
+            freeformLightGizmo.removePoint(light, vertexIndex);
+            e.preventDefault();
+            e.stopPropagation();
+            if (renderFn) renderFn();
+            return;
+          }
+          freeformLightGizmo.beginDrag(vertexIndex, transform);
+          try { el.setPointerCapture(e.pointerId); } catch (err) {}
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+        // Manual double-click detection for edge midpoint insertion
+        // (see _lastFreeformClick above). Fires on pointerdown, which
+        // is reliable on laptop touchpads — unlike the native dblclick
+        // event, whose OS-level threshold can differ from the browser's.
+        const edgeAfterIndex = freeformLightGizmo.hitTestEdge(world.x, world.y, _worldPerPixel());
+        if (edgeAfterIndex !== null) {
+          const now = Date.now();
+          if (now - _lastFreeformClick.time < 400 &&
+              Math.hypot(e.clientX - _lastFreeformClick.x, e.clientY - _lastFreeformClick.y) < 15) {
+            freeformLightGizmo.insertPoint(light, edgeAfterIndex, world.x, world.y, transform);
+            _lastFreeformClick = { time: 0, x: 0, y: 0 };
+            e.preventDefault();
+            e.stopPropagation();
+            if (renderFn) renderFn();
+            return;
+          }
+          _lastFreeformClick = { time: now, x: e.clientX, y: e.clientY };
         }
       }
     }
@@ -316,6 +406,17 @@ function attachGizmoPointerEvents(mount) {
   });
 
   el.addEventListener("pointermove", (e) => {
+    if (freeformLightGizmo.isDragging()) {
+      const selected = editorState.world ? editorState.world.getEntity(editorState.selectedId) : null;
+      const light = selected ? selected.getComponent(LIGHT) : null;
+      if (!light) return;
+      const world = clientToWorld(e.clientX, e.clientY);
+      freeformLightGizmo.updateDrag(world.x, world.y, light);
+      syncSpriteRender();
+      refreshGizmos();
+      return;
+    }
+
     if (triangleColliderGizmo.isDragging()) {
       const selected = editorState.world ? editorState.world.getEntity(editorState.selectedId) : null;
       const collider = selected ? selected.getComponent(COLLIDER_2D) : null;
@@ -339,6 +440,12 @@ function attachGizmoPointerEvents(mount) {
   });
 
   const endDrag = (e) => {
+    if (freeformLightGizmo.isDragging()) {
+      freeformLightGizmo.endDrag();
+      try { el.releasePointerCapture(e.pointerId); } catch (err) {}
+      if (renderFn) renderFn();
+      return;
+    }
     if (triangleColliderGizmo.isDragging()) {
       triangleColliderGizmo.endDrag();
       try { el.releasePointerCapture(e.pointerId); } catch (err) {}

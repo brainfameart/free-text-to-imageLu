@@ -72,6 +72,11 @@ export class Rigidbody2D {
     // null = no override requested; Rapier's own gravity/solver keeps
     // integrating Y normally.
     driveVelocityY = null,
+    // Set (transiently, one frame) by ControllerSystem to drive a
+    // DYNAMIC body's angular velocity (e.g. Car controller steering).
+    // null = no override; Rapier's own solver keeps integrating
+    // rotation normally.
+    driveAngularVelocity = null,
 
     // KINEMATIC-only, read-only from the caller's perspective: written
     // every physics step by PhysicsWorld._syncKinematicMovement from
@@ -112,6 +117,8 @@ export class Rigidbody2D {
 
     this.driveVelocityX = driveVelocityX;
     this.driveVelocityY = driveVelocityY;
+
+    this.driveAngularVelocity = driveAngularVelocity;
 
     this.grounded = grounded;
 
