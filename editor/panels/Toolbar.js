@@ -29,10 +29,10 @@ const LIGHT_MENU_ITEMS = [
 
 export function renderToolbar() {
   const tools = [
-    { id: "pan", iconName: "hand" },
-    { id: "translate", iconName: "move" },
-    { id: "rotate", iconName: "refreshcw" },
-    { id: "scale", iconName: "maximize2" },
+    { id: "pan", iconName: "hand", shortcut: "Q" },
+    { id: "translate", iconName: "move", shortcut: "W" },
+    { id: "rotate", iconName: "refreshcw", shortcut: "E" },
+    { id: "scale", iconName: "maximize2", shortcut: "R" },
   ];
 
   return (
@@ -49,6 +49,7 @@ export function renderToolbar() {
           (editorState.activeTool === t.id ? " active" : "") +
           '" data-action="set-tool" data-tool="' +
           t.id +
+          '" title="' + t.id + ' (' + t.shortcut + ')"' +
           '">' +
           icon(t.iconName, 13) +
           "</button>"

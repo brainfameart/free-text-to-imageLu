@@ -180,9 +180,19 @@ function _lzwDecode(compressed, minCodeSize) {
 
     let entry;
     if (prevCode === -1) {
+      // First code after a clear: output directly, NO dictionary
+      // entry is added (there's no previous code to combine with).
+      // The old code fell through to the dictionary-update block
+      // below, which corrupted the dictionary from the first code
+      // onward and garbled every subsequent frame.
       entry = dict[code];
+      if (!entry) break;
+      for (let i = 0; i < entry.length; i++) output.push(entry[i]);
       prevCode = code;
-    } else if (code < dictSize) {
+      continue;
+    }
+
+    if (code < dictSize) {
       entry = dict[code];
     } else if (code === dictSize) {
       const prev = dict[prevCode];
@@ -191,9 +201,10 @@ function _lzwDecode(compressed, minCodeSize) {
       break;
     }
 
+    if (!entry) break;
     for (let i = 0; i < entry.length; i++) output.push(entry[i]);
 
-    if (prevCode !== -1 && dictSize < 4096) {
+    if (dictSize < 4096) {
       dict[dictSize] = dict[prevCode].concat([entry[0]]);
       dictSize++;
       if (dictSize === (1 << codeSize) && codeSize < 12) codeSize++;

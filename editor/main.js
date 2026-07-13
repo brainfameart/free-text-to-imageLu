@@ -101,6 +101,7 @@ function onTogglePlay(isPlaying) {
 
 function boot() {
   attachEditorEvents(render, onTogglePlay);
+  startLiveStats(editorState);
   render();
   setInterval(() => {
     if (editorState.isPlaying && !isPlayWindowOpen()) render();

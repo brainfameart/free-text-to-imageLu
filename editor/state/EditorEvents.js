@@ -622,6 +622,23 @@ case "select-scene-file": {
       if (k === "v") { e.preventDefault(); _pasteSelection(); render(); return; }
       if (k === "d") { e.preventDefault(); _copySelection(); _pasteSelection(); render(); return; }
     }
+
+    // Tool shortcuts (Unity-style): Q=Pan, W=Translate, E=Rotate,
+    // R=Scale. Space toggles Play/Pause. These fire only when NOT
+    // typing in an input/textarea (guarded by _typing above).
+    const key = e.key.toLowerCase();
+    if (key === "q") { editorState.activeTool = "pan"; render(); return; }
+    if (key === "w") { editorState.activeTool = "translate"; render(); return; }
+    if (key === "e") { editorState.activeTool = "rotate"; render(); return; }
+    if (key === "r") { editorState.activeTool = "scale"; render(); return; }
+    if (e.key === " " || e.code === "Space") {
+      e.preventDefault();
+      editorState.isPlaying = !editorState.isPlaying;
+      editorState.isPaused = false;
+      onTogglePlay(editorState.isPlaying);
+      render();
+      return;
+    }
   });
 
   document.addEventListener("focusout", (e) => {

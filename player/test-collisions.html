@@ -54,6 +54,8 @@
       <div id="cases"></div>
     </div>
   </div>
-  <script type="module" src="./test-collisions.js"></script>
+  <script type="module">
+    import("./test-collisions.js?t=" + Date.now());
+  </script>
 </body>
 </html>

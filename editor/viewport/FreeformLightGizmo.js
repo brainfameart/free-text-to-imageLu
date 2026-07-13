@@ -100,7 +100,7 @@ export class FreeformLightGizmo {
 
   /** @returns {number|null} the edge index (insert AFTER this point index) under this world point, or null */
   hitTestEdge(worldX, worldY, worldPerPixel) {
-    const r = HANDLE_RADIUS * (worldPerPixel || 1) + 3 * (worldPerPixel || 1);
+    const r = HANDLE_RADIUS * (worldPerPixel || 1) + 6 * (worldPerPixel || 1);
     for (const e of this._edges) {
       if (Math.hypot(worldX - e.cx, worldY - e.cy) <= r) return e.afterIndex;
     }

@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
+<meta http-equiv="Expires" content="0" />
 <title>ZenEngine Game</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.2/pixi.min.js"></script>
 <style>
@@ -60,6 +63,13 @@
 </head>
 <body>
   <div id="game-canvas"></div>
-  <script type="module" src="./main.js"></script>
+  <script type="module">
+    // Cache-bust: always fetch the latest main.js (never a stale cached
+    // copy) by appending a per-load timestamp. The no-cache meta tags
+    // above force the browser to revalidate every transitive ES module
+    // import too, so published updates are always visible without a
+    // manual hard-refresh.
+    import("./main.js?t=" + Date.now());
+  </script>
 </body>
 </html>

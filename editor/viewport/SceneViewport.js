@@ -34,6 +34,7 @@ import { SPRITE_RENDERER, SpriteRenderer } from "../../runtime/components/Sprite
 import { SPRITE_ANIMATION, SpriteAnimation, generateClipId } from "../../runtime/components/SpriteAnimation.js";
 import { CAMERA } from "../../runtime/components/Camera.js";
 import { RenderSystem } from "../../runtime/systems/RenderSystem.js";
+import { AnimationSystem } from "../../runtime/systems/AnimationSystem.js";
 import { getSpriteAsset, getAudioAsset } from "../../runtime/assets/AssetRegistry.js";
 import { AUDIO_SOURCE, AudioSource } from "../../runtime/components/AudioSource.js";
 
@@ -53,6 +54,8 @@ let game = null;
 let renderFn = null;
 let renderSystem = null;
 let lightingSystem = null;
+let animationSystem = null;
+let _markViewportDirty = null;
 
 export function getGame() {
   return game;
@@ -122,6 +125,7 @@ function createViewport(mount, render) {
   // editor render), so sprites show up immediately without simulating.
   renderSystem = game.world.systems.find((s) => s.constructor.name === "RenderSystem") || null;
   lightingSystem = game.world.systems.find((s) => s.constructor.name === "LightingSystem") || null;
+  animationSystem = game.world.systems.find((s) => s.constructor.name === "AnimationSystem") || null;
   syncSpriteRender();
   if (!editorState.selectedId) {
     const mainCamera = game.world.findFirstByName("Main Camera");
@@ -194,7 +198,45 @@ function createViewport(mount, render) {
   // re-synced it. Ticking it here guarantees the light texture is
   // recomputed with THIS frame's real stage transform every single
   // frame, so it can never drift out of alignment with its gizmo.
+  // Dirty/transform-change tracking so the per-frame ticker work
+  // only runs when something actually needs redrawing (see comment below).
+  let _vpDirty = true; // start dirty so the first frame renders
+  let _lastStageX = NaN;
+  let _lastStageY = NaN;
+  let _lastStageScale = NaN;
+  let _lastSelectedId = null;
+
+  // Exposed so syncSpriteRender() (called on every editor render cycle)
+  // can flag the viewport as dirty — any state change that triggers a
+  // render() also needs the lighting/gizmos refreshed once.
+  _markViewportDirty = function () { _vpDirty = true; };
+
   pixiApp.ticker.add(() => {
+    // Determine whether anything actually changed since the last frame:
+    //   1. Stage pan/zoom moved (lighting uniforms depend on it)
+    //   2. A render()/syncSpriteRender cycle flagged us dirty
+    //   3. The selection changed (gizmos follow the selection)
+    //   4. Play mode is active (physics/animation may be moving things)
+    const stage = pixiApp.stage;
+    const stageChanged =
+      stage.x !== _lastStageX || stage.y !== _lastStageY || stage.scale.x !== _lastStageScale;
+    const selChanged = editorState.selectedId !== _lastSelectedId;
+
+    if (!stageChanged && !_vpDirty && !selChanged && !editorState.isPlaying) {
+      // Idle: skip all per-frame gizmo/lighting work. PIXI still
+      // re-transforms existing display objects internally, but we
+      // avoid the expensive lighting-system uniform pass and the
+      // full gizmo Graphics redraws that were burning cycles for
+      // identical output frame after frame.
+      return;
+    }
+
+    _lastStageX = stage.x;
+    _lastStageY = stage.y;
+    _lastStageScale = stage.scale.x;
+    _lastSelectedId = editorState.selectedId;
+    _vpDirty = false;
+
     if (lightingSystem && editorState.world) {
       try {
         lightingSystem.update(editorState.world, 0);
@@ -585,7 +627,9 @@ function attachDropTarget(mount) {
 function syncSpriteRender() {
   if (!renderSystem || !editorState.world) return;
   try {
+    if (animationSystem) animationSystem.update(editorState.world, 0);
     renderSystem.update(editorState.world, 0);
+    if (_markViewportDirty) _markViewportDirty();
     // Runs right after RenderSystem so any Light component edits (color,
     // intensity, radius, type, or moving a light's Transform) preview
     // live in the Scene view exactly like sprite edits do — matching
