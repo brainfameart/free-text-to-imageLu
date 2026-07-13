@@ -24,8 +24,9 @@ import {
   importStandaloneImageFrames,
   importZipImageFrames,
   importSpriteSheetFrames,
+  importGifFrames,
 } from "../animation/AnimationImport.js";
-import { importSpriteFiles, getSpriteAsset, importAudioFiles } from "../../runtime/assets/AssetRegistry.js";
+import { importSpriteFiles, getSpriteAsset, importAudioFiles, registerSpriteAsset } from "../../runtime/assets/AssetRegistry.js";
 import { syncBackgroundColorLive, switchScene } from "../viewport/SceneViewport.js";
 import { serializeEntity, instantiateEntity } from "../../runtime/scene/SceneSerializer.js";
 
@@ -757,13 +758,44 @@ case "select-scene-file": {
     if (e.target.dataset.action === "import-sprite-input") {
       const files = e.target.files;
       if (files && files.length) {
-        importSpriteFiles(files)
-          .then((imported) => {
-            for (const asset of imported) {
-              pushLog("log", "Imported sprite '" + asset.name + "' (" + asset.width + "x" + asset.height + ").");
-            }
-            render();
-          })
+        const gifFiles = [];
+        const imageFiles = [];
+        for (const file of Array.from(files)) {
+          if (file.type === "image/gif" || /\.gif$/i.test(file.name)) gifFiles.push(file);
+          else imageFiles.push(file);
+        }
+        const promises = [];
+        if (imageFiles.length) {
+          promises.push(
+            importSpriteFiles(imageFiles).then((imported) => {
+              for (const asset of imported) {
+                pushLog("log", "Imported sprite '" + asset.name + "' (" + asset.width + "x" + asset.height + ").");
+              }
+            })
+          );
+        }
+        for (const gifFile of gifFiles) {
+          promises.push(
+            importGifFrames(gifFile)
+              .then(({ frames, fps }) => {
+                if (frames.length === 0) return;
+                const name = gifFile.name.replace(/\.[^.]+$/, "");
+                const record = {
+                  key: frames[0].spriteKey,
+                  name,
+                  dataUrl: frames[0].dataUrl,
+                  width: frames[0].width,
+                  height: frames[0].height,
+                  gifFrames: frames.map((f) => f.spriteKey),
+                  gifFps: fps,
+                };
+                registerSpriteAsset(record);
+                pushLog("log", "Imported animated GIF '" + name + "' (" + frames.length + " frames, " + fps + " fps).");
+              })
+          );
+        }
+        Promise.all(promises)
+          .then(() => render())
           .catch((err) => {
             pushLog("error", "Failed to import sprite: " + err.message);
             render();
@@ -808,6 +840,28 @@ case "select-scene-file": {
           })
           .catch((err) => {
             pushLog("error", "Failed to import animation frames: " + err.message);
+            render();
+          });
+      }
+      e.target.value = "";
+      return;
+    }
+
+    if (e.target.dataset.action === "anim-import-gif") {
+      const file = e.target.files && e.target.files[0];
+      const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
+      const anim = entity && entity.getComponent(SPRITE_ANIMATION);
+      const clip = anim && anim.clips.find((c) => c.id === editorState.anim.editingClipId);
+      if (file && clip) {
+        importGifFrames(file)
+          .then(({ frames, fps }) => {
+            clip.frames.push(...frames);
+            if (fps > 0) clip.fps = fps;
+            pushLog("log", "Extracted " + frames.length + " frame(s) from GIF '" + file.name + "' (fps set to " + fps + ").");
+            render();
+          })
+          .catch((err) => {
+            pushLog("error", "Failed to import GIF: " + err.message);
             render();
           });
       }

@@ -31,6 +31,7 @@ import { TRANSFORM, Transform } from "../../runtime/components/Transform.js";
 import { COLLIDER_2D } from "../../runtime/components/Collider2D.js";
 import { LIGHT, LightType } from "../../runtime/components/Light.js";
 import { SPRITE_RENDERER, SpriteRenderer } from "../../runtime/components/SpriteRenderer.js";
+import { SPRITE_ANIMATION, SpriteAnimation, generateClipId } from "../../runtime/components/SpriteAnimation.js";
 import { CAMERA } from "../../runtime/components/Camera.js";
 import { RenderSystem } from "../../runtime/systems/RenderSystem.js";
 import { getSpriteAsset, getAudioAsset } from "../../runtime/assets/AssetRegistry.js";
@@ -551,9 +552,24 @@ function attachDropTarget(mount) {
       SPRITE_RENDERER,
       new SpriteRenderer({ spriteKey: asset.key, referenceWidth: asset.width, referenceHeight: asset.height })
     );
+
+    if (asset.gifFrames && asset.gifFrames.length > 1) {
+      var clip = {
+        id: generateClipId(),
+        name: asset.name || "Animation",
+        frames: asset.gifFrames.map(function (k) { return { spriteKey: k, sourceAssetKey: null }; }),
+        fps: asset.gifFps || 10,
+        loop: true,
+        colliderOverride: null,
+      };
+      entity.addComponent(SPRITE_ANIMATION, new SpriteAnimation({ clips: [clip], currentClipId: clip.id, playing: true }));
+      pushLog("log", "Placed animated GIF '" + asset.name + "' (" + asset.gifFrames.length + " frames) in scene.");
+    } else {
+      pushLog("log", "Placed sprite '" + asset.name + "' in scene.");
+    }
+
     editorState.selectedId = entity.id;
     editorState.selectedIds = [entity.id];
-    pushLog("log", "Placed sprite '" + asset.name + "' in scene.");
     syncSpriteRender();
     if (renderFn) renderFn();
   });

@@ -21,6 +21,7 @@
 import { registerTexture, loadImageAssetFromFile } from "../../runtime/assets/AssetManager.js";
 import { registerFrameAsset } from "../../runtime/assets/AssetRegistry.js";
 import { generateFrameSourceId } from "../../runtime/components/SpriteAnimation.js";
+import { decodeGif } from "./GifDecoder.js";
 
 let _nextFrameKeyId = 1;
 
@@ -126,6 +127,110 @@ export async function importSpriteSheetFrames(file, gridOverride) {
     frames.push({ spriteKey: key, dataUrl, width: rect.w, height: rect.h, sourceAssetKey });
   }
   return frames;
+}
+
+/**
+ * Extracts every frame from an animated GIF as individual sprite frames.
+ * Delegates raw GIF89a parsing (LZW decompression, color tables,
+ * disposal/transparency metadata) to GifDecoder.js, then composites each
+ * frame onto a full-screen canvas exactly the way a browser GIF decoder
+ * would (respecting disposal methods so frames don't bleed into each
+ * other), captures each composite as its own PNG, and registers it as a
+ * texture — identical to the sprite-sheet path.
+ *
+ * Returns a suggested fps derived from the GIF's shortest frame delay
+ * (GIF delays are in 1/100 second), so callers can set the clip's fps to
+ * match the original animation speed.
+ *
+ * @param {File} file a .gif file (animated or static)
+ * @returns {Promise<{frames: Array<{spriteKey:string,dataUrl:string,width:number,height:number,sourceAssetKey:string}>, fps: number}>}
+ */
+export async function importGifFrames(file) {
+  const sourceAssetKey = generateFrameSourceId();
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  const { screenW, screenH, frames: rawFrames } = decodeGif(bytes);
+  const baseName = _stripExtension(file.name);
+
+  const fullCanvas = document.createElement("canvas");
+  fullCanvas.width = screenW;
+  fullCanvas.height = screenH;
+  const fullCtx = fullCanvas.getContext("2d");
+
+  const frames = [];
+  let prevDisposal = 0;
+  let prevRect = null;
+  let savedState = null;
+  let minDelay = Infinity;
+
+  for (const raw of rawFrames) {
+    const w = raw.width;
+    const h = raw.height;
+    if (raw.delay > 0 && raw.delay < minDelay) minDelay = raw.delay;
+
+    // Apply the PREVIOUS frame's disposal before drawing this one.
+    if (prevDisposal === 2 && prevRect) {
+      fullCtx.clearRect(prevRect.left, prevRect.top, prevRect.w, prevRect.h);
+    } else if (prevDisposal === 3 && savedState) {
+      fullCtx.putImageData(savedState, 0, 0);
+    }
+
+    // For disposal 3 (restore-to-previous), snapshot BEFORE drawing.
+    if (raw.disposal === 3) {
+      savedState = fullCtx.getImageData(0, 0, screenW, screenH);
+    } else {
+      savedState = null;
+    }
+
+    // Decode this frame's pixels into a temp canvas, then composite
+    // with drawImage (source-over) so transparent pixels show through
+    // to whatever the canvas already holds — matching browser compositing.
+    const tempCanvas = document.createElement("canvas");
+    tempCanvas.width = w;
+    tempCanvas.height = h;
+    const tempCtx = tempCanvas.getContext("2d");
+    const imgData = tempCtx.createImageData(w, h);
+    for (let i = 0; i < raw.indices.length; i++) {
+      const idx = raw.indices[i];
+      const pi = i * 4;
+      if (raw.transparent && idx === raw.transparentIndex) {
+        imgData.data[pi + 3] = 0;
+      } else if (idx * 3 + 2 < raw.colors.length) {
+        imgData.data[pi] = raw.colors[idx * 3];
+        imgData.data[pi + 1] = raw.colors[idx * 3 + 1];
+        imgData.data[pi + 2] = raw.colors[idx * 3 + 2];
+        imgData.data[pi + 3] = 255;
+      }
+    }
+    tempCtx.putImageData(imgData, 0, 0);
+    fullCtx.drawImage(tempCanvas, raw.left, raw.top);
+
+    // Capture the composited frame as its own image.
+    const frameCanvas = document.createElement("canvas");
+    frameCanvas.width = screenW;
+    frameCanvas.height = screenH;
+    frameCanvas.getContext("2d").drawImage(fullCanvas, 0, 0);
+    const dataUrl = frameCanvas.toDataURL("image/png");
+    const key = "animframe_" + _nextFrameKeyId++;
+    const texture = new PIXI.Texture(PIXI.BaseTexture.from(frameCanvas));
+    registerTexture(key, texture);
+    const name = baseName + "_" + (frames.length + 1);
+    registerFrameAsset({ key, name, dataUrl, width: screenW, height: screenH });
+    frames.push({ spriteKey: key, dataUrl, width: screenW, height: screenH, sourceAssetKey });
+
+    prevDisposal = raw.disposal;
+    prevRect = { left: raw.left, top: raw.top, w, h };
+  }
+
+  // Suggested fps from the shortest frame delay (GIF delays are in
+  // 1/100 second → fps = 100 / delay). Default 10 fps if no delays.
+  let fps = 10;
+  if (minDelay !== Infinity && minDelay > 0) {
+    fps = Math.round(100 / minDelay);
+    if (fps < 1) fps = 1;
+  }
+
+  return { frames, fps };
 }
 
 /**

@@ -208,6 +208,11 @@ function _renderClipEditor(entity, anim, clip) {
     " Sheet" +
     '<input type="file" accept="image/*" style="display:none;" data-action="anim-import-sheet" />' +
     "</label>" +
+    '<label class="animpanel-import-btn" title="Extract frames from an animated GIF">' +
+    icon("upload", 12) +
+    " GIF" +
+    '<input type="file" accept="image/gif,.gif" style="display:none;" data-action="anim-import-gif" />' +
+    "</label>" +
     "</div>" +
     "</div>" +
     '<div class="animpanel-frame-grid">' +
