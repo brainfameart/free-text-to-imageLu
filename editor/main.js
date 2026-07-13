@@ -16,7 +16,7 @@ import { renderViewport } from "./panels/Viewport.js";
 import { renderInspector } from "./panels/Inspector.js";
 import { renderBottom } from "./panels/BottomPanel.js";
 import { renderAnimEditor } from "./panels/AnimationWindow.js";
-import { renderStatusBar } from "./panels/StatusBar.js";
+import { renderStatusBar, startLiveStats } from "./panels/StatusBar.js";
 import { mountOrUpdateSceneViewport, getGame } from "./viewport/SceneViewport.js";
 import { openPlayWindow, closePlayWindow, isPlayWindowOpen } from "./viewport/PlayWindow.js";
 import { attachEditorEvents } from "./state/EditorEvents.js";
