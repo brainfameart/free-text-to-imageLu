@@ -684,6 +684,7 @@ case "select-scene-file": {
     if (key === "e") { editorState.activeTool = "rotate"; render(); return; }
     if (key === "r") { editorState.activeTool = "scale"; render(); return; }
     if (key === "t") { editorState.activeTool = "tile"; render(); return; }
+    if (key === "y") { editorState.activeTool = "erase"; render(); return; }
     if (e.key === " " || e.code === "Space") {
       e.preventDefault();
       editorState.isPlaying = !editorState.isPlaying;
@@ -809,7 +810,7 @@ case "select-scene-file": {
         // their contents, matching the drag-to-"switch position"
         // behavior described for this feature (as opposed to the
         // frame-reorder case above, which shifts everything between
-        // the two indices along a 1D list — a 3x3 grid of independent
+        // the two indices along a 1D list — a 4x4 grid of independent
         // roles has no equivalent "shift" to do instead of swapping).
         const temp = tileset.slots[toRole];
         tileset.slots[toRole] = tileset.slots[fromRole];
@@ -1000,7 +1001,7 @@ case "select-scene-file": {
               tileset.slots[role] = produced.spriteKey;
               registerSpriteAsset({ key: produced.spriteKey, name: tileset.name + "_" + role, dataUrl: produced.dataUrl, width: tileset.tileWidth, height: tileset.tileHeight });
             }
-            pushLog("log", "Sliced '" + file.name + "' into all 9 tileset slots.");
+            pushLog("log", "Sliced '" + file.name + "' into all 16 tileset slots.");
             render();
           })
           .catch((err) => {
@@ -1018,7 +1019,7 @@ case "select-scene-file": {
       const tileset = entity && entity.getComponent(TILESET);
       if (files && files.length && tileset) {
         // Fill EMPTY slots first, in TILE_ROLE_ORDER (the same row-major
-        // order the 3x3 grid displays), so importing several images at
+        // order the 4x4 grid displays), so importing several images at
         // once lands them in a predictable order without the user
         // having to drag each one individually — they can still
         // drag-swap afterward to fix up placement (see the "drop"
@@ -1064,6 +1065,8 @@ case "select-scene-file": {
       e.target.value = "";
       return;
     }
+
+    if (e.target.dataset.action === "anim-import-sheet") {
       const file = e.target.files && e.target.files[0];
       const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
       const anim = entity && entity.getComponent(SPRITE_ANIMATION);

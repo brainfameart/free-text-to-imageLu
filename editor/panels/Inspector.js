@@ -346,7 +346,7 @@ export function renderInspector() {
       "grid",
       row("Name", '<input type="text" data-field="Tileset.name" value="' + tileset.name + '" style="width:100%;background:#2a2a2a;border:1px solid #3a3a3a;color:#dcdcdc;padding:3px 6px;border-radius:3px;font-size:11px;"/>') +
         row("Tile Size", numInput("W", tileset.tileWidth, "Tileset.tileWidth") + numInput("H", tileset.tileHeight, "Tileset.tileHeight")) +
-        row("Slots Filled", '<span style="color:#8a93a0;font-size:11px;">' + filledCount + " / 9</span>") +
+        row("Slots Filled", '<span style="color:#8a93a0;font-size:11px;">' + filledCount + " / 16</span>") +
         '<button class="animwin-btn" data-action="open-tileset-editor" data-entity="' + entity.id + '" style="width:100%;margin-top:4px;">' +
         icon("grid", 12) +
         " Open Tileset Editor</button>" +

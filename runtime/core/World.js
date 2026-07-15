@@ -9,7 +9,7 @@
  * RUNTIME-ONLY FILE.
  */
 
-import { Entity, resetEntityIdCounter } from "./Entity.js";
+import { Entity, resetEntityIdCounter, setEntityIdCounter } from "./Entity.js";
 
 export class World {
   constructor() {
@@ -30,8 +30,22 @@ export class World {
     resetEntityIdCounter();
   }
 
-  createEntity(name, tag) {
+  /**
+   * Creates an entity. Pass `id` to RESTORE a specific id from a saved
+   * scene (deserializeScene) — required because cross-entity references
+   * (e.g. a Tilemap pointing at its Tileset entity by id) only survive
+   * a load if the ids are preserved verbatim. When omitted, a fresh
+   * auto-incremented id is generated as before.
+   */
+  createEntity(name, tag, id) {
     const e = new Entity(name, tag);
+    if (id) {
+      e.id = id;
+      // Keep the auto-increment counter ahead of the restored id so
+      // the next entity created normally never collides with it.
+      const n = parseInt(id.slice(1), 10);
+      if (!Number.isNaN(n)) setEntityIdCounter(n + 1);
+    }
     this.entities.set(e.id, e);
     return e;
   }

@@ -2,19 +2,20 @@
  * editor/panels/TilesetPanel.js
  *
  * Tileset authoring window (opened from the Inspector's Tileset
- * section — see "open-tileset-editor" in EditorEvents.js). Shows a 3x3
- * grid of the 9 autotile roles (see runtime/components/Tileset.js's
+ * section — see "open-tileset-editor" in EditorEvents.js). Shows a 4x4
+ * grid of the 16 autotile roles (see runtime/components/Tileset.js's
  * TileRole/TILE_ROLE_ORDER):
  *
- *   corner-TL   edge-T   corner-TR
- *   edge-L      CENTER   edge-R
- *   corner-BL   edge-B   corner-BR
+ *   corner-TL   edge-T    corner-TR  stub-T
+ *   edge-L      CENTER    edge-R     line-V
+ *   corner-BL   edge-B    corner-BR  stub-B
+ *   stub-L      line-H    stub-R     SINGLE
  *
  * The user can:
- *   - import ONE image -> auto-sliced into the 9 slots in this exact
+ *   - import ONE image -> auto-sliced into the 16 slots in this exact
  *     row-major order (editor/tileset/TilesetImport.js's
  *     sliceTilesetImageIntoRoles)
- *   - import up to 9 separate images -> filled into empty slots in
+ *   - import up to 16 separate images -> filled into empty slots in
  *     the order chosen/dropped
  *   - drag an image from one slot onto another slot to SWAP their
  *     contents (matching the frame-reorder drag idiom already used by
@@ -39,12 +40,19 @@ const ROLE_LABELS = {
   cornerTL: "Corner TL",
   edgeT: "Edge Top",
   cornerTR: "Corner TR",
+  stubT: "Stub Top",
   edgeL: "Edge Left",
   center: "Center",
   edgeR: "Edge Right",
+  lineV: "Line Vert",
   cornerBL: "Corner BL",
   edgeB: "Edge Bottom",
   cornerBR: "Corner BR",
+  stubB: "Stub Bot",
+  stubL: "Stub Left",
+  lineH: "Line Horz",
+  stubR: "Stub Right",
+  single: "Single",
 };
 
 function _thumbFor(spriteKey) {
@@ -85,7 +93,7 @@ function _renderBody(entity, tileset) {
     '<div class="tileset-toolbar">' +
     '<label class="tileset-import-btn">' +
     icon("upload", 12) +
-    "<span>Import Single Image (auto-slice 3x3)</span>" +
+    "<span>Import Single Image (auto-slice 4x4)</span>" +
     '<input type="file" accept="image/*" style="display:none;" data-action="tileset-import-single" />' +
     "</label>" +
     '<label class="tileset-import-btn">' +
@@ -96,7 +104,7 @@ function _renderBody(entity, tileset) {
     "</div>" +
     '<div class="tileset-hint">Drag an image from one box to another to swap their positions.</div>' +
     '<div class="tileset-grid-wrap">' +
-    '<div class="tileset-3x3-grid">' +
+    '<div class="tileset-4x4-grid">' +
     TILE_ROLE_ORDER.map((role, index) => _renderSlot(role, index, tileset)).join("") +
     "</div>" +
     "</div>" +

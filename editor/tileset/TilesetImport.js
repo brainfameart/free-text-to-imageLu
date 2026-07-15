@@ -1,7 +1,7 @@
 /**
  * editor/tileset/TilesetImport.js
  *
- * Turns raw user input (one sprite-sheet-style image, or up to 9
+ * Turns raw user input (one sprite-sheet-style image, or up to 16
  * standalone images) into spriteKeys ready to drop into a Tileset
  * component's slots (see runtime/components/Tileset.js) — the
  * authoring-time half of the autotile feature. The painting-time half
@@ -23,17 +23,17 @@ import { TILE_ROLE_ORDER } from "../../runtime/components/Tileset.js";
 let _nextTileKeyId = 1;
 
 /**
- * Slices ONE image into a 3x3 grid (equal-sized cells, no gutter
+ * Slices ONE image into a 4x4 grid (equal-sized cells, no gutter
  * detection needed since tileset source images are expected to be a
- * clean 3x3 sheet) and returns one spriteKey per TILE_ROLE_ORDER slot,
- * in the same row-major order as the editor's 3x3 authoring grid.
+ * clean 4x4 sheet) and returns one spriteKey per TILE_ROLE_ORDER slot,
+ * in the same row-major order as the editor's 4x4 authoring grid.
  * @param {File} file
  * @returns {Promise<Record<string,{spriteKey:string,dataUrl:string}>>} role -> {spriteKey, dataUrl}
  */
 export async function sliceTilesetImageIntoRoles(file) {
   const { img, width, height } = await _readImageFile(file);
-  const cellW = width / 3;
-  const cellH = height / 3;
+  const cellW = width / 4;
+  const cellH = height / 4;
 
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -42,8 +42,8 @@ export async function sliceTilesetImageIntoRoles(file) {
 
   const result = {};
   for (let i = 0; i < TILE_ROLE_ORDER.length; i++) {
-    const col = i % 3;
-    const row = Math.floor(i / 3);
+    const col = i % 4;
+    const row = Math.floor(i / 4);
     const role = TILE_ROLE_ORDER[i];
 
     const cellCanvas = document.createElement("canvas");
@@ -65,7 +65,7 @@ export async function sliceTilesetImageIntoRoles(file) {
 /**
  * Loads ONE standalone image as a single role's texture — used when
  * the user drags/drops (or file-picks) an individual image straight
- * into one of the 9 slots rather than importing a whole 3x3 sheet.
+ * into one of the 16 slots rather than importing a whole 4x4 sheet.
  * @param {File} file
  * @returns {Promise<{spriteKey:string, dataUrl:string}>}
  */

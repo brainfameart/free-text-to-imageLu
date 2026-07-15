@@ -18,7 +18,7 @@ import { renderBottom } from "./panels/BottomPanel.js";
 import { renderAnimEditor } from "./panels/AnimationWindow.js";
 import { renderTilesetEditor } from "./panels/TilesetPanel.js";
 import { renderStatusBar, startLiveStats } from "./panels/StatusBar.js";
-import { mountOrUpdateSceneViewport, getGame } from "./viewport/SceneViewport.js";
+import { mountOrUpdateSceneViewport, getGame, detachViewportCanvas } from "./viewport/SceneViewport.js";
 import { openPlayWindow, closePlayWindow, isPlayWindowOpen } from "./viewport/PlayWindow.js";
 import { attachEditorEvents } from "./state/EditorEvents.js";
 import { editorState } from "./state/EditorState.js";
@@ -61,6 +61,14 @@ function render() {
   const nameCaret = wasNameFocused ? active.selectionStart : null;
   const wasSceneRenameFocused = active && active.dataset && active.dataset.action === "rename-scene-input";
   const sceneRenameCaret = wasSceneRenameFocused ? active.selectionStart : null;
+
+  // Detach the live PixiJS canvas BEFORE overwriting the app shell so
+  // `innerHTML` doesn't try to remove it from a mount it's replacing —
+  // that races with PIXI's own reparenting and throws "node to be
+  // removed is no longer a child", especially while rapidly firing
+  // render() from a numeric Inspector drag. mountOrUpdateSceneViewport
+  // re-attaches the canvas to the fresh mount below.
+  detachViewportCanvas();
 
   app.innerHTML = html;
 

@@ -34,6 +34,7 @@ export function renderToolbar() {
     { id: "rotate", iconName: "refreshcw", shortcut: "E" },
     { id: "scale", iconName: "maximize2", shortcut: "R" },
     { id: "tile", iconName: "grid", shortcut: "T" },
+    { id: "erase", iconName: "trash", shortcut: "Y" },
   ];
 
   return (

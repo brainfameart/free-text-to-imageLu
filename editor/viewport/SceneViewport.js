@@ -57,10 +57,30 @@ let renderFn = null;
 let renderSystem = null;
 let lightingSystem = null;
 let animationSystem = null;
+let tilemapSystem = null;
 let _markViewportDirty = null;
 
 export function getGame() {
   return game;
+}
+
+/**
+ * Detaches the live PixiJS canvas from its current DOM parent WITHOUT
+ * destroying the PIXI app/view. The editor's render() (main.js)
+ * rebuilds the entire app shell via `app.innerHTML = html`, which would
+ * otherwise try to remove the canvas from a mount it's about to
+ * overwrite — and PIXI's canvas sometimes gets reparented/synced by
+ * the renderer mid-frame, producing a "node to be removed is no
+ * longer a child" DOM error (especially while dragging a numeric
+ * Inspector field that fires render() on every `input` event). Calling
+ * this immediately before `innerHTML` safely unhooks the canvas so the
+ * old mount can be replaced cleanly; mountOrUpdateSceneViewport() then
+ * re-attaches it to the fresh mount right after.
+ */
+export function detachViewportCanvas() {
+  if (pixiApp && pixiApp.view && pixiApp.view.parentNode) {
+    pixiApp.view.parentNode.removeChild(pixiApp.view);
+  }
 }
 
 /**
@@ -128,6 +148,7 @@ function createViewport(mount, render) {
   renderSystem = game.world.systems.find((s) => s.constructor.name === "RenderSystem") || null;
   lightingSystem = game.world.systems.find((s) => s.constructor.name === "LightingSystem") || null;
   animationSystem = game.world.systems.find((s) => s.constructor.name === "AnimationSystem") || null;
+  tilemapSystem = game.world.systems.find((s) => s.constructor.name === "TilemapSystem") || null;
   syncSpriteRender();
   if (!editorState.selectedId) {
     const mainCamera = game.world.findFirstByName("Main Camera");
@@ -379,12 +400,17 @@ function attachGizmoPointerEvents(mount) {
     // tile ART shown at each cell is computed fresh every frame by
     // runtime/systems/TilemapSystem.js from the live neighbor pattern
     // (see that file + AutoTileRules.js), never decided here.
-    if (tool === "tile") {
+    // The erase tool owns the pointer exactly like the tile paint
+    // tool, except every painted (or dragged-over) cell is removed
+    // instead of added — see _paintTileAtClientPos's erase branch.
+    // Alt+click still inverts either tool (paint-while-erase-tool, or
+    // erase-while-tile-tool), matching the existing Alt-erase behavior.
+    if (tool === "tile" || tool === "erase") {
       const selected = editorState.world ? editorState.world.getEntity(editorState.selectedId) : null;
       const tilemap = selected ? selected.getComponent(TILEMAP) : null;
       if (tilemap) {
         _isPaintingTile = true;
-        _paintTileAtClientPos(selected, tilemap, e.clientX, e.clientY, e.altKey);
+        _paintTileAtClientPos(selected, tilemap, e.clientX, e.clientY, tool === "erase" || e.altKey);
         try { el.setPointerCapture(e.pointerId); } catch (err) {}
       }
       e.preventDefault();
@@ -529,7 +555,7 @@ function attachGizmoPointerEvents(mount) {
     if (_isPaintingTile) {
       const selected = editorState.world ? editorState.world.getEntity(editorState.selectedId) : null;
       const tilemap = selected ? selected.getComponent(TILEMAP) : null;
-      if (tilemap) _paintTileAtClientPos(selected, tilemap, e.clientX, e.clientY, e.altKey);
+      if (tilemap) _paintTileAtClientPos(selected, tilemap, e.clientX, e.clientY, editorState.activeTool === "erase" || e.altKey);
       return;
     }
     if (freeformLightGizmo.isDragging()) {
@@ -717,6 +743,10 @@ function syncSpriteRender() {
   try {
     if (animationSystem) animationSystem.update(editorState.world, 0);
     renderSystem.update(editorState.world, 0);
+    // TilemapSystem builds/refreshes tile sprites from Tilemap.cells,
+    // so it must tick here too — otherwise painted cells never render
+    // (the game loop is intentionally never started in the editor).
+    if (tilemapSystem) tilemapSystem.update(editorState.world, 0);
     if (_markViewportDirty) _markViewportDirty();
     // Runs right after RenderSystem so any Light component edits (color,
     // intensity, radius, type, or moving a light's Transform) preview

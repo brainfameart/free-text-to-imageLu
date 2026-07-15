@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
     <script>
     (function() {
@@ -60,7 +60,7 @@
         window.addEventListener('securitypolicyviolation', handleCspViolation);
         buffer.listenersInstalled = true;
     })();
-    </script><script defer data-preview-inject="true" data-app-id="6a57ae1bc8d56f1480b2a119" data-preview-type="sandbox" data-rum-app-id="db50c921-10c3-4f12-bccb-950fa174b708" data-rum-client-token="pubfe8a4f2972b412b4556fd67e77f82cb4" data-dd-site="datadoghq.com" src="https://app.base44.com/builder-bridge.js?t=1784131542"></script>
+    </script><script defer data-preview-inject="true" data-app-id="6a57ae1bc8d56f1480b2a119" data-preview-type="sandbox" data-rum-app-id="db50c921-10c3-4f12-bccb-950fa174b708" data-rum-client-token="pubfe8a4f2972b412b4556fd67e77f82cb4" data-dd-site="datadoghq.com" src="https://app.base44.com/builder-bridge.js?t=1784131538"></script>
     <script>
     (function() {
         var IGNORE = { SCRIPT: 1, STYLE: 1, LINK: 1, META: 1, NOSCRIPT: 1, TEMPLATE: 1 };
@@ -310,76 +310,50 @@
         window.addEventListener('popstate', notify);
         window.parent.postMessage({ type: 'APP_CHANGED_URL', url: window.location.href }, '*');
     })();
-    </script>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-<meta http-equiv="Pragma" content="no-cache" />
-<meta http-equiv="Expires" content="0" />
-<title>ZenEngine Game</title>
+    </script><title>Import Test</title>
+<style>body{background:#1a1a2e;color:#0f0;font-family:monospace;font-size:12px;padding:10px;white-space:pre-wrap;}</style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.2/pixi.min.js"></script>
-<style>
-  html, body { height: 100%; margin: 0; padding: 0; background: #000; overflow: hidden; }
-  #game-canvas { width: 100vw; height: 100vh; }
-  #game-canvas canvas { display: block; }
-</style>
-<script>
-// Auto-recovery: if a JS module fails to parse (e.g. "Unexpected end of
-// input" from a stale/truncated cached file), automatically reload once
-// with cache-busting. If the retry also fails, show a visible fallback
-// instead of a black screen.
-(function () {
-  var p = new URLSearchParams(location.search);
-  var recovered = p.get("recovered") === "1";
-  function reload() {
-    p.set("recovered", "1");
-    p.set("t", Date.now().toString());
-    location.replace(location.pathname + "?" + p.toString());
-  }
-  function showFallback() {
-    var el = document.getElementById("game-canvas") || document.body;
-    el.innerHTML =
-      '<div style="display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;background:#1a1a2e;color:#fff;font-family:system-ui;text-align:center;padding:20px;">' +
-      '<h2 style="margin:0 0 8px;font-size:18px;">Game failed to load</h2>' +
-      '<p style="margin:0 0 16px;color:#999;font-size:13px;max-width:340px;">A JavaScript module failed to parse — this is usually a stale cache issue. Click Reload on the home page to force-refresh all engine files.</p>' +
-      '<button onclick="location.replace(location.pathname)" style="padding:8px 24px;background:#6366f1;border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:13px;">Reload</button>' +
-      "</div>";
-  }
-  function handleError(msg) {
-    if (
-      msg &&
-      (msg.indexOf("Unexpected end of input") !== -1 ||
-        msg.indexOf("SyntaxError") !== -1)
-    ) {
-      if (!recovered) reload();
-      else showFallback();
-    }
-  }
-  window.addEventListener("error", function (e) {
-    handleError((e.error && e.error.message) || e.message || "");
-  });
-  window.addEventListener("unhandledrejection", function (e) {
-    handleError((e.reason && (e.reason.message || e.reason.toString())) || "");
-  });
-  setTimeout(function () {
-    var c = document.getElementById("game-canvas");
-    if (c && c.children.length === 0) {
-      if (!recovered) reload();
-      else showFallback();
-    }
-  }, 10000);
-})();
-</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 <body>
-  <div id="game-canvas"></div>
-  <script type="module">
-    // Cache-bust: always fetch the latest main.js (never a stale cached
-    // copy) by appending a per-load timestamp. The no-cache meta tags
-    // above force the browser to revalidate every transitive ES module
-    // import too, so published updates are always visible without a
-    // manual hard-refresh.
-    import("./main.js?t=" + Date.now());
-  </script>
+<div id="log"></div>
+<script type="module">
+const log = document.getElementById('log');
+function msg(t) { log.textContent += t + '\n'; }
+
+const modules = [
+  './panels/Toolbar.js',
+  './panels/Hierarchy.js',
+  './panels/Viewport.js',
+  './panels/Inspector.js',
+  './panels/BottomPanel.js',
+  './panels/AnimationWindow.js',
+  './panels/TilesetPanel.js',
+  './panels/StatusBar.js',
+  './viewport/SceneViewport.js',
+  './viewport/PlayWindow.js',
+  './state/EditorEvents.js',
+  './state/EditorState.js',
+  './state/ConsoleCapture.js',
+];
+
+msg('PIXI loaded: ' + (typeof PIXI !== 'undefined'));
+msg('JSZip loaded: ' + (typeof JSZip !== 'undefined'));
+msg('Testing ' + modules.length + ' modules...');
+msg('');
+
+(async () => {
+  for (const m of modules) {
+    try {
+      await import(m + '?t=' + Date.now());
+      msg('OK: ' + m);
+    } catch(e) {
+      msg('FAIL: ' + m + ' -> ' + (e.message || e.toString()));
+      if (e.stack) msg('  ' + e.stack.split('\n')[1]?.trim());
+    }
+  }
+  msg('\nDone.');
+})();
+</script>
 </body>
 </html>

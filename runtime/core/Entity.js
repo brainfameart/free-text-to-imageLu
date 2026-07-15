@@ -50,3 +50,13 @@ export class Entity {
 export function resetEntityIdCounter() {
   _nextEntityId = 1;
 }
+
+/**
+ * Bumps the global id counter to at least `minNext` (exclusive), so a
+ * subsequently created entity never reuses an id that was explicitly
+ * restored from a saved scene (see World.createEntity's optional id).
+ * No-op when the counter is already ahead. Used only by scene loading.
+ */
+export function setEntityIdCounter(minNext) {
+  if (_nextEntityId < minNext) _nextEntityId = minNext;
+}

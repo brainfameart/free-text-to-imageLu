@@ -25,6 +25,8 @@
 import { TRANSFORM } from "../components/Transform.js";
 import { RIGIDBODY_2D, BodyType } from "../components/Rigidbody2D.js";
 import { COLLIDER_2D, ColliderShape } from "../components/Collider2D.js";
+import { TILEMAP } from "../components/Tilemap.js";
+import { TILESET } from "../components/Tileset.js";
 import { getColliderWorldGeometry } from "./ColliderGeometry.js";
 import { loadRapier } from "./RapierLoader.js";
 
@@ -76,6 +78,19 @@ export class PhysicsWorld {
 
     /** @type {Map<string, { body: object, collider: object|null, bodyType: string, colliderSig: string }>} entityId -> handles */
     this._handles = new Map();
+
+    // Per-tilemap-cell static colliders: each Tilemap entity whose
+    // cells map to solid ground gets a single STATIC Rapier body, and
+    // one cuboid collider per painted cell (sized to the referenced
+    // Tileset's tileWidth/tileHeight, positioned in the body's local
+    // frame at (col+0.5)*tw, (row+0.5)*th — matching
+    // TilemapSystem.js's per-tile placement). This is what makes a
+    // painted tilemap act as real collision geometry in Play mode,
+    // so the player/kinematic/dynamic bodies land on and bump into
+    // individual tiles instead of falling through the floor.
+    this._tilemapBodies = new Map(); // entityId -> RigidBody
+    this._tilemapCellColliders = new Map(); // entityId -> Map<cellKey, Collider>
+    this._tilemapBodySig = new Map(); // entityId -> "tw,th"
 
     // Small skin/offset gap (in world pixels) the character controller
     // keeps between a kinematic body and whatever it's sweeping
@@ -175,6 +190,13 @@ export class PhysicsWorld {
       }
     }
 
+    // Rebuild/refresh per-tilemap-cell static colliders so a painted
+    // tilemap participates in the Rapier solve this step (see
+    // _syncTilemapColliders). Done BEFORE the step so freshly painted
+    // cells collide immediately, and after _syncEntity so a tilemap
+    // entity's own Rigidbody2D/Collider2D (if any) is already in place.
+    this._syncTilemapColliders(world);
+
     this.rapierWorld.timestep = stepDt;
     this.rapierWorld.step();
 
@@ -207,6 +229,105 @@ export class PhysicsWorld {
       // movement). A KinematicPositionBased body has no meaningful
       // linvel() from Rapier's solver to read back here, since we drive
       // it via setNextKinematicTranslation rather than forces/velocity.
+    }
+  }
+
+  /**
+   * Builds/refreshes one STATIC Rapier body per Tilemap entity and a
+   * cuboid collider for every painted cell in Tilemap.cells, so a
+   * painted tilemap acts as solid collision geometry in Play mode.
+   * Cell world position = transform.x/y + (col+0.5)*tw, (row+0.5)*th,
+   * matching TilemapSystem.js's per-tile placement, so a tilemap entity
+   * can be moved and its solid cells follow. Erased cells (and whole
+   * destroyed tilemap entities) have their colliders removed. If the
+   * referenced Tileset's tile size changes, all of that tilemap's cell
+   * colliders are rebuilt to the new size.
+   */
+  _syncTilemapColliders(world) {
+    const RAPIER = this.RAPIER;
+    const tilemapEntities = world.query(TRANSFORM, TILEMAP);
+    const seenTilemaps = new Set();
+
+    for (const entity of tilemapEntities) {
+      seenTilemaps.add(entity.id);
+      const transform = entity.getComponent(TRANSFORM);
+      const tilemap = entity.getComponent(TILEMAP);
+
+      const tilesetEntity = tilemap.tilesetEntityId ? world.getEntity(tilemap.tilesetEntityId) : null;
+      const tileset = tilesetEntity ? tilesetEntity.getComponent(TILESET) : null;
+      const tw = tileset ? tileset.tileWidth : 32;
+      const th = tileset ? tileset.tileHeight : 32;
+      const sizeSig = tw + "," + th;
+
+      let body = this._tilemapBodies.get(entity.id);
+      let cellColliders = this._tilemapCellColliders.get(entity.id);
+      const prevSig = this._tilemapBodySig.get(entity.id);
+
+      if (!body) {
+        const desc = new RAPIER.RigidBodyDesc(RAPIER.RigidBodyType.Fixed)
+          .setTranslation(transform.x, transform.y)
+          .setRotation(transform.rotation * DEG2RAD);
+        body = this.rapierWorld.createRigidBody(desc);
+        this._tilemapBodies.set(entity.id, body);
+        cellColliders = new Map();
+        this._tilemapCellColliders.set(entity.id, cellColliders);
+        this._tilemapBodySig.set(entity.id, sizeSig);
+      } else {
+        // keep the static body pinned to the entity's Transform so a
+        // moved tilemap's solid cells follow it. Static bodies don't
+        // simulate, so this is safe to apply every frame.
+        body.setTranslation({ x: transform.x, y: transform.y }, true);
+        body.setRotation(transform.rotation * DEG2RAD, true);
+
+        // tile size changed -> drop all existing cell colliders so they
+        // rebuild at the new size on the loop below.
+        if (prevSig !== sizeSig) {
+          for (const collider of cellColliders.values()) {
+            this.rapierWorld.removeCollider(collider, true);
+          }
+          cellColliders.clear();
+          this._tilemapBodySig.set(entity.id, sizeSig);
+        }
+      }
+
+      const filledKeys = Object.keys(tilemap.cells);
+      for (const key of filledKeys) {
+        if (cellColliders.has(key)) continue;
+        const comma = key.indexOf(",");
+        const col = parseInt(key.slice(0, comma), 10);
+        const row = parseInt(key.slice(comma + 1), 10);
+        const cx = (col + 0.5) * tw;
+        const cy = (row + 0.5) * th;
+        const desc = RAPIER.ColliderDesc.cuboid(Math.max(0.01, tw / 2), Math.max(0.01, th / 2))
+          .setTranslation(cx, cy)
+          .setFriction(1)
+          .setActiveCollisionTypes(
+            RAPIER.ActiveCollisionTypes.ALL |
+              RAPIER.ActiveCollisionTypes.KINEMATIC_KINEMATIC |
+              RAPIER.ActiveCollisionTypes.KINEMATIC_STATIC
+          );
+        const collider = this.rapierWorld.createCollider(desc, body);
+        cellColliders.set(key, collider);
+      }
+
+      // remove colliders for cells that were erased since last step.
+      const filledSet = new Set(filledKeys);
+      for (const [key, collider] of cellColliders) {
+        if (!filledSet.has(key)) {
+          this.rapierWorld.removeCollider(collider, true);
+          cellColliders.delete(key);
+        }
+      }
+    }
+
+    // remove bodies for tilemap entities that were destroyed.
+    for (const [entityId, body] of this._tilemapBodies) {
+      if (!seenTilemaps.has(entityId)) {
+        this.rapierWorld.removeRigidBody(body);
+        this._tilemapBodies.delete(entityId);
+        this._tilemapCellColliders.delete(entityId);
+        this._tilemapBodySig.delete(entityId);
+      }
     }
   }
 
@@ -577,6 +698,12 @@ export class PhysicsWorld {
       this.rapierWorld.removeRigidBody(handle.body);
     }
     this._handles.clear();
+    for (const body of this._tilemapBodies.values()) {
+      this.rapierWorld.removeRigidBody(body);
+    }
+    this._tilemapBodies.clear();
+    this._tilemapCellColliders.clear();
+    this._tilemapBodySig.clear();
   }
 
   destroy() {

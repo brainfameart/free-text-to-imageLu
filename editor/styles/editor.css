@@ -350,7 +350,7 @@ svg.icon{display:inline-block;vertical-align:middle;flex-shrink:0;}
 .statusbar .right{display:flex;align-items:center;gap:16px;color:#888;}
 .statusbar .right .mono{font-family:monospace;}
 
-/* editor/panels/TilesetPanel.js — 3x3 autotile tileset authoring window.
+/* editor/panels/TilesetPanel.js — 4x4 autotile tileset authoring window.
    Reuses .anim-overlay/.anim-backdrop/.anim-header (same modal-window
    chrome as AnimationWindow.js) so tool windows look consistent. */
 .tileset-window{width:520px;height:auto;max-height:640px;}
@@ -360,7 +360,7 @@ svg.icon{display:inline-block;vertical-align:middle;flex-shrink:0;}
 .tileset-import-btn:hover{border-color:#666;background:#383838;}
 .tileset-hint{font-size:10px;color:#888;}
 .tileset-grid-wrap{display:flex;justify-content:center;padding:6px 0;}
-.tileset-3x3-grid{display:grid;grid-template-columns:repeat(3,84px);grid-template-rows:repeat(3,84px);gap:6px;}
+.tileset-4x4-grid{display:grid;grid-template-columns:repeat(4,84px);grid-template-rows:repeat(4,84px);gap:6px;}
 .tileset-slot{position:relative;width:84px;height:84px;background:repeating-conic-gradient(#2b2b2b 0% 25%,#242424 0% 50%) 50%/12px 12px;border:2px solid #1a1a1a;border-radius:3px;display:flex;align-items:center;justify-content:center;cursor:grab;overflow:hidden;}
 .tileset-slot:hover{border-color:#555;}
 .tileset-slot.dragging{opacity:.35;}

@@ -46,6 +46,7 @@ export function serializeScene(world) {
   return {
     sceneName: world.sceneName,
     entities: world.getAllEntities().map((entity) => ({
+      id: entity.id,
       name: entity.name,
       tag: entity.tag,
       active: entity.active,
@@ -66,7 +67,7 @@ export function deserializeScene(world, sceneData) {
   world.sceneName = sceneData.sceneName || "Untitled Scene";
 
   for (const entityData of sceneData.entities || []) {
-    const entity = world.createEntity(entityData.name, entityData.tag);
+    const entity = world.createEntity(entityData.name, entityData.tag, entityData.id);
     entity.active = entityData.active !== false;
 
     for (const [type, data] of Object.entries(entityData.components || {})) {
