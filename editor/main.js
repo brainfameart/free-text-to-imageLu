@@ -62,15 +62,41 @@ function render() {
   const wasSceneRenameFocused = active && active.dataset && active.dataset.action === "rename-scene-input";
   const sceneRenameCaret = wasSceneRenameFocused ? active.selectionStart : null;
 
-  // Detach the live PixiJS canvas BEFORE overwriting the app shell so
-  // `innerHTML` doesn't try to remove it from a mount it's replacing —
-  // that races with PIXI's own reparenting and throws "node to be
-  // removed is no longer a child", especially while rapidly firing
-  // render() from a numeric Inspector drag. mountOrUpdateSceneViewport
-  // re-attaches the canvas to the fresh mount below.
-  detachViewportCanvas();
+  // Park the live PixiJS canvas in a hidden holder BEFORE overwriting
+  // the app shell. If the canvas remains inside #app when innerHTML
+  // runs, PIXI's internal ResizeObserver/RAF callbacks can race with
+  // the DOM removal and throw "node to be removed is no longer a child
+  // of this node". Moving the canvas to a stable hidden parent OUTSIDE
+  // #app prevents the conflict entirely. This is done inline here
+  // (rather than only in SceneViewport.js's detachViewportCanvas) so
+  // it takes effect immediately even if the browser serves a cached
+  // copy of SceneViewport.js — main.js is always cache-busted via
+  // import("./main.js?t=" + Date.now()).
+  const _canvas = app.querySelector("canvas");
+  if (_canvas) {
+    let _hold = document.getElementById("_pixi-canvas-hold");
+    if (!_hold) {
+      _hold = document.createElement("div");
+      _hold.id = "_pixi-canvas-hold";
+      _hold.style.cssText =
+        "position:absolute;left:-99999px;top:0;width:0;height:0;overflow:hidden;pointer-events:none;";
+      document.body.appendChild(_hold);
+    }
+    _hold.appendChild(_canvas);
+  }
 
-  app.innerHTML = html;
+  // Set innerHTML with fallback: PIXI's ResizeObserver on the canvas can
+  // race with the bulk innerHTML child-removal and throw "node to be
+  // removed is no longer a child". If that happens, manually remove each
+  // child individually (catching per-node failures) then retry.
+  try {
+    app.innerHTML = html;
+  } catch (_domErr) {
+    while (app.firstChild) {
+      try { app.removeChild(app.firstChild); } catch (_) {}
+    }
+    app.innerHTML = html;
+  }
 
   if (wasSearchFocused) {
     const el = document.getElementById("hierarchy-search-input");

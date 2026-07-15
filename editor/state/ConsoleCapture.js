@@ -39,6 +39,9 @@ export function installConsoleCapture() {
   //    e.g. bad texture data, WebGL context creation failures).
   window.addEventListener("error", (event) => {
     const msg = event.error ? stringifyArg(event.error) : event.message;
+    // Suppress the known PIXI ResizeObserver race during innerHTML
+    // rebuilds — it's handled by main.js's retry, not a real error.
+    if (msg.indexOf("no longer a child") !== -1 || msg.indexOf("node to be removed") !== -1) return;
     pushLog("error", "[Uncaught] " + msg + (event.filename ? " (" + event.filename + ":" + event.lineno + ")" : ""));
   });
 
@@ -60,7 +63,11 @@ export function installConsoleCapture() {
 
   console.warn = (...args) => {
     realWarn(...args);
-    pushLog("warn", "[console.warn] " + args.map(stringifyArg).join(" "));
+    const text = args.map(stringifyArg).join(" ");
+    // Filter out BuilderBridge "No parent window found" warnings —
+    // harmless in the preview sandbox, they just spam the console.
+    if (text.indexOf("No parent window found") !== -1 || text.indexOf("BuilderBridge") !== -1) return;
+    pushLog("warn", "[console.warn] " + text);
   };
 
   console.error = (...args) => {

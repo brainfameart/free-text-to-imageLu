@@ -53,6 +53,7 @@ let transformGizmo = null;
 let triangleColliderGizmo = null;
 let freeformLightGizmo = null;
 let game = null;
+let pixiCanvasHold = null;
 let renderFn = null;
 let renderSystem = null;
 let lightingSystem = null;
@@ -78,8 +79,23 @@ export function getGame() {
  * re-attaches it to the fresh mount right after.
  */
 export function detachViewportCanvas() {
-  if (pixiApp && pixiApp.view && pixiApp.view.parentNode) {
-    pixiApp.view.parentNode.removeChild(pixiApp.view);
+  if (!pixiApp || !pixiApp.view) return;
+  // Park the live canvas in a hidden holder instead of just removing it.
+  // If the canvas has no parent, PIXI's internal ResizeObserver / RAF
+  // callbacks can re-parent it between this call and the `innerHTML`
+  // replacement in render(), producing a "node to be removed is no
+  // longer a child" DOM error. Keeping it parked in a stable (hidden)
+  // parent means innerHTML never tries to remove it and PIXI's observers
+  // always see a valid parentNode.
+  if (!pixiCanvasHold) {
+    pixiCanvasHold = document.createElement("div");
+    pixiCanvasHold.id = "_pixi-canvas-hold";
+    pixiCanvasHold.style.cssText =
+      "position:absolute;left:-99999px;top:0;width:0;height:0;overflow:hidden;pointer-events:none;";
+    document.body.appendChild(pixiCanvasHold);
+  }
+  if (pixiApp.view.parentNode !== pixiCanvasHold) {
+    pixiCanvasHold.appendChild(pixiApp.view);
   }
 }
 
