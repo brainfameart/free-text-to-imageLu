@@ -21,6 +21,8 @@ import { SHADOW_CASTER } from "../../runtime/components/ShadowCaster.js";
 import { LIGHTING_SETTINGS } from "../../runtime/components/LightingSettings.js";
 import { SPRITE_ANIMATION } from "../../runtime/components/SpriteAnimation.js";
 import { AUDIO_SOURCE } from "../../runtime/components/AudioSource.js";
+import { TILESET } from "../../runtime/components/Tileset.js";
+import { TILEMAP } from "../../runtime/components/Tilemap.js";
 import { ShadowMode } from "../../runtime/systems/LightingQuality.js";
 import { getCameraResolution } from "../../runtime/core/CameraUtils.js";
 import { getSpriteAsset, getAudioAsset, getAllAudioAssets } from "../../runtime/assets/AssetRegistry.js";
@@ -331,6 +333,65 @@ export function renderInspector() {
         ) +
         distanceFieldsHtml +
         '<button class="removecomp-btn" data-action="remove-component" data-component="AudioSource" style="margin-top:6px;">Remove Component</button>'
+    );
+  }
+
+  const tileset = entity.getComponent(TILESET);
+  if (tileset) {
+    const filledCount = Object.values(tileset.slots).filter(Boolean).length;
+    body += section(
+      editorState.sectionsOpen,
+      "tileset",
+      "Tileset",
+      "grid",
+      row("Name", '<input type="text" data-field="Tileset.name" value="' + tileset.name + '" style="width:100%;background:#2a2a2a;border:1px solid #3a3a3a;color:#dcdcdc;padding:3px 6px;border-radius:3px;font-size:11px;"/>') +
+        row("Tile Size", numInput("W", tileset.tileWidth, "Tileset.tileWidth") + numInput("H", tileset.tileHeight, "Tileset.tileHeight")) +
+        row("Slots Filled", '<span style="color:#8a93a0;font-size:11px;">' + filledCount + " / 9</span>") +
+        '<button class="animwin-btn" data-action="open-tileset-editor" data-entity="' + entity.id + '" style="width:100%;margin-top:4px;">' +
+        icon("grid", 12) +
+        " Open Tileset Editor</button>" +
+        '<button class="removecomp-btn" data-action="remove-component" data-component="Tileset" style="margin-top:6px;">Remove Component</button>'
+    );
+  }
+
+  const tilemap = entity.getComponent(TILEMAP);
+  if (tilemap) {
+    // Every OTHER entity in the scene that carries a Tileset is a valid
+    // assignment target — Tilemap references a Tileset by entity id
+    // (not by copying its data), matching Light/ShadowCaster's existing
+    // reference-by-id convention elsewhere in this codebase (see
+    // Tilemap.js's file header for why).
+    const tilesetEntities = world ? world.getAllEntities().filter((e) => e.hasComponent(TILESET)) : [];
+    const cellCount = Object.keys(tilemap.cells).length;
+    const tilesetOptionsHtml =
+      (!tilemap.tilesetEntityId ? '<option value="" selected disabled>None</option>' : "") +
+      tilesetEntities
+        .map(
+          (e) =>
+            '<option value="' + e.id + '"' + (e.id === tilemap.tilesetEntityId ? " selected" : "") + ">" +
+            e.name +
+            "</option>"
+        )
+        .join("");
+    const tilesetPickerHtml = tilesetEntities.length
+      ? '<div class="dropdown-input"><select data-field="Tilemap.tilesetEntityId">' +
+        tilesetOptionsHtml +
+        "</select>" +
+        icon("chevrondown", 10, "chev") +
+        "</div>"
+      : '<div class="sprite-row"><div class="sprite-box">No Tileset in scene — add one to an object first</div></div>';
+
+    body += section(
+      editorState.sectionsOpen,
+      "tilemap",
+      "Tilemap",
+      "grid",
+      row("Tileset", tilesetPickerHtml) +
+        row("Painted Cells", '<span style="color:#8a93a0;font-size:11px;">' + cellCount + "</span>") +
+        '<div class="static-body-note" style="padding:6px 4px;color:#8a93a0;font-size:11px;">' +
+        'Select the Tile tool (T) in the toolbar, then click or drag in the Scene view to paint. The tile shown at each cell auto-updates from its neighbors, like Unity\'s Rule Tile.' +
+        "</div>" +
+        '<button class="removecomp-btn" data-action="remove-component" data-component="Tilemap" style="margin-top:6px;">Remove Component</button>'
     );
   }
 
@@ -700,6 +761,8 @@ export function renderInspector() {
     !audioSource && { name: "AudioSource", label: "Audio Source" },
     !shadowCaster && { name: "ShadowCaster", label: "Shadow Caster" },
     !lightingSettings && { name: "LightingSettings", label: "Lighting Settings" },
+    !tileset && { name: "Tileset", label: "Tileset" },
+    !tilemap && { name: "Tilemap", label: "Tilemap" },
   ].filter(Boolean);
 
   body +=

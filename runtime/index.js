@@ -18,6 +18,7 @@ import { AnimationSystem } from "./systems/AnimationSystem.js";
 import { RenderSystem } from "./systems/RenderSystem.js";
 import { LightingSystem } from "./systems/LightingSystem.js";
 import { AudioSystem } from "./systems/AudioSystem.js";
+import { TilemapSystem } from "./systems/TilemapSystem.js";
 import { loadSceneFromUrl, loadDefaultScene, validateScene } from "./scene/SceneLoader.js";
 import { serializeScene, deserializeScene } from "./scene/SceneSerializer.js";
 import {
@@ -96,6 +97,16 @@ export function createGame({ pixiApp, followMainCamera = false }) {
   // lagging one frame behind.
   world.addSystem(new AnimationSystem());
   world.addSystem(renderSystem);
+  // TilemapSystem shares gameContentContainer with renderSystem so
+  // painted tiles live in the same world space and are affected by
+  // LightingSystem's filter identically to regular sprites (see
+  // gameContentContainer's own comment above for why that container
+  // exists at all). Order relative to renderSystem doesn't matter since
+  // they track entirely separate entity sets (SPRITE_RENDERER vs
+  // TILEMAP), but placing it right after keeps rendering-ish systems
+  // grouped together for readability.
+  const tilemapSystem = new TilemapSystem(gameContentContainer);
+  world.addSystem(tilemapSystem);
   // LightingSystem is added AFTER RenderSystem and shares the exact
   // same container (gameContentContainer) so its GPU lighting filter
   // updates every frame right alongside sprites, staying visually
@@ -130,6 +141,7 @@ export function createGame({ pixiApp, followMainCamera = false }) {
     destroyLighting: () => lightingSystem.destroy(),
     destroyControllers: () => controllerSystem.destroy(),
     destroyAudio: () => audioSystem.destroy(),
+    destroyTilemaps: () => tilemapSystem.destroy(),
 
     // Multi-scene project management (see scene/SceneManager.js). Sprite
     // assets are NOT scoped per-scene — AssetRegistry.js is one shared

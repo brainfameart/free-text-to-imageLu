@@ -349,3 +349,27 @@ svg.icon{display:inline-block;vertical-align:middle;flex-shrink:0;}
 .statusbar .left svg{color:#ccc;}
 .statusbar .right{display:flex;align-items:center;gap:16px;color:#888;}
 .statusbar .right .mono{font-family:monospace;}
+
+/* editor/panels/TilesetPanel.js — 3x3 autotile tileset authoring window.
+   Reuses .anim-overlay/.anim-backdrop/.anim-header (same modal-window
+   chrome as AnimationWindow.js) so tool windows look consistent. */
+.tileset-window{width:520px;height:auto;max-height:640px;}
+.tileset-body{display:flex;flex-direction:column;gap:10px;padding:14px;overflow-y:auto;}
+.tileset-toolbar{display:flex;gap:8px;flex-wrap:wrap;}
+.tileset-import-btn{display:flex;align-items:center;gap:6px;padding:6px 10px;background:#2f2f2f;border:1px solid #444;border-radius:3px;color:#ddd;font-size:11px;cursor:pointer;-webkit-user-select:none;user-select:none;}
+.tileset-import-btn:hover{border-color:#666;background:#383838;}
+.tileset-hint{font-size:10px;color:#888;}
+.tileset-grid-wrap{display:flex;justify-content:center;padding:6px 0;}
+.tileset-3x3-grid{display:grid;grid-template-columns:repeat(3,84px);grid-template-rows:repeat(3,84px);gap:6px;}
+.tileset-slot{position:relative;width:84px;height:84px;background:repeating-conic-gradient(#2b2b2b 0% 25%,#242424 0% 50%) 50%/12px 12px;border:2px solid #1a1a1a;border-radius:3px;display:flex;align-items:center;justify-content:center;cursor:grab;overflow:hidden;}
+.tileset-slot:hover{border-color:#555;}
+.tileset-slot.dragging{opacity:.35;}
+.tileset-slot img{width:100%;height:100%;object-fit:contain;image-rendering:pixelated;pointer-events:none;}
+.tileset-slot-empty{width:100%;height:100%;display:flex;align-items:center;justify-content:center;}
+.tileset-slot-empty-label{display:flex;align-items:center;justify-content:center;width:100%;height:100%;color:#666;cursor:pointer;}
+.tileset-slot-empty-label:hover{color:#999;}
+.tileset-slot-label{position:absolute;bottom:1px;left:0;right:0;text-align:center;font-size:8px;color:#ccc;background:rgba(0,0,0,.55);-webkit-user-select:none;user-select:none;pointer-events:none;}
+.tileset-sizefields{display:flex;gap:16px;font-size:11px;color:#ccc;justify-content:center;padding-top:4px;}
+.tileset-sizefields label{display:flex;align-items:center;gap:6px;}
+.tileset-sizefields input{width:60px;background:#2a2a2a;border:1px solid #3a3a3a;color:#dcdcdc;padding:3px 6px;border-radius:3px;font-size:11px;}
+.tileset-empty{padding:24px;text-align:center;color:#888;font-size:11px;}

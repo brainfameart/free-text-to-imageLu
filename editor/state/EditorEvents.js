@@ -19,6 +19,9 @@ import { SHADOW_CASTER, ShadowCaster } from "../../runtime/components/ShadowCast
 import { LIGHTING_SETTINGS, LightingSettings } from "../../runtime/components/LightingSettings.js";
 import { SPRITE_ANIMATION, SpriteAnimation } from "../../runtime/components/SpriteAnimation.js";
 import { AUDIO_SOURCE, AudioSource } from "../../runtime/components/AudioSource.js";
+import { TILESET, Tileset, TILE_ROLE_ORDER } from "../../runtime/components/Tileset.js";
+import { TILEMAP, Tilemap, cellKey } from "../../runtime/components/Tilemap.js";
+import { sliceTilesetImageIntoRoles, loadSingleTileImage } from "../tileset/TilesetImport.js";
 import { createEmptyClip } from "../panels/AnimationWindow.js";
 import {
   importStandaloneImageFrames,
@@ -42,6 +45,8 @@ const COMPONENT_TYPE_MAP = {
   LightingSettings: LIGHTING_SETTINGS,
   SpriteAnimation: SPRITE_ANIMATION,
   AudioSource: AUDIO_SOURCE,
+  Tileset: TILESET,
+  Tilemap: TILEMAP,
 };
 
 const LIGHT_ENTITY_NAMES = {
@@ -197,6 +202,17 @@ let _lastSceneClick = { id: null, time: 0 };
       case "close-anim":
         editorState.animOpen = false;
         editorState.anim.previewPlaying = false;
+        render();
+        break;
+      case "open-tileset-editor":
+        editorState.tilesetPanel.open = true;
+        editorState.tilesetPanel.entityId = t.dataset.entity || editorState.selectedId;
+        editorState.tilesetPanel.draggingRole = null;
+        render();
+        break;
+      case "close-tileset-editor":
+        editorState.tilesetPanel.open = false;
+        editorState.tilesetPanel.draggingRole = null;
         render();
         break;
       case "anim-new-clip": {
@@ -393,6 +409,32 @@ let _lastSceneClick = { id: null, time: 0 };
         render();
         break;
       }
+      case "create-tileset": {
+        if (!editorState.world) break;
+        const entity = editorState.world.createEntity("Tileset");
+        entity.addComponent(TRANSFORM, new Transform());
+        entity.addComponent(TILESET, new Tileset());
+        editorState.selectedId = entity.id;
+        editorState.selectedIds = [entity.id];
+        pushLog("log", "Created Tileset.");
+        editorState.openMenu = null;
+        editorState.openSubmenu = null;
+        render();
+        break;
+      }
+      case "create-tilemap": {
+        if (!editorState.world) break;
+        const entity = editorState.world.createEntity("Tilemap");
+        entity.addComponent(TRANSFORM, new Transform());
+        entity.addComponent(TILEMAP, new Tilemap());
+        editorState.selectedId = entity.id;
+        editorState.selectedIds = [entity.id];
+        pushLog("log", "Created Tilemap. Assign a Tileset in the Inspector, then use the Tile tool (T) to paint.");
+        editorState.openMenu = null;
+        editorState.openSubmenu = null;
+        render();
+        break;
+      }
       case "toggle-entity-active": {
         const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
         if (entity) entity.active = !entity.active;
@@ -449,6 +491,16 @@ let _lastSceneClick = { id: null, time: 0 };
           if (!entity.hasComponent(AUDIO_SOURCE)) {
             entity.addComponent(AUDIO_SOURCE, new AudioSource());
             pushLog("log", "Added Audio Source to '" + entity.name + "'.");
+          }
+        } else if (componentName === "Tileset") {
+          if (!entity.hasComponent(TILESET)) {
+            entity.addComponent(TILESET, new Tileset());
+            pushLog("log", "Added Tileset to '" + entity.name + "'.");
+          }
+        } else if (componentName === "Tilemap") {
+          if (!entity.hasComponent(TILEMAP)) {
+            entity.addComponent(TILEMAP, new Tilemap());
+            pushLog("log", "Added Tilemap to '" + entity.name + "'.");
           }
         }
         render();
@@ -631,6 +683,7 @@ case "select-scene-file": {
     if (key === "w") { editorState.activeTool = "translate"; render(); return; }
     if (key === "e") { editorState.activeTool = "rotate"; render(); return; }
     if (key === "r") { editorState.activeTool = "scale"; render(); return; }
+    if (key === "t") { editorState.activeTool = "tile"; render(); return; }
     if (e.key === " " || e.code === "Space") {
       e.preventDefault();
       editorState.isPlaying = !editorState.isPlaying;
@@ -691,6 +744,18 @@ case "select-scene-file": {
       // since that survives across the render() a full HTML rebuild
       // would otherwise lose track of).
       e.dataTransfer.setData("text/plain", String(index));
+      return;
+    }
+
+    const tilesetSlotTarget = e.target.closest('[data-action="tileset-slot"]');
+    if (tilesetSlotTarget && tilesetSlotTarget.draggable) {
+      const role = tilesetSlotTarget.dataset.role;
+      editorState.tilesetPanel.draggingRole = role;
+      e.dataTransfer.effectAllowed = "move";
+      // Same Firefox-compatibility reasoning as the anim-frame-thumb
+      // case just above: the actual swap reads
+      // editorState.tilesetPanel.draggingRole on drop, not this value.
+      e.dataTransfer.setData("text/plain", role);
     }
   });
 
@@ -699,27 +764,59 @@ case "select-scene-file": {
       e.preventDefault(); // required for drop to fire on this target at all
       e.dataTransfer.dropEffect = "move";
     }
+    if (e.target.closest('[data-action="tileset-slot"]')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+    }
   });
 
   document.addEventListener("drop", (e) => {
     const target = e.target.closest('[data-action="anim-frame-thumb"]');
-    if (!target) return;
-    e.preventDefault();
-    const from = editorState.anim.draggingFrameIndex;
-    const to = parseInt(target.dataset.frameIndex, 10);
-    editorState.anim.draggingFrameIndex = null;
-    if (from === null || from === undefined || from === to) {
+    if (target) {
+      e.preventDefault();
+      const from = editorState.anim.draggingFrameIndex;
+      const to = parseInt(target.dataset.frameIndex, 10);
+      editorState.anim.draggingFrameIndex = null;
+      if (from === null || from === undefined || from === to) {
+        render();
+        return;
+      }
+      const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
+      const anim = entity && entity.getComponent(SPRITE_ANIMATION);
+      const clip = anim && anim.clips.find((c) => c.id === editorState.anim.editingClipId);
+      if (clip) {
+        const [moved] = clip.frames.splice(from, 1);
+        clip.frames.splice(to, 0, moved);
+      }
       render();
       return;
     }
-    const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
-    const anim = entity && entity.getComponent(SPRITE_ANIMATION);
-    const clip = anim && anim.clips.find((c) => c.id === editorState.anim.editingClipId);
-    if (clip) {
-      const [moved] = clip.frames.splice(from, 1);
-      clip.frames.splice(to, 0, moved);
+
+    const tilesetTarget = e.target.closest('[data-action="tileset-slot"]');
+    if (tilesetTarget) {
+      e.preventDefault();
+      const fromRole = editorState.tilesetPanel.draggingRole;
+      const toRole = tilesetTarget.dataset.role;
+      editorState.tilesetPanel.draggingRole = null;
+      if (!fromRole || fromRole === toRole) {
+        render();
+        return;
+      }
+      const entity = editorState.world && editorState.world.getEntity(editorState.tilesetPanel.entityId);
+      const tileset = entity && entity.getComponent(TILESET);
+      if (tileset) {
+        // Swap, not move-and-clear — dragging box A onto box B trades
+        // their contents, matching the drag-to-"switch position"
+        // behavior described for this feature (as opposed to the
+        // frame-reorder case above, which shifts everything between
+        // the two indices along a 1D list — a 3x3 grid of independent
+        // roles has no equivalent "shift" to do instead of swapping).
+        const temp = tileset.slots[toRole];
+        tileset.slots[toRole] = tileset.slots[fromRole];
+        tileset.slots[fromRole] = temp;
+      }
+      render();
     }
-    render();
   });
 
   document.addEventListener("dragend", (e) => {
@@ -729,6 +826,10 @@ case "select-scene-file": {
       // in-progress drag state so the panel doesn't get stuck showing
       // a stale "dragging" highlight on the next render.
       editorState.anim.draggingFrameIndex = null;
+      render();
+    }
+    if (e.target.closest('[data-action="tileset-slot"]') && editorState.tilesetPanel.draggingRole !== null) {
+      editorState.tilesetPanel.draggingRole = null;
       render();
     }
   });
@@ -886,7 +987,83 @@ case "select-scene-file": {
       return;
     }
 
-    if (e.target.dataset.action === "anim-import-sheet") {
+    if (e.target.dataset.action === "tileset-import-single") {
+      const file = e.target.files && e.target.files[0];
+      const entity = editorState.world && editorState.world.getEntity(editorState.tilesetPanel.entityId);
+      const tileset = entity && entity.getComponent(TILESET);
+      if (file && tileset) {
+        sliceTilesetImageIntoRoles(file)
+          .then((roleMap) => {
+            for (const role of TILE_ROLE_ORDER) {
+              const produced = roleMap[role];
+              if (!produced) continue;
+              tileset.slots[role] = produced.spriteKey;
+              registerSpriteAsset({ key: produced.spriteKey, name: tileset.name + "_" + role, dataUrl: produced.dataUrl, width: tileset.tileWidth, height: tileset.tileHeight });
+            }
+            pushLog("log", "Sliced '" + file.name + "' into all 9 tileset slots.");
+            render();
+          })
+          .catch((err) => {
+            pushLog("error", "Failed to slice tileset image: " + err.message);
+            render();
+          });
+      }
+      e.target.value = "";
+      return;
+    }
+
+    if (e.target.dataset.action === "tileset-import-multi") {
+      const files = e.target.files;
+      const entity = editorState.world && editorState.world.getEntity(editorState.tilesetPanel.entityId);
+      const tileset = entity && entity.getComponent(TILESET);
+      if (files && files.length && tileset) {
+        // Fill EMPTY slots first, in TILE_ROLE_ORDER (the same row-major
+        // order the 3x3 grid displays), so importing several images at
+        // once lands them in a predictable order without the user
+        // having to drag each one individually — they can still
+        // drag-swap afterward to fix up placement (see the "drop"
+        // handler's tileset-slot swap case above).
+        const emptyRoles = TILE_ROLE_ORDER.filter((role) => !tileset.slots[role]);
+        const importList = Array.from(files).slice(0, emptyRoles.length);
+        Promise.all(importList.map((file) => loadSingleTileImage(file)))
+          .then((results) => {
+            results.forEach((produced, i) => {
+              const role = emptyRoles[i];
+              tileset.slots[role] = produced.spriteKey;
+              registerSpriteAsset({ key: produced.spriteKey, name: tileset.name + "_" + role, dataUrl: produced.dataUrl, width: tileset.tileWidth, height: tileset.tileHeight });
+            });
+            pushLog("log", "Imported " + results.length + " tile image(s).");
+            render();
+          })
+          .catch((err) => {
+            pushLog("error", "Failed to import tile images: " + err.message);
+            render();
+          });
+      }
+      e.target.value = "";
+      return;
+    }
+
+    if (e.target.dataset.action === "tileset-import-slot") {
+      const file = e.target.files && e.target.files[0];
+      const role = e.target.dataset.role;
+      const entity = editorState.world && editorState.world.getEntity(editorState.tilesetPanel.entityId);
+      const tileset = entity && entity.getComponent(TILESET);
+      if (file && tileset && role) {
+        loadSingleTileImage(file)
+          .then((produced) => {
+            tileset.slots[role] = produced.spriteKey;
+            registerSpriteAsset({ key: produced.spriteKey, name: tileset.name + "_" + role, dataUrl: produced.dataUrl, width: tileset.tileWidth, height: tileset.tileHeight });
+            render();
+          })
+          .catch((err) => {
+            pushLog("error", "Failed to import tile image: " + err.message);
+            render();
+          });
+      }
+      e.target.value = "";
+      return;
+    }
       const file = e.target.files && e.target.files[0];
       const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
       const anim = entity && entity.getComponent(SPRITE_ANIMATION);

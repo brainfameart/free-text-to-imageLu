@@ -33,6 +33,7 @@ export function renderToolbar() {
     { id: "translate", iconName: "move", shortcut: "W" },
     { id: "rotate", iconName: "refreshcw", shortcut: "E" },
     { id: "scale", iconName: "maximize2", shortcut: "R" },
+    { id: "tile", iconName: "grid", shortcut: "T" },
   ];
 
   return (
@@ -123,6 +124,37 @@ function renderGameObjectMenu() {
     "</button>" +
     (editorState.openSubmenu === "Light" ? renderLightSubmenu() : "") +
     "</div>" +
+    '<div class="dropdown-submenu-wrap" style="position:relative;">' +
+    '<button class="dropdown-menu-item" data-action="toggle-submenu" data-submenu="2D Object" style="' +
+    DROPDOWN_ITEM_STYLE +
+    'justify-content:space-between;">' +
+    '<span style="display:flex;align-items:center;gap:6px;">' +
+    icon("grid", 12) +
+    "<span>2D Object</span></span>" +
+    icon("chevronright", 10) +
+    "</button>" +
+    (editorState.openSubmenu === "2D Object" ? render2DObjectSubmenu() : "") +
+    "</div>" +
+    "</div>"
+  );
+}
+
+function render2DObjectSubmenu() {
+  return (
+    '<div class="dropdown-menu" style="position:absolute;top:0;left:100%;background:#2a2a2a;border:1px solid #444;' +
+    'border-radius:4px;min-width:170px;z-index:101;box-shadow:0 4px 12px rgba(0,0,0,.4);padding:4px 0;">' +
+    '<button class="dropdown-menu-item" data-action="create-tileset" style="' +
+    DROPDOWN_ITEM_STYLE +
+    '">' +
+    icon("grid", 12) +
+    "<span>Tileset</span>" +
+    "</button>" +
+    '<button class="dropdown-menu-item" data-action="create-tilemap" style="' +
+    DROPDOWN_ITEM_STYLE +
+    '">' +
+    icon("grid", 12) +
+    "<span>Tilemap</span>" +
+    "</button>" +
     "</div>"
   );
 }

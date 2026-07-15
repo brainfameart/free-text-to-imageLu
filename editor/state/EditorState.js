@@ -30,7 +30,7 @@ export const editorState = {
   bottomTab: "project",
   /** @type {"scenes"|"sprites"|"scripts"} which Project > Assets folder is open in the bottom panel */
   projectFolder: "scenes",
-  sectionsOpen: { transform: true, camera: true, sprite: true, rigidbody: true, collider: true, movement: true, spriteanimation: true, light: true, shadowcaster: true, lightingsettings: true },
+  sectionsOpen: { transform: true, camera: true, sprite: true, rigidbody: true, collider: true, movement: true, spriteanimation: true, light: true, shadowcaster: true, lightingsettings: true, tileset: true, tilemap: true },
   addComponentMenuOpen: false,
 
   /** @type {string|null} which top menu-bar dropdown is open ("GameObject", etc), or null */
@@ -79,6 +79,22 @@ export const editorState = {
      *  collider (clip override, or else the entity's base Collider2D)
      *  as a sized outline on top of the frame thumbnail */
     showColliderInPreview: false,
+  },
+  /** Tileset Editor panel (editor/panels/TilesetPanel.js) UI state —
+   *  kept here for the same reason `anim` above is: the whole editor
+   *  re-renders its innerHTML from editorState on every change, so
+   *  anything that must survive a re-render lives here rather than as
+   *  local module state. */
+  tilesetPanel: {
+    open: false,
+    /** @type {string|null} id of the entity whose Tileset component this
+     *  window is editing — independent of editorState.selectedId so the
+     *  window keeps editing the SAME tileset even if the Hierarchy
+     *  selection changes while it's open. */
+    entityId: null,
+    /** @type {string|null} role of the slot currently being dragged for
+     *  a swap, or null */
+    draggingRole: null,
   },
 };
 

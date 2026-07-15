@@ -37,6 +37,8 @@ import { RenderSystem } from "../../runtime/systems/RenderSystem.js";
 import { AnimationSystem } from "../../runtime/systems/AnimationSystem.js";
 import { getSpriteAsset, getAudioAsset } from "../../runtime/assets/AssetRegistry.js";
 import { AUDIO_SOURCE, AudioSource } from "../../runtime/components/AudioSource.js";
+import { TILEMAP } from "../../runtime/components/Tilemap.js";
+import { TILESET } from "../../runtime/components/Tileset.js";
 
 let pixiApp = null;
 let viewportCamera = null;
@@ -280,6 +282,59 @@ function clientToWorld(clientX, clientY) {
   };
 }
 
+// Tile tool drag-paint state (see attachGizmoPointerEvents' pointerdown/
+// pointermove/endDrag branches for "tool === 'tile'"). Module-level like
+// _markViewportDirty above rather than local to attachGizmoPointerEvents,
+// since it must survive across the separate pointerdown/pointermove/
+// pointerup event listener callbacks registered in that function.
+let _isPaintingTile = false;
+
+/**
+ * Paints (or, with altKey, erases) the Tilemap cell under a client
+ * (screen) position on the given entity's Tilemap component. Cell
+ * coordinates are computed relative to the ENTITY's own Transform
+ * position (matching TilemapSystem.js, which positions its per-tilemap
+ * layer container at transform.x/y and places tiles at
+ * (col+0.5)*tileWidth/(row+0.5)*tileHeight WITHIN that layer) rather
+ * than raw world space, so a Tilemap entity can be moved around the
+ * scene without every previously-painted cell shifting to a different
+ * col/row. Falls back to a default 32x32 cell size if no Tileset is
+ * assigned yet (so painting still works before the user picks one; the
+ * cells just won't render any art until TilemapSystem.js has a Tileset
+ * to resolve spriteKeys from).
+ * @param {import('../../runtime/core/World.js').Entity} entity
+ * @param {import('../../runtime/components/Tilemap.js').Tilemap} tilemap
+ * @param {number} clientX
+ * @param {number} clientY
+ * @param {boolean} erase
+ */
+function _paintTileAtClientPos(entity, tilemap, clientX, clientY, erase) {
+  const transform = entity.getComponent(TRANSFORM);
+  if (!transform) return;
+
+  const tilesetEntity = tilemap.tilesetEntityId ? editorState.world.getEntity(tilemap.tilesetEntityId) : null;
+  const tileset = tilesetEntity ? tilesetEntity.getComponent(TILESET) : null;
+  const tileWidth = tileset ? tileset.tileWidth : 32;
+  const tileHeight = tileset ? tileset.tileHeight : 32;
+
+  const world = clientToWorld(clientX, clientY);
+  const localX = world.x - transform.x;
+  const localY = world.y - transform.y;
+  const col = Math.floor(localX / tileWidth);
+  const row = Math.floor(localY / tileHeight);
+  const key = col + "," + row;
+
+  if (erase) {
+    if (tilemap.cells[key]) {
+      delete tilemap.cells[key];
+      syncSpriteRender();
+    }
+  } else if (!tilemap.cells[key]) {
+    tilemap.cells[key] = true;
+    syncSpriteRender();
+  }
+}
+
 function attachGizmoPointerEvents(mount) {
   const el = pixiApp.view;
 
@@ -314,6 +369,28 @@ function attachGizmoPointerEvents(mount) {
   el.addEventListener("pointerdown", (e) => {
     const tool = editorState.activeTool;
     if (e.button !== 0) return; // selection/gizmo only responds to left click
+
+    // Tile tool owns the pointer entirely while active — paints the
+    // cell under the cursor on the CURRENTLY SELECTED entity's Tilemap
+    // (if it has one), rather than falling through to gizmo/selection
+    // logic below. Dragging continues painting cell-by-cell (see
+    // pointermove's mirrored "tool === 'tile'" branch further down);
+    // painting itself just writes true into Tilemap.cells — the actual
+    // tile ART shown at each cell is computed fresh every frame by
+    // runtime/systems/TilemapSystem.js from the live neighbor pattern
+    // (see that file + AutoTileRules.js), never decided here.
+    if (tool === "tile") {
+      const selected = editorState.world ? editorState.world.getEntity(editorState.selectedId) : null;
+      const tilemap = selected ? selected.getComponent(TILEMAP) : null;
+      if (tilemap) {
+        _isPaintingTile = true;
+        _paintTileAtClientPos(selected, tilemap, e.clientX, e.clientY, e.altKey);
+        try { el.setPointerCapture(e.pointerId); } catch (err) {}
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
 
     // Triangle collider vertex handles take priority over the
     // translate/scale/rotate gizmo when both are visually present —
@@ -449,6 +526,12 @@ function attachGizmoPointerEvents(mount) {
   });
 
   el.addEventListener("pointermove", (e) => {
+    if (_isPaintingTile) {
+      const selected = editorState.world ? editorState.world.getEntity(editorState.selectedId) : null;
+      const tilemap = selected ? selected.getComponent(TILEMAP) : null;
+      if (tilemap) _paintTileAtClientPos(selected, tilemap, e.clientX, e.clientY, e.altKey);
+      return;
+    }
     if (freeformLightGizmo.isDragging()) {
       const selected = editorState.world ? editorState.world.getEntity(editorState.selectedId) : null;
       const light = selected ? selected.getComponent(LIGHT) : null;
@@ -483,6 +566,11 @@ function attachGizmoPointerEvents(mount) {
   });
 
   const endDrag = (e) => {
+    if (_isPaintingTile) {
+      _isPaintingTile = false;
+      try { el.releasePointerCapture(e.pointerId); } catch (err) {}
+      return;
+    }
     if (freeformLightGizmo.isDragging()) {
       freeformLightGizmo.endDrag();
       try { el.releasePointerCapture(e.pointerId); } catch (err) {}

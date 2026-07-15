@@ -19,6 +19,8 @@ import { CharacterController, CHARACTER_CONTROLLER } from "../components/Charact
 import { LightingSettings, LIGHTING_SETTINGS } from "../components/LightingSettings.js";
 import { SpriteAnimation, SPRITE_ANIMATION } from "../components/SpriteAnimation.js";
 import { AudioSource, AUDIO_SOURCE } from "../components/AudioSource.js";
+import { Tileset, TILESET } from "../components/Tileset.js";
+import { Tilemap, TILEMAP } from "../components/Tilemap.js";
 
 const COMPONENT_REGISTRY = {
   [TRANSFORM]: Transform,
@@ -32,6 +34,8 @@ const COMPONENT_REGISTRY = {
   [LIGHTING_SETTINGS]: LightingSettings,
   [SPRITE_ANIMATION]: SpriteAnimation,
   [AUDIO_SOURCE]: AudioSource,
+  [TILESET]: Tileset,
+  [TILEMAP]: Tilemap,
 };
 
 /**

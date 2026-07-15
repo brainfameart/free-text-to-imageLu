@@ -16,6 +16,7 @@ import { renderViewport } from "./panels/Viewport.js";
 import { renderInspector } from "./panels/Inspector.js";
 import { renderBottom } from "./panels/BottomPanel.js";
 import { renderAnimEditor } from "./panels/AnimationWindow.js";
+import { renderTilesetEditor } from "./panels/TilesetPanel.js";
 import { renderStatusBar, startLiveStats } from "./panels/StatusBar.js";
 import { mountOrUpdateSceneViewport, getGame } from "./viewport/SceneViewport.js";
 import { openPlayWindow, closePlayWindow, isPlayWindowOpen } from "./viewport/PlayWindow.js";
@@ -47,7 +48,8 @@ function render() {
     "</div>" +
     renderStatusBar() +
     "</div>" +
-    renderAnimEditor();
+    renderAnimEditor() +
+    renderTilesetEditor();
 
   const app = document.getElementById("app");
 
