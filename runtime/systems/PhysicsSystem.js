@@ -29,4 +29,19 @@ export class PhysicsSystem extends System {
   update(world, dt) {
     this.physicsWorld.step(world, dt);
   }
+
+  /**
+   * Removes every Rapier body/collider this system has created. MUST be
+   * called on scene restart/reload (see runtime/index.js's
+   * scriptApi._restartFn) — otherwise every previous scene's physics
+   * bodies stay alive in Rapier's World forever (a real memory/handle
+   * leak) even though their owning Entities were already wiped by
+   * World.clear(), since PhysicsWorld.step() only removes a body once
+   * it notices the matching entity id is gone from a LIVE query — which
+   * never happens for ids that were simply never seen again after a
+   * full scene wipe.
+   */
+  clear() {
+    this.physicsWorld.clear();
+  }
 }

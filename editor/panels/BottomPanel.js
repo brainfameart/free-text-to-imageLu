@@ -25,6 +25,7 @@ import { icon } from "../icons/IconLibrary.js";
 import { tabBtn } from "./UIComponents.js";
 import { editorState } from "../state/EditorState.js";
 import { getAllSpriteAssets, getAllAudioAssets } from "../../runtime/assets/AssetRegistry.js";
+import { getAllScripts } from "../scripting/ScriptStorage.js";
 
 const FOLDER_LABELS = { scenes: "Scenes", sprites: "Sprites", audio: "Audio", scripts: "Scripts" };
 
@@ -98,8 +99,16 @@ export function renderBottom() {
       gridHtml = renderSceneFileGrid();
       pathToolbarHtml =
         '<button class="import-sprite-btn" data-action="add-scene">' + icon("plus", 11) + " New Scene</button>";
-    } else {
-      gridHtml = '<div class="asset-empty-hint">No scripts yet.</div>';
+    } else if (folder === "scripts") {
+      const scripts = getAllScripts();
+      gridHtml = scripts.length
+        ? scripts
+            .map(
+              (sname) =>
+                '<div class="asset-item" data-action="open-script-from-folder" data-script="' + sname + '" title="Open in script editor"><div class="asset-thumb">' + icon("code", 22) + '<div class="asset-ext">JS</div></div><span class="asset-label">' + sname + "</span></div>"
+            )
+            .join("")
+        : '<div class="asset-empty-hint">No scripts yet. Attach a Script component to an object (in the Inspector) to create one.</div>';
       pathToolbarHtml = "";
     }
 

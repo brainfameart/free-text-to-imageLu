@@ -120,6 +120,65 @@ async function boot() {
     console.error("[play] Scene validation failed:", validation.errors);
   }
 
+  // Wire script errors back to the editor's console via postMessage,
+  // so script crashes are visible in the editor without the editor
+  // itself ever executing user code.
+  if (game.scriptSystem) {
+    game.scriptSystem.onError(function (err) {
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage({
+          type: "zengine_script_error",
+          scriptName: err.scriptName,
+          message: err.message,
+          line: err.line,
+          method: err.method,
+        }, "*");
+      }
+      console.error("[Script Error] " + err.scriptName + "." + err.method + "() line " + err.line + ": " + err.message);
+    });
+  }
+
+  // Also forward any OTHER error that happens inside the play popup —
+  // an uncaught exception outside a script lifecycle call (e.g. a
+  // runtime/engine bug, a bad asset, a rejected Promise) or a raw
+  // console.error() call a script's own code triggers indirectly.
+  // ScriptSystem.onError above only covers errors THROWN from inside
+  // one of the six script lifecycle methods it calls directly; this
+  // catches everything else in the same popup window so the editor's
+  // console is a true mirror of what actually happened in the browser,
+  // not just script-lifecycle crashes.
+  _wireGlobalErrorForwarding();
+
+  function _wireGlobalErrorForwarding() {
+    function forward(message, line, scriptName, method) {
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage({
+          type: "zengine_script_error",
+          scriptName: scriptName || "(engine)",
+          message: message,
+          line: line != null ? String(line) : "?",
+          method: method || "runtime",
+        }, "*");
+      }
+    }
+
+    window.addEventListener("error", function (e) {
+      // Errors already reported via ScriptSystem.onError (thrown inside
+      // a compiled script's own lifecycle call) still bubble up here as
+      // a browser-level "error" event too — but ScriptSystem already
+      // catches those with try/catch, so they never actually reach
+      // window here uncaught. This listener only ever fires for errors
+      // OUTSIDE that try/catch (engine code, asset loading, etc).
+      forward(e.message, e.lineno, "(engine)", "runtime");
+    });
+
+    window.addEventListener("unhandledrejection", function (e) {
+      var reason = e.reason;
+      var message = reason && reason.message ? reason.message : String(reason);
+      forward(message, "?", "(engine)", "promise");
+    });
+  }
+
   game.loop.start();
   window.__zengineGame = game;
 

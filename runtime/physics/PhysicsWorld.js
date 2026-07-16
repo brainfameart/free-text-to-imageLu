@@ -364,6 +364,23 @@ export class PhysicsWorld {
     if (needsNewBody) {
       if (handle) this.rapierWorld.removeRigidBody(handle.body);
 
+      // Body type just changed (or is being created) — drop any
+      // force/impulse/move request queued for a previous body type so
+      // nothing carries over into a type that doesn't support it (e.g.
+      // a force queued while Dynamic must not silently apply the
+      // instant this entity becomes Dynamic again after a detour
+      // through Kinematic).
+      if (rb) {
+        rb.pendingForceX = 0;
+        rb.pendingForceY = 0;
+        rb.pendingImpulseX = 0;
+        rb.pendingImpulseY = 0;
+        rb.pendingTorque = 0;
+        rb.pendingAngularImpulse = 0;
+        rb.pendingMoveX = null;
+        rb.pendingMoveY = null;
+      }
+
       const desc = new RAPIER.RigidBodyDesc(rapierBodyType(RAPIER, effectiveBodyType))
         .setTranslation(transform.x, transform.y)
         .setRotation(transform.rotation * DEG2RAD);
@@ -420,6 +437,47 @@ export class PhysicsWorld {
         rb.driveVelocityX = null;
         rb.driveVelocityY = null;
         rb.driveAngularVelocity = null;
+
+        // Drain any force/impulse/torque a script queued this frame via
+        // DynamicRigidbodyAPI (scripting/components/RigidbodyAPI.js).
+        //
+        // IMPORTANT: Rapier's addForce/addTorque are NOT automatically
+        // zeroed after a timestep (that changed in a past Rapier
+        // release — see rapier.js's own CHANGELOG) — a force added once
+        // stays in Rapier's internal accumulator and keeps being
+        // applied EVERY step forever until resetForces()/resetTorques()
+        // is called. Unity's Rigidbody2D.AddForce, which this API is
+        // modeled on, works the opposite way: a force only acts for the
+        // ONE FixedUpdate it was called in — sustaining a push means
+        // calling AddForce again next frame. To match that expected
+        // behavior (and avoid a single addForce call silently
+        // accelerating a body forever), Rapier's accumulator is reset
+        // FIRST every step, then this frame's queued force (if any) is
+        // added back on top — so a script that stops calling addForce
+        // actually stops accelerating the body, exactly like Unity.
+        // Impulses are already one-shot by nature (instantaneous
+        // velocity change) and need no such reset.
+        handle.body.resetForces(true);
+        handle.body.resetTorques(true);
+
+        if (rb.pendingForceX !== 0 || rb.pendingForceY !== 0) {
+          handle.body.addForce({ x: rb.pendingForceX, y: rb.pendingForceY }, true);
+          rb.pendingForceX = 0;
+          rb.pendingForceY = 0;
+        }
+        if (rb.pendingImpulseX !== 0 || rb.pendingImpulseY !== 0) {
+          handle.body.applyImpulse({ x: rb.pendingImpulseX, y: rb.pendingImpulseY }, true);
+          rb.pendingImpulseX = 0;
+          rb.pendingImpulseY = 0;
+        }
+        if (rb.pendingTorque !== 0) {
+          handle.body.addTorque(rb.pendingTorque, true);
+          rb.pendingTorque = 0;
+        }
+        if (rb.pendingAngularImpulse !== 0) {
+          handle.body.applyTorqueImpulse(rb.pendingAngularImpulse, true);
+          rb.pendingAngularImpulse = 0;
+        }
       }
       // KINEMATIC is handled below, AFTER _syncCollider — the sweep
       // needs handle.collider to exist, which isn't guaranteed yet on
@@ -445,6 +503,18 @@ export class PhysicsWorld {
    * character controller is used to compute the correction first).
    */
   _syncKinematicMovement(handle, rb, dt) {
+    // One-shot move() request queued by KinematicRigidbodyAPI.move(dx, dy)
+    // (scripting/components/RigidbodyAPI.js) — added on top of this
+    // frame's velocity-driven displacement so both go through the SAME
+    // character-controller sweep below (blocked/slid by obstacles,
+    // exactly like velocity movement), rather than a raw teleport that
+    // could push the body through walls. Drained (reset to null)
+    // immediately since it's a single-frame request, not a standing value.
+    const extraMoveX = rb.pendingMoveX || 0;
+    const extraMoveY = rb.pendingMoveY || 0;
+    rb.pendingMoveX = null;
+    rb.pendingMoveY = null;
+
     if (!handle.collider) {
       // No collider: a kinematic body with nothing to sweep against
       // still moves — just without collision detection (it passes
@@ -452,8 +522,8 @@ export class PhysicsWorld {
       // sweep needs a collider to test against obstacles, so without one
       // the best we can do is apply the raw velocity. Add a Collider2D
       // if you want the body to be stopped by walls/floors.
-      const desiredX = rb.velocityX * dt;
-      const desiredY = rb.velocityY * dt;
+      const desiredX = rb.velocityX * dt + extraMoveX;
+      const desiredY = rb.velocityY * dt + extraMoveY;
       const current = handle.body.translation();
       handle.body.setNextKinematicTranslation({
         x: current.x + desiredX,
@@ -475,8 +545,8 @@ export class PhysicsWorld {
     // body has no intrinsic mass of its own in Rapier's eyes.
     this._characterController.setCharacterMass(Math.max(0.0001, rb.mass));
 
-    const desiredX = rb.velocityX * dt;
-    const desiredY = rb.velocityY * dt;
+    const desiredX = rb.velocityX * dt + extraMoveX;
+    const desiredY = rb.velocityY * dt + extraMoveY;
 
     this._characterController.computeColliderMovement(handle.collider, {
       x: desiredX,

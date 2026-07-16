@@ -100,6 +100,20 @@ export class Rigidbody2D {
     // not velocityX/Y. Always 0 for Dynamic/Static bodies.
     resolvedVelocityX = 0,
     resolvedVelocityY = 0,
+
+    // DYNAMIC-only force/impulse queue: pushed by the scripting API's
+    // DynamicRigidbodyAPI (see scripting/components/RigidbodyAPI.js) via
+    // .addForce()/.addImpulse()/.addTorque() and drained by
+    // PhysicsWorld._syncEntity every physics step, exactly like
+    // driveVelocityX/Y above — plain, serializable data (RULES.txt
+    // section 4), never a function/callback, and never meaningful for
+    // Kinematic/Static bodies (which have no force integration at all).
+    pendingForceX = 0,
+    pendingForceY = 0,
+    pendingImpulseX = 0,
+    pendingImpulseY = 0,
+    pendingTorque = 0,
+    pendingAngularImpulse = 0,
   } = {}) {
     this.bodyType = bodyType;
     this.simulated = simulated;
@@ -124,5 +138,21 @@ export class Rigidbody2D {
 
     this.resolvedVelocityX = resolvedVelocityX;
     this.resolvedVelocityY = resolvedVelocityY;
+
+    this.pendingForceX = pendingForceX;
+    this.pendingForceY = pendingForceY;
+    this.pendingImpulseX = pendingImpulseX;
+    this.pendingImpulseY = pendingImpulseY;
+    this.pendingTorque = pendingTorque;
+    this.pendingAngularImpulse = pendingAngularImpulse;
+
+    // KINEMATIC-only one-shot move request: set (transiently, one frame)
+    // by the scripting API's KinematicRigidbodyAPI.move(dx, dy) — a
+    // direct positional nudge for a kinematic mover, swept through the
+    // SAME character-controller path as velocity-driven movement (so it
+    // still gets blocked/slid by obstacles) rather than a raw teleport.
+    // null = no move requested this frame.
+    this.pendingMoveX = null;
+    this.pendingMoveY = null;
   }
 }

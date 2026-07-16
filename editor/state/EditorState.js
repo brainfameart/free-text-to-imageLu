@@ -30,7 +30,7 @@ export const editorState = {
   bottomTab: "project",
   /** @type {"scenes"|"sprites"|"scripts"} which Project > Assets folder is open in the bottom panel */
   projectFolder: "scenes",
-  sectionsOpen: { transform: true, camera: true, sprite: true, rigidbody: true, collider: true, movement: true, spriteanimation: true, light: true, shadowcaster: true, lightingsettings: true, tileset: true, tilemap: true },
+  sectionsOpen: { transform: true, camera: true, sprite: true, rigidbody: true, collider: true, movement: true, spriteanimation: true, light: true, shadowcaster: true, lightingsettings: true, tileset: true, tilemap: true, script: true },
   addComponentMenuOpen: false,
 
   /** @type {string|null} which top menu-bar dropdown is open ("GameObject", etc), or null */
@@ -80,6 +80,29 @@ export const editorState = {
      *  as a sized outline on top of the frame thumbnail */
     showColliderInPreview: false,
   },
+  /** Render function reference — set by main.js so any module can
+   *  trigger an editor re-render (e.g. the script editor opening/closing). */
+  renderFn: null,
+
+  /** Script editor (editor/panels/ScriptEditorWindow.js) UI state. */
+  scriptEditor: {
+    open: false,
+    /** @type {string[]} script names currently open as tabs */
+    openTabs: [],
+    /** @type {string|null} currently active tab */
+    activeTab: null,
+    /** @type {string[]} component keys forced to appear in autocomplete
+     *  regardless of the selected entity's components (API Management panel). */
+    forcedApis: [],
+    /** @type {Object<string,{entityId:string|null,entityIds:string[]|null}>}
+     *  Per-script IntelliSense context. Set when a script is opened
+     *  via an object (entityId) or the Scripts folder (entityIds =
+     *  every object that shares the script, so autocomplete offers the
+     *  UNION of their components). The IntelliSense provider reads the
+     *  entry for the active tab (see ScriptIntelliSense.js). */
+    contextByScript: {},
+  },
+
   /** Tileset Editor panel (editor/panels/TilesetPanel.js) UI state —
    *  kept here for the same reason `anim` above is: the whole editor
    *  re-renders its innerHTML from editorState on every change, so

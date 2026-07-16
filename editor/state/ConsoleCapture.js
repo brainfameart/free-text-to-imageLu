@@ -76,6 +76,18 @@ export function installConsoleCapture() {
   };
 
   pushLog("log", "Console capture installed: window errors, unhandled rejections, console.warn/error now mirrored here.");
+
+  // Flush any errors that were collected BEFORE ConsoleCapture was
+  // installed (e.g. module-load failures that happened in index.html
+  // before main.js even finished importing). Without this, those early
+  // errors are lost — the editor console shows nothing about why a
+  // particular module or asset failed to load.
+  if (window.__zengineEarlyErrors && window.__zengineEarlyErrors.length) {
+    for (const entry of window.__zengineEarlyErrors) {
+      pushLog(entry.level, entry.msg);
+    }
+    window.__zengineEarlyErrors = [];
+  }
 }
 
 /**

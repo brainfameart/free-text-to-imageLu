@@ -23,9 +23,11 @@ import { SPRITE_ANIMATION } from "../../runtime/components/SpriteAnimation.js";
 import { AUDIO_SOURCE } from "../../runtime/components/AudioSource.js";
 import { TILESET } from "../../runtime/components/Tileset.js";
 import { TILEMAP } from "../../runtime/components/Tilemap.js";
+import { SCRIPT } from "../../runtime/components/Script.js";
 import { ShadowMode } from "../../runtime/systems/LightingQuality.js";
 import { getCameraResolution } from "../../runtime/core/CameraUtils.js";
 import { getSpriteAsset, getAudioAsset, getAllAudioAssets } from "../../runtime/assets/AssetRegistry.js";
+import { getAllScripts } from "../scripting/ScriptStorage.js";
 
 export function renderInspector() {
   const world = editorState.world;
@@ -749,6 +751,44 @@ export function renderInspector() {
             "</div>"
           : "") +
         '<button class="removecomp-btn" data-action="remove-component" data-component="CharacterController" style="margin-top:6px;">Remove Component</button>'
+    );
+  }
+
+  const script = entity.getComponent(SCRIPT);
+  if (script) {
+    body += section(
+      editorState.sectionsOpen,
+      "script",
+      "Script",
+      "code",
+      row("Script Name", '<input type="text" class="num-input" value="' + script.scriptName + '" data-field="Script.scriptName" style="width:100%;box-sizing:border-box;" />') +
+      row("Enabled", '<input type="checkbox"' + (script.enabled ? " checked" : "") + ' data-action="toggle-script-enabled" />') +
+      '<div style="padding:6px 0;">' +
+      '<button class="animwin-btn" data-action="open-script-editor" style="width:100%;">' + icon("code", 12) + " Open Script Editor</button>" +
+      "</div>" +
+      '<button class="removecomp-btn" data-action="remove-component" data-component="Script" style="margin-top:6px;">Remove Component</button>'
+    );
+  } else {
+    const existingScripts = getAllScripts();
+    body += section(
+      editorState.sectionsOpen,
+      "script",
+      "Script",
+      "code",
+      '<div style="padding:6px 0;">' +
+      '<button class="animwin-btn" data-action="inspector-create-script" style="width:100%;">' + icon("plus", 12) + " Create New Script</button>" +
+      "</div>" +
+      '<div style="font-size:11px;color:#8a93a0;margin:4px 0 6px;">Or load an existing script:</div>' +
+      (existingScripts.length
+        ? '<div style="max-height:170px;overflow-y:auto;border:1px solid #3c3c3c;border-radius:4px;background:#1e1e1e;">' +
+          existingScripts
+            .map(function (name) {
+              return '<div data-action="inspector-load-script" data-script="' + name + '" title="Attach ' + name + '" style="display:flex;align-items:center;gap:6px;padding:5px 10px;cursor:pointer;font-size:12px;color:#ccc;border-bottom:1px solid #2d2d2d;">' +
+                icon("code", 11) + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + name + "</span></div>";
+            })
+            .join("") +
+          "</div>"
+        : '<div style="font-size:12px;color:#8a93a0;">No scripts created yet.</div>')
     );
   }
 

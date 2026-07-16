@@ -17,11 +17,12 @@ import { renderInspector } from "./panels/Inspector.js";
 import { renderBottom } from "./panels/BottomPanel.js";
 import { renderAnimEditor } from "./panels/AnimationWindow.js";
 import { renderTilesetEditor } from "./panels/TilesetPanel.js";
+import { renderScriptEditor, mountScriptEditor } from "./panels/ScriptEditorWindow.js";
 import { renderStatusBar, startLiveStats } from "./panels/StatusBar.js";
 import { mountOrUpdateSceneViewport, getGame, detachViewportCanvas } from "./viewport/SceneViewport.js";
 import { openPlayWindow, closePlayWindow, isPlayWindowOpen } from "./viewport/PlayWindow.js";
 import { attachEditorEvents } from "./state/EditorEvents.js";
-import { editorState } from "./state/EditorState.js";
+import { editorState, pushLog } from "./state/EditorState.js";
 import { installConsoleCapture } from "./state/ConsoleCapture.js";
 
 // Installed first, before anything else boots, so PIXI's own boot-time
@@ -49,7 +50,8 @@ function render() {
     renderStatusBar() +
     "</div>" +
     renderAnimEditor() +
-    renderTilesetEditor();
+    renderTilesetEditor() +
+    renderScriptEditor();
 
   const app = document.getElementById("app");
 
@@ -83,6 +85,26 @@ function render() {
       document.body.appendChild(_hold);
     }
     _hold.appendChild(_canvas);
+  }
+
+  // Park the Monaco editor's DOM node in a hidden holder BEFORE
+  // overwriting #app innerHTML. If the Monaco node stays inside #app
+  // during the bulk innerHTML rebuild, its internal input textarea /
+  // event wiring gets destroyed and the editor can no longer accept
+  // typing after a tab switch, folder open, or API toggle (all of
+  // which trigger renderFn). Moving the live node to a stable parent
+  // outside #app keeps it intact; mountScriptEditor() re-attaches it.
+  const _monacoEl = app.querySelector("#se-monaco-container .monaco-editor");
+  if (_monacoEl) {
+    let _mhold = document.getElementById("_monaco-node-hold");
+    if (!_mhold) {
+      _mhold = document.createElement("div");
+      _mhold.id = "_monaco-node-hold";
+      _mhold.style.cssText =
+        "position:absolute;left:-99999px;top:0;width:0;height:0;overflow:hidden;pointer-events:none;";
+      document.body.appendChild(_mhold);
+    }
+    _mhold.appendChild(_monacoEl);
   }
 
   // Set innerHTML with fallback: PIXI's ResizeObserver on the canvas can
@@ -123,6 +145,7 @@ function render() {
   }
 
   mountOrUpdateSceneViewport(render);
+  mountScriptEditor();
 }
 
 function onTogglePlay(isPlaying) {
@@ -136,7 +159,29 @@ function onTogglePlay(isPlaying) {
 }
 
 function boot() {
+  editorState.renderFn = render;
   attachEditorEvents(render, onTogglePlay);
+  // Close script editor on Escape
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && editorState.scriptEditor.open) {
+      editorState.scriptEditor.open = false;
+      render();
+    }
+  });
+  // Receive error reports from the play popup — both script-lifecycle
+  // errors (scriptName is a real user script) and engine/runtime errors
+  // forwarded from the popup's window "error"/"unhandledrejection"
+  // listeners (scriptName is the literal "(engine)" sentinel — see
+  // editor/viewport/play-popup.js's _wireGlobalErrorForwarding).
+  window.addEventListener("message", function (e) {
+    if (e.data && e.data.type === "zengine_script_error") {
+      var label = e.data.scriptName === "(engine)"
+        ? "[Engine/" + e.data.method + "]"
+        : "[Script] " + e.data.scriptName + "." + e.data.method + "() line " + e.data.line + ":";
+      pushLog("error", label + " " + e.data.message);
+      render();
+    }
+  });
   startLiveStats(editorState);
   render();
   setInterval(() => {

@@ -32,6 +32,9 @@ import {
 import { importSpriteFiles, getSpriteAsset, importAudioFiles, registerSpriteAsset } from "../../runtime/assets/AssetRegistry.js";
 import { syncBackgroundColorLive, switchScene } from "../viewport/SceneViewport.js";
 import { serializeEntity, instantiateEntity } from "../../runtime/scene/SceneSerializer.js";
+import { SCRIPT, Script } from "../../runtime/components/Script.js";
+import { createScript, getScriptSource } from "../scripting/ScriptStorage.js";
+import { openScriptEditor, handleScriptEditorAction } from "../panels/ScriptEditorWindow.js";
 
 const COMPONENT_TYPE_MAP = {
   Transform: TRANSFORM,
@@ -47,6 +50,7 @@ const COMPONENT_TYPE_MAP = {
   AudioSource: AUDIO_SOURCE,
   Tileset: TILESET,
   Tilemap: TILEMAP,
+  Script: SCRIPT,
 };
 
 const LIGHT_ENTITY_NAMES = {
@@ -147,6 +151,12 @@ let _lastSceneClick = { id: null, time: 0 };
       editorState.openSubmenu = null;
     }
 
+    // Script editor overlay actions — delegated to ScriptEditorWindow
+    if (action && action.indexOf("script-") === 0) {
+      handleScriptEditorAction(action, t);
+      return;
+    }
+
     switch (action) {
       case "set-tool":
         editorState.activeTool = t.dataset.tool;
@@ -199,6 +209,54 @@ let _lastSceneClick = { id: null, time: 0 };
         editorState.anim.renamingClipId = null;
         render();
         break;
+      case "open-script-editor": {
+        var scriptEntity = editorState.world && editorState.world.getEntity(editorState.selectedId);
+        if (scriptEntity) {
+          var scriptComp = scriptEntity.getComponent(SCRIPT);
+          if (scriptComp) {
+            openScriptEditor(scriptComp.scriptName, scriptComp.source, editorState.selectedId);
+          }
+        }
+        break;
+      }
+      case "open-script-from-folder": {
+        var folderScriptName = t.dataset.script;
+        if (folderScriptName) {
+          openScriptEditor(folderScriptName, getScriptSource(folderScriptName), null);
+        }
+        break;
+      }
+      case "inspector-create-script": {
+        var newEnt = editorState.world && editorState.world.getEntity(editorState.selectedId);
+        if (newEnt && !newEnt.hasComponent(SCRIPT)) {
+          var newScriptName = createScript(null);
+          newEnt.addComponent(SCRIPT, new Script({ scriptName: newScriptName, source: getScriptSource(newScriptName) }));
+          pushLog("log", "Created and attached script '" + newScriptName + "' to '" + newEnt.name + "'.");
+          openScriptEditor(newScriptName, getScriptSource(newScriptName), editorState.selectedId);
+        }
+        break;
+      }
+      case "inspector-load-script": {
+        var loadEnt = editorState.world && editorState.world.getEntity(editorState.selectedId);
+        var loadScriptName = t.dataset.script;
+        if (loadEnt && loadScriptName && !loadEnt.hasComponent(SCRIPT)) {
+          loadEnt.addComponent(SCRIPT, new Script({ scriptName: loadScriptName, source: getScriptSource(loadScriptName) }));
+          pushLog("log", "Attached script '" + loadScriptName + "' to '" + loadEnt.name + "'.");
+          openScriptEditor(loadScriptName, getScriptSource(loadScriptName), editorState.selectedId);
+        }
+        break;
+      }
+      case "toggle-script-enabled": {
+        var scriptEntity2 = editorState.world && editorState.world.getEntity(editorState.selectedId);
+        if (scriptEntity2) {
+          var scriptComp2 = scriptEntity2.getComponent(SCRIPT);
+          if (scriptComp2) {
+            scriptComp2.enabled = !scriptComp2.enabled;
+            render();
+          }
+        }
+        break;
+      }
       case "close-anim":
         editorState.animOpen = false;
         editorState.anim.previewPlaying = false;
@@ -502,6 +560,12 @@ let _lastSceneClick = { id: null, time: 0 };
             entity.addComponent(TILEMAP, new Tilemap());
             pushLog("log", "Added Tilemap to '" + entity.name + "'.");
           }
+        } else if (componentName === "Script") {
+          if (!entity.hasComponent(SCRIPT)) {
+            var sn = createScript(null);
+            entity.addComponent(SCRIPT, new Script({ scriptName: sn, source: getScriptSource(sn) }));
+            pushLog("log", "Added Script to '" + entity.name + "'.");
+          }
         }
         render();
         break;
@@ -585,6 +649,8 @@ case "select-scene-file": {
     if (action === "rename-scene-start") {
       editorState.renamingSceneId = t.dataset.sceneId;
       render();
+    } else if (action === "script-rename") {
+      handleScriptEditorAction("script-rename", t);
     }
   });
 

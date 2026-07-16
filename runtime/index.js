@@ -19,6 +19,7 @@ import { RenderSystem } from "./systems/RenderSystem.js";
 import { LightingSystem } from "./systems/LightingSystem.js";
 import { AudioSystem } from "./systems/AudioSystem.js";
 import { TilemapSystem } from "./systems/TilemapSystem.js";
+import { ScriptSystem } from "./systems/ScriptSystem.js";
 import { loadSceneFromUrl, loadDefaultScene, validateScene } from "./scene/SceneLoader.js";
 import { serializeScene, deserializeScene } from "./scene/SceneSerializer.js";
 import {
@@ -89,7 +90,8 @@ export function createGame({ pixiApp, followMainCamera = false }) {
   const renderSystem = new RenderSystem(gameContentContainer, { followMainCamera });
   const controllerSystem = new ControllerSystem();
   world.addSystem(controllerSystem);
-  world.addSystem(new PhysicsSystem());
+  const physicsSystem = new PhysicsSystem();
+  world.addSystem(physicsSystem);
   // AnimationSystem runs AFTER physics (so a clip switch driven by a
   // script reacting to this frame's physics state — e.g. "landed" —
   // takes effect the same tick) but BEFORE RenderSystem, so the frame
@@ -126,7 +128,69 @@ export function createGame({ pixiApp, followMainCamera = false }) {
   world.addSystem(audioSystem);
 
   const scriptApi = new ScriptAPI(world);
+  // ScriptSystem runs user-attached scripts ONLY during the game loop
+  // (play-mode popup / standalone player) — never in the editor, which
+  // only calls syncSpriteRender() selectively, never game.loop.start().
+  const scriptSystem = new ScriptSystem(scriptApi);
+  world.addSystem(scriptSystem);
   const loop = new GameLoop(world);
+
+  // Remember the initial scene data so scene.restart() can reload it.
+  let _initialSceneData = null;
+
+  /**
+   * Full teardown before swapping in new scene data — matches Unity's
+   * own scene-reload behavior: every currently-running script instance
+   * is properly destroyed (onDestroy fires, exactly like a real Unity
+   * object being torn down when a scene unloads) BEFORE the new scene's
+   * entities/scripts exist, so nothing from the old scene keeps running
+   * or leaks into the new one. Previously this only cleared
+   * scriptSystem.instances directly (skipping onDestroy entirely) and
+   * never touched Rapier's physics bodies or ScriptAPI's cached
+   * EntityContexts, which is what caused "restart doesn't really stop
+   * old scripts" — the old script objects/handlers were dropped, but
+   * their physics bodies and any EntityContext a still-live closure
+   * held onto were not, so the scene didn't actually reset the way
+   * Unity's Restart Scene does.
+   */
+  function _teardownForSceneChange() {
+    // 1. Destroy every running script instance NOW (calls onDestroy),
+    //    while the old scene's entities still exist — same order Unity
+    //    fires OnDestroy in when a scene unloads.
+    scriptSystem.destroy();
+    // 2. Remove every Rapier body/collider the old scene created — a
+    //    fresh scene must start with a physically empty Rapier world,
+    //    not one still full of the previous scene's now-orphaned bodies.
+    physicsSystem.clear();
+    // 3. Drop every cached EntityContext — entity ids are about to be
+    //    reused by World.clear() (see core/World.js), and without this
+    //    a stale context from a destroyed entity would get handed back
+    //    to the new scene's scripts (see ScriptAPI.clearContexts()'s
+    //    own doc comment for the full reasoning).
+    scriptApi.clearContexts();
+  }
+
+  // Wire up scene management callbacks on the ScriptAPI.
+  scriptApi._restartFn = function () {
+    if (_initialSceneData) {
+      _teardownForSceneChange();
+      deserializeScene(world, _initialSceneData);
+      // scriptSystem.destroy() above already reset _started/instances,
+      // but this stays explicit and harmless in case that ever changes.
+      scriptSystem._started = false;
+    }
+  };
+  scriptApi._loadSceneFn = function (sceneName) {
+    var scenes = getSceneList();
+    var found = scenes.find(function (s) { return s.name === sceneName; });
+    if (found) {
+      _teardownForSceneChange();
+      switchToScene(world, found.id);
+      scriptSystem._started = false;
+    } else if (typeof console !== "undefined") {
+      console.log("[ScriptAPI] scene.load('" + sceneName + "') — no scene found with that name");
+    }
+  };
 
   return {
     world,
@@ -134,7 +198,7 @@ export function createGame({ pixiApp, followMainCamera = false }) {
     scriptApi,
     loadScene: (url) => loadSceneFromUrl(world, url),
     loadDefault: () => loadDefaultScene(world),
-    loadFromData: (sceneData) => deserializeScene(world, sceneData),
+    loadFromData: (sceneData) => { _initialSceneData = sceneData; deserializeScene(world, sceneData); },
     getSceneData: () => serializeScene(world),
     validate: () => validateScene(world),
     destroyRenderer: () => renderSystem.destroy(),
@@ -142,6 +206,10 @@ export function createGame({ pixiApp, followMainCamera = false }) {
     destroyControllers: () => controllerSystem.destroy(),
     destroyAudio: () => audioSystem.destroy(),
     destroyTilemaps: () => tilemapSystem.destroy(),
+
+    /** ScriptSystem instance — the play popup uses this to wire the
+     *  onError callback so script errors are sent back to the editor. */
+    scriptSystem,
 
     // Multi-scene project management (see scene/SceneManager.js). Sprite
     // assets are NOT scoped per-scene — AssetRegistry.js is one shared
