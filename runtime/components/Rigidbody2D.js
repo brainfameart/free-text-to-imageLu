@@ -154,5 +154,21 @@ export class Rigidbody2D {
     // null = no move requested this frame.
     this.pendingMoveX = null;
     this.pendingMoveY = null;
+
+    // KINEMATIC-only, read-only: Unity-style contact-state flags written
+    // every physics step by PhysicsWorld._syncKinematicMovement from the
+    // character controller's computed collision normals. Always false for
+    // Dynamic/Static bodies (they use Rapier's solver directly and have
+    // no character-controller sweep to query).
+    //
+    // isOnCeiling: touching a surface above (normal pushes character down)
+    // isOnWall:    touching a wall laterally (normal is mostly horizontal)
+    // isOnSlope:   grounded on a non-flat surface (groundAngle > 5°)
+    // groundAngle: angle of the ground surface in degrees from horizontal
+    //              (0 = flat, 45 = steep slope, up to the slope limit)
+    this.isOnCeiling = false;
+    this.isOnWall = false;
+    this.isOnSlope = false;
+    this.groundAngle = 0;
   }
 }

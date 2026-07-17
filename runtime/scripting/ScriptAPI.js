@@ -32,6 +32,10 @@ import { TRANSFORM } from "../components/Transform.js";
 import { RIGIDBODY_2D } from "../components/Rigidbody2D.js";
 import { SCRIPT } from "../components/Script.js";
 import { COLLIDER_2D, ColliderShape } from "../components/Collider2D.js";
+import { SPRITE_RENDERER } from "../components/SpriteRenderer.js";
+import { SPRITE_ANIMATION } from "../components/SpriteAnimation.js";
+import { AUDIO_SOURCE } from "../components/AudioSource.js";
+import { CAMERA } from "../components/Camera.js";
 import { createTransformAPI } from "./components/TransformAPI.js";
 import { createSpriteAPI } from "./components/SpriteAPI.js";
 import { createRigidbodyAPI } from "./components/RigidbodyAPI.js";
@@ -82,6 +86,13 @@ class EntityContext {
   get y() { const t = this._entity.getComponent(TRANSFORM); return t ? t.y : 0; }
   set y(v) { const t = this._entity.getComponent(TRANSFORM); if (t) t.y = v; }
 
+  // position as an { x, y } object — mirrors this.transform.position
+  get position() { const t = this._entity.getComponent(TRANSFORM); return t ? t.position : { x: 0, y: 0 }; }
+  set position(v) { const t = this._entity.getComponent(TRANSFORM); if (t) t.position = v; }
+
+  // translate — move by a delta amount this frame
+  translate(dx, dy) { const t = this._entity.getComponent(TRANSFORM); if (t) t.translate(dx, dy); }
+
   get rotation() { const t = this._entity.getComponent(TRANSFORM); return t ? t.rotation : 0; }
   set rotation(v) { const t = this._entity.getComponent(TRANSFORM); if (t) t.rotation = v; }
 
@@ -102,6 +113,49 @@ class EntityContext {
 
   get velocityY() { const r = this._entity.getComponent(RIGIDBODY_2D); return r ? r.velocityY : 0; }
   set velocityY(v) { const r = this._entity.getComponent(RIGIDBODY_2D); if (r) r.velocityY = v; }
+
+  // velocity as an { x, y } object — mirrors this.rigidbody.velocity
+  get velocity() { this._requireRigidbody("velocity"); return this.rigidbody.velocity; }
+  set velocity(v) { this._requireRigidbody("velocity"); this.rigidbody.velocity = v; }
+
+  // --- Sprite shortcuts (throw if no Sprite Renderer — same error as this.sprite.X) ---
+
+  get texture() { return this.sprite.texture; }
+  set texture(v) { this.sprite.texture = v; }
+
+  get color() { return this.sprite.color; }
+  set color(v) { this.sprite.color = v; }
+
+  get flipX() { return this.sprite.flipX; }
+  set flipX(v) { this.sprite.flipX = v; }
+
+  get flipY() { return this.sprite.flipY; }
+  set flipY(v) { this.sprite.flipY = v; }
+
+  get opacity() { return this.sprite.opacity; }
+  set opacity(v) { this.sprite.opacity = v; }
+
+  // --- Rigidbody shortcuts — throw if no Rigidbody 2D so the user
+  //     sees a clear message rather than a silent 0/false return. ---
+
+  _requireRigidbody(action) {
+    if (!this._entity.hasComponent(RIGIDBODY_2D)) {
+      throw new Error(
+        "'" + (this._entity.name || "Entity") + "' called this." + action +
+        " but has no Rigidbody 2D. Add one in the Inspector (Add Component → Rigidbody 2D)."
+      );
+    }
+  }
+
+  get isGrounded()  { this._requireRigidbody("isGrounded");  return this.rigidbody.isGrounded; }
+  get isOnCeiling() { this._requireRigidbody("isOnCeiling"); return this.rigidbody.isOnCeiling; }
+  get isOnWall()    { this._requireRigidbody("isOnWall");    return this.rigidbody.isOnWall; }
+  get isOnSlope()   { this._requireRigidbody("isOnSlope");   return this.rigidbody.isOnSlope; }
+  get groundAngle() { this._requireRigidbody("groundAngle"); return this.rigidbody.groundAngle; }
+
+  addForce(x, y)   { this._requireRigidbody("addForce()");   return this.rigidbody.addForce(x, y); }
+  addImpulse(x, y) { this._requireRigidbody("addImpulse()"); return this.rigidbody.addImpulse(x, y); }
+  move(dx, dy)     { this._requireRigidbody("move()");       return this.rigidbody.move(dx, dy); }
 
   // --- Sub-objects (built once, read live data via closures) ---
 
@@ -269,9 +323,10 @@ export class ScriptAPI {
       },
       time: self.time,
       random: {
+        /** Random integer in [min, max] inclusive. */
         int: function (min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; },
+        /** Random float in [min, max). */
         float: function (min, max) { return Math.random() * (max - min) + min; },
-        range: function (min, max) { return Math.random() * (max - min) + min; },
       },
       global: new Proxy({}, {
         get: function (_, key) { return self._globals.get(key); },

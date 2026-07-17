@@ -25,109 +25,164 @@ import { SPRITE_ANIMATION } from "../../runtime/components/SpriteAnimation.js";
 
 let _registered = false;
 
-// API definitions for each component sub-object
+// API definitions for each component sub-object.
+// These lists are the single source of truth for what shows up in
+// autocomplete — if an API exists in the runtime scripting files but
+// not here, add it here. If something listed here does NOT exist in the
+// runtime, remove it. One entry per feature: no duplicates.
+
 const TRANSFORM_API = [
-  { label: "position", detail: "{ x, y } — position vector", insert: "position" },
-  { label: "translate(dx, dy)", detail: "Move by delta", insert: "translate(" },
-  { label: "lookAt(x, y)", detail: "Rotate to face a point", insert: "lookAt(" },
+  { label: "position", detail: "{ x, y } — get/set position as an object", insert: "position" },
+  { label: "rotation", detail: "Rotation in degrees (read/write)", insert: "rotation" },
+  { label: "scale", detail: "{ x, y } — get/set scale as an object", insert: "scale" },
+  { label: "translate(dx, dy)", detail: "Move by a delta amount this frame", insert: "translate(" },
+  { label: "lookAt(x, y)", detail: "Rotate to face a world-space point", insert: "lookAt(" },
 ];
+
 const SPRITE_API = [
-  { label: "texture", detail: "Sprite texture key", insert: "texture" },
-  { label: "color", detail: "Tint color (#rrggbb)", insert: 'color = "#' },
-  { label: "opacity", detail: "0.0 – 1.0", insert: "opacity = " },
-  { label: "flipX", detail: "Flip horizontally", insert: "flipX = " },
-  { label: "flipY", detail: "Flip vertically", insert: "flipY = " },
+  { label: "texture", detail: "Sprite texture key (string) — the asset key shown in the Inspector", insert: "texture" },
+  { label: "color", detail: "Tint color as hex string, e.g. \"#ff0000\" for red", insert: 'color = "#' },
+  { label: "flipX", detail: "Flip sprite horizontally (boolean)", insert: "flipX = " },
+  { label: "flipY", detail: "Flip sprite vertically (boolean)", insert: "flipY = " },
+  { label: "opacity", detail: "Transparency: 0.0 (invisible) to 1.0 (fully visible)", insert: "opacity = " },
 ];
 
 // Rigidbody scripting API is SPLIT PER BODY TYPE, matching
-// runtime/scripting/components/RigidbodyAPI.js: a Dynamic body gets
-// forces/impulses (Rapier's solver owns it), a Kinematic body gets
-// velocity-drive + move() + grounded (Rapier never applies forces to
-// it), and a Static body gets almost nothing (it never moves by
-// definition). This is what stops the editor from ever suggesting
-// `rigidbody.addForce(...)` on a Kinematic/Static object in the first
-// place, instead of letting the user type something that throws at
-// runtime.
+// runtime/scripting/components/RigidbodyAPI.js exactly.
+// A Dynamic body gets forces/impulses (Rapier's solver owns it);
+// a Kinematic body gets velocity-drive + move() + contact-state flags
+// (Rapier applies no forces to it); a Static body is read-only.
+// Autocomplete only shows the API valid for the actual body type of
+// the entity whose script is open — so a Kinematic entity never sees
+// addForce() in autocomplete, and it won't exist at runtime either.
 const RIGIDBODY_API_COMMON = [
-  { label: "velocity", detail: "{ x, y } — velocity vector (read-only on Static)", insert: "velocity" },
-  { label: "type", detail: "'Dynamic' | 'Kinematic' | 'Static'", insert: "type" },
+  { label: "velocity", detail: "{ x, y } — velocity vector", insert: "velocity" },
+  { label: "velocityX", detail: "Horizontal velocity (px/s)", insert: "velocityX = " },
+  { label: "velocityY", detail: "Vertical velocity (px/s, positive = down)", insert: "velocityY = " },
+  { label: "type", detail: "'Dynamic' | 'Kinematic' | 'Static' (read-only)", insert: "type" },
 ];
 const RIGIDBODY_API_DYNAMIC = RIGIDBODY_API_COMMON.concat([
-  { label: "velocityX", detail: "Horizontal velocity", insert: "velocityX = " },
-  { label: "velocityY", detail: "Vertical velocity", insert: "velocityY = " },
-  { label: "mass", detail: "Body mass", insert: "mass = " },
-  { label: "gravityScale", detail: "Gravity multiplier", insert: "gravityScale = " },
-  { label: "linearDamping", detail: "Linear drag", insert: "linearDamping = " },
-  { label: "angularDamping", detail: "Angular drag", insert: "angularDamping = " },
-  { label: "addForce(x, y)", detail: "Continuous force — call every frame to sustain a push", insert: "addForce(" },
-  { label: "addImpulse(x, y)", detail: "Instant velocity change, applied once", insert: "addImpulse(" },
-  { label: "addTorque(t)", detail: "Continuous rotational force — call every frame to sustain a spin", insert: "addTorque(" },
-  { label: "addAngularImpulse(t)", detail: "Instant angular velocity change, applied once", insert: "addAngularImpulse(" },
+  { label: "mass", detail: "Body mass (affects force/impulse results)", insert: "mass = " },
+  { label: "gravityScale", detail: "Gravity multiplier (1 = normal, 0 = no gravity)", insert: "gravityScale = " },
+  { label: "linearDamping", detail: "Linear drag — slows the body over time", insert: "linearDamping = " },
+  { label: "angularDamping", detail: "Rotational drag", insert: "angularDamping = " },
+  { label: "addForce(x, y)", detail: "Continuous force — call every frame in onUpdate to sustain a push", insert: "addForce(" },
+  { label: "addImpulse(x, y)", detail: "One-shot velocity kick — call once (e.g. in onCollision or a jump)", insert: "addImpulse(" },
+  { label: "addTorque(t)", detail: "Continuous spin force — call every frame to sustain rotation", insert: "addTorque(" },
+  { label: "addAngularImpulse(t)", detail: "One-shot angular velocity kick", insert: "addAngularImpulse(" },
 ]);
 const RIGIDBODY_API_KINEMATIC = RIGIDBODY_API_COMMON.concat([
-  { label: "velocityX", detail: "Horizontal velocity (drives movement)", insert: "velocityX = " },
-  { label: "velocityY", detail: "Vertical velocity (drives movement)", insert: "velocityY = " },
-  { label: "move(dx, dy)", detail: "One-shot swept move this frame, blocked/slid by obstacles", insert: "move(" },
-  { label: "grounded", detail: "Real sweep-based ground contact (read-only)", insert: "grounded" },
-  { label: "resolvedVelocity", detail: "{ x, y } — actual movement achieved last step (read-only)", insert: "resolvedVelocity" },
+  { label: "move(dx, dy)", detail: "One-shot swept move this frame — blocked/slid by obstacles just like velocity", insert: "move(" },
+  { label: "isGrounded", detail: "True when the character controller is touching the ground (read-only)", insert: "isGrounded" },
+  { label: "isOnCeiling", detail: "True when touching a ceiling surface above (read-only)", insert: "isOnCeiling" },
+  { label: "isOnWall", detail: "True when touching a wall laterally (read-only)", insert: "isOnWall" },
+  { label: "isOnSlope", detail: "True when grounded on a sloped surface (groundAngle > 5°) (read-only)", insert: "isOnSlope" },
+  { label: "groundAngle", detail: "Surface angle in degrees from horizontal (0=flat, 45=steep slope) (read-only)", insert: "groundAngle" },
+  { label: "slopeAngle", detail: "Alias for groundAngle (read-only)", insert: "slopeAngle" },
+  { label: "resolvedVelocity", detail: "{ x, y } — actual movement this step after collisions (read-only)", insert: "resolvedVelocity" },
 ]);
 const RIGIDBODY_API_STATIC = [
-  { label: "type", detail: "'Static' — this body never moves. Change Body Type in the Inspector to move it.", insert: "type" },
-];
-const ANIMATOR_API = [
-  { label: "play(clipName)", detail: "Play an animation clip", insert: 'play("' },
-  { label: "stop()", detail: "Stop current animation", insert: "stop()" },
-];
-const CAMERA_API = [
-  { label: "zoom", detail: "Camera zoom level", insert: "zoom = " },
-  { label: "shake(intensity, duration)", detail: "Shake the camera", insert: "shake(" },
-];
-const AUDIO_API = [
-  { label: "play()", detail: "Play audio source", insert: "play()" },
-  { label: "stop()", detail: "Stop audio", insert: "stop()" },
+  { label: "type", detail: "'Static' — body never moves. Change Body Type in the Inspector to Dynamic or Kinematic.", insert: "type" },
+  { label: "velocity", detail: "Always { x:0, y:0 } — static bodies never move", insert: "velocity" },
 ];
 
-const THIS_SHORTCUTS = [
-  { label: "x", detail: "Position X (alias for transform.x)", insert: "x" },
-  { label: "y", detail: "Position Y (alias for transform.y)", insert: "y" },
+const ANIMATOR_API = [
+  { label: "play(clipName)", detail: "Play a named animation clip", insert: 'play("' },
+  { label: "stop()", detail: "Stop the current animation", insert: "stop()" },
+  { label: "playing", detail: "True while an animation is playing (read-only)", insert: "playing" },
+  { label: "currentClip", detail: "Name of the currently active clip (read-only)", insert: "currentClip" },
+];
+
+const CAMERA_API = [
+  { label: "zoom", detail: "Camera size/zoom. Default 5 = no zoom. Smaller = zoomed in, larger = zoomed out.", insert: "zoom = " },
+  { label: "shake(intensity, duration)", detail: "Shake the camera. intensity=pixels of shake, duration=seconds.", insert: "shake(" },
+];
+
+const AUDIO_API = [
+  { label: "play()", detail: "Start audio playback", insert: "play()" },
+  { label: "stop()", detail: "Stop audio playback", insert: "stop()" },
+  { label: "volume", detail: "Volume: 0.0 (silent) to 1.0 (full)", insert: "volume = " },
+  { label: "playing", detail: "True while the source is set to play (read-only)", insert: "playing" },
+];
+
+// this.* shortcut arrays — filtered per-entity in provideCompletionItems
+// so only shortcuts relevant to the entity's actual components appear.
+
+// Always shown (every entity has Transform, visible, enabled).
+const THIS_SHORTCUTS_BASE = [
+  { label: "x", detail: "Position X (number)", insert: "x" },
+  { label: "y", detail: "Position Y (number)", insert: "y" },
+  { label: "position", detail: "{ x, y } position object — read or assign {x,y}", insert: "position" },
   { label: "rotation", detail: "Rotation in degrees", insert: "rotation = " },
   { label: "scaleX", detail: "Scale X", insert: "scaleX = " },
   { label: "scaleY", detail: "Scale Y", insert: "scaleY = " },
-  { label: "visible", detail: "Is entity visible", insert: "visible = " },
-  { label: "enabled", detail: "Is this script enabled", insert: "enabled = " },
-  { label: "velocityX", detail: "Velocity X (alias for rigidbody.velocityX)", insert: "velocityX = " },
-  { label: "velocityY", detail: "Velocity Y (alias for rigidbody.velocityY)", insert: "velocityY = " },
+  { label: "translate(dx, dy)", detail: "Move by a delta amount this frame", insert: "translate(" },
+  { label: "visible", detail: "Show/hide the entity", insert: "visible = " },
+  { label: "enabled", detail: "Enable/disable this script", insert: "enabled = " },
 ];
 
+// Shown when entity has Sprite Renderer.
+const THIS_SPRITE_SHORTCUTS = [
+  { label: "texture", detail: "Sprite texture key", insert: "texture" },
+  { label: "color", detail: "Tint color (#rrggbb)", insert: 'color = "#' },
+  { label: "flipX", detail: "Flip sprite horizontally", insert: "flipX = " },
+  { label: "flipY", detail: "Flip sprite vertically", insert: "flipY = " },
+  { label: "opacity", detail: "Transparency: 0.0 (invisible) to 1.0 (opaque)", insert: "opacity = " },
+];
+
+// Shown when entity has any Rigidbody (velocity works on all types).
+const THIS_VELOCITY_SHORTCUTS = [
+  { label: "velocity", detail: "{ x, y } velocity object — read or assign {x,y}", insert: "velocity" },
+  { label: "velocityX", detail: "Horizontal velocity (px/s)", insert: "velocityX = " },
+  { label: "velocityY", detail: "Vertical velocity (px/s, positive = down)", insert: "velocityY = " },
+];
+
+// Shown when entity has a Kinematic Rigidbody.
+const THIS_KINEMATIC_SHORTCUTS = [
+  { label: "move(dx, dy)", detail: "Swept one-shot move this frame — blocked/slid by obstacles", insert: "move(" },
+  { label: "isGrounded", detail: "True when touching the ground (read-only)", insert: "isGrounded" },
+  { label: "isOnCeiling", detail: "True when touching a ceiling (read-only)", insert: "isOnCeiling" },
+  { label: "isOnWall", detail: "True when touching a wall (read-only)", insert: "isOnWall" },
+  { label: "isOnSlope", detail: "True when grounded on a slope (read-only)", insert: "isOnSlope" },
+  { label: "groundAngle", detail: "Ground surface angle in degrees, 0=flat (read-only)", insert: "groundAngle" },
+];
+
+// Shown when entity has a Dynamic Rigidbody.
+const THIS_DYNAMIC_SHORTCUTS = [
+  { label: "addForce(x, y)", detail: "Continuous force — call every frame to sustain a push", insert: "addForce(" },
+  { label: "addImpulse(x, y)", detail: "One-shot velocity kick — call once (e.g. in a jump)", insert: "addImpulse(" },
+];
+
+
 const GLOBAL_APIS = [
-  { label: "find(name)", detail: "Find entity by name → returns object with .x, .y, .sprite, etc.", insert: 'find("' },
-  { label: "scene", detail: "Scene management: find(), load(), restart()", insert: "scene." },
-  { label: "physics", detail: "Physics: raycast()", insert: "physics." },
-  { label: "input", detail: "Input: keyDown(), keyPressed()", insert: "input." },
-  { label: "time", detail: "Time: deltaTime, elapsed", insert: "time." },
-  { label: "random", detail: "Random: int(), float()", insert: "random." },
-  { label: "global", detail: "Persistent variables: global.score++, etc.", insert: "global." },
+  { label: "find(name)", detail: "Find entity by name → same as scene.find(name). Returns an object with .x, .y, .sprite, .rigidbody, etc.", insert: 'find("' },
+  { label: "scene", detail: "Scene utilities: scene.find(), scene.load(), scene.restart()", insert: "scene." },
+  { label: "physics", detail: "Physics utilities: physics.raycast(x1,y1,x2,y2)", insert: "physics." },
+  { label: "input", detail: "Input queries: input.keyDown(key), input.keyPressed(key)", insert: "input." },
+  { label: "time", detail: "Frame timing: time.deltaTime, time.elapsed", insert: "time." },
+  { label: "random", detail: "Random numbers: random.int(min,max), random.float(min,max)", insert: "random." },
+  { label: "global", detail: "Cross-script shared state: global.score = 0, global.lives, etc.", insert: "global." },
 ];
 
 const SCENE_API = [
-  { label: "find(name)", detail: "Find entity by name", insert: 'find("' },
-  { label: "load(sceneName)", detail: "Load a scene", insert: 'load("' },
-  { label: "restart()", detail: "Restart current scene", insert: "restart()" },
+  { label: "find(name)", detail: "Find entity by name (same as the top-level find() shortcut)", insert: 'find("' },
+  { label: "load(sceneName)", detail: "Load a different scene by name", insert: 'load("' },
+  { label: "restart()", detail: "Restart the current scene from the beginning", insert: "restart()" },
 ];
 const PHYSICS_API = [
-  { label: "raycast(x1, y1, x2, y2)", detail: "Raycast from point A to B", insert: "raycast(" },
+  { label: "raycast(x1, y1, x2, y2)", detail: "Cast a ray from (x1,y1) to (x2,y2). Returns { entity, point, distance } or null.", insert: "raycast(" },
 ];
 const INPUT_API = [
-  { label: "keyDown(key)", detail: "Is key currently held? e.g. keyDown('ArrowLeft')", insert: 'keyDown("' },
-  { label: "keyPressed(key)", detail: "Was key pressed this frame?", insert: 'keyPressed("' },
+  { label: "keyDown(key)", detail: "Is the key currently held? Use key codes like 'ArrowLeft', 'Space', 'KeyA'", insert: 'keyDown("' },
+  { label: "keyPressed(key)", detail: "Was the key pressed this frame only (not held)? Same key codes as keyDown.", insert: 'keyPressed("' },
 ];
 const TIME_API = [
-  { label: "deltaTime", detail: "Seconds since last frame", insert: "deltaTime" },
-  { label: "elapsed", detail: "Total seconds since game started", insert: "elapsed" },
+  { label: "deltaTime", detail: "Seconds since the last frame (use to keep movement frame-rate independent)", insert: "deltaTime" },
+  { label: "elapsed", detail: "Total seconds since the game started", insert: "elapsed" },
 ];
 const RANDOM_API = [
-  { label: "int(min, max)", detail: "Random integer [min, max]", insert: "int(" },
-  { label: "float(min, max)", detail: "Random float [min, max)", insert: "float(" },
+  { label: "int(min, max)", detail: "Random integer in [min, max] inclusive", insert: "int(" },
+  { label: "float(min, max)", detail: "Random float in [min, max)", insert: "float(" },
 ];
 
 // Parses variable assignments from find() calls so autocomplete can
@@ -203,13 +258,20 @@ function _rigidbodyApiForEntities(entities) {
   return merged;
 }
 
-// Full list of every API (shortcuts + all components + globals).
-// Used when the engine can't track a variable's type.
+// Full list of every shortcut + component API + global.
+// Used when the engine can't track a variable's type (untracked variable,
+// generic find() result). Shows everything so nothing valid is hidden.
 function _allCompletions(monaco, range) {
   const suggestions = [];
-  for (const item of THIS_SHORTCUTS) {
-    suggestions.push(_makeCompletion(monaco, item, range));
+  // All flat shortcuts
+  for (const arr of [
+    THIS_SHORTCUTS_BASE, THIS_SPRITE_SHORTCUTS,
+    THIS_VELOCITY_SHORTCUTS, THIS_KINEMATIC_SHORTCUTS,
+    THIS_DYNAMIC_SHORTCUTS,
+  ]) {
+    for (const item of arr) suggestions.push(_makeCompletion(monaco, item, range));
   }
+  // Sub-object completions
   for (const c of COMPONENT_APIS) {
     for (const item of c.api) {
       suggestions.push(Object.assign(_makeCompletion(monaco, item, range), { label: c.name + "." + item.label }));
@@ -220,6 +282,49 @@ function _allCompletions(monaco, range) {
     suggestions.push(_makeCompletion(monaco, item, range));
   }
   return suggestions;
+}
+
+// Returns the Set of body types present in the given entity list.
+function _bodyTypesForEntities(entities) {
+  const types = new Set();
+  for (const e of entities) {
+    if (!e.hasComponent(RIGIDBODY_2D)) continue;
+    const rb = e.getComponent(RIGIDBODY_2D);
+    if (rb) types.add(rb.bodyType);
+  }
+  return types;
+}
+
+// Pushes all flat `this.` shortcut completions appropriate for the given
+// component key set and entity list into `suggestions`.
+function _pushShortcutCompletions(monaco, range, suggestions, keys, entities) {
+  // Always-on shortcuts
+  for (const item of THIS_SHORTCUTS_BASE) {
+    suggestions.push(_makeCompletion(monaco, item, range));
+  }
+  // Sprite shortcuts — only when entity has a SpriteRenderer
+  if (keys.has(SPRITE_RENDERER)) {
+    for (const item of THIS_SPRITE_SHORTCUTS) {
+      suggestions.push(_makeCompletion(monaco, item, range));
+    }
+  }
+  // Rigidbody shortcuts — filtered by body type
+  if (keys.has(RIGIDBODY_2D)) {
+    for (const item of THIS_VELOCITY_SHORTCUTS) {
+      suggestions.push(_makeCompletion(monaco, item, range));
+    }
+    const bodyTypes = _bodyTypesForEntities(entities);
+    if (bodyTypes.has(BodyType.KINEMATIC)) {
+      for (const item of THIS_KINEMATIC_SHORTCUTS) {
+        suggestions.push(_makeCompletion(monaco, item, range));
+      }
+    }
+    if (bodyTypes.has(BodyType.DYNAMIC)) {
+      for (const item of THIS_DYNAMIC_SHORTCUTS) {
+        suggestions.push(_makeCompletion(monaco, item, range));
+      }
+    }
+  }
 }
 
 // Union of every rigidbody API across all three body types — used ONLY
@@ -328,20 +433,16 @@ export function registerIntelliSense(monaco) {
       const suggestions = [];
 
       // this.<optional partial word> → entity-aware completions.
-      // Suggestions stay visible (and filter) as the user types after
-      // the dot, so the list is always based on what was typed.
       if (lineUntil.match(/\bthis\.\w*$/)) {
-        for (const item of THIS_SHORTCUTS) {
-          suggestions.push(_makeCompletion(monaco, item, range));
-        }
         const contextEntities = _getContextEntities();
         const keys = _contextComponentKeys();
+        // Flat shortcuts filtered by component presence + body type
+        _pushShortcutCompletions(monaco, range, suggestions, keys, contextEntities);
+        // Sub-object completions (this.sprite, this.rigidbody, etc.)
         for (const c of COMPONENT_APIS) {
           if (keys.has(c.key)) {
-            // Rigidbody is body-type-aware: resolve the PRECISE API for
-            // the real entity/entities behind this script tab instead
-            // of the generic union, so a Kinematic object's `this.`
-            // never suggests addForce()/addImpulse() etc.
+            // Rigidbody is body-type-aware so a Kinematic entity's this.
+            // never sees addForce()/addImpulse() in autocomplete.
             const api = c.key === RIGIDBODY_2D ? _rigidbodyApiForEntities(contextEntities) : c.api;
             for (const item of api) {
               suggestions.push(Object.assign(_makeCompletion(monaco, item, range), { label: c.name + "." + item.label }));
@@ -384,13 +485,14 @@ export function registerIntelliSense(monaco) {
           const entityKeys = _entityComponentKeys(findVars[subObj]);
           if (entityKeys) {
             const foundEntity = editorState.world ? editorState.world.findFirstByName(findVars[subObj]) : null;
-            for (const item of THIS_SHORTCUTS) {
-              suggestions.push(_makeCompletion(monaco, item, range));
-            }
+            const foundEntities = foundEntity ? [foundEntity] : [];
+            // Flat shortcuts filtered by the found entity's components
+            _pushShortcutCompletions(monaco, range, suggestions, entityKeys, foundEntities);
+            // Sub-object completions
             for (const c of COMPONENT_APIS) {
               if (entityKeys.has(c.key)) {
                 const api = c.key === RIGIDBODY_2D
-                  ? _rigidbodyApiForEntities(foundEntity ? [foundEntity] : [])
+                  ? _rigidbodyApiForEntities(foundEntities)
                   : c.api;
                 for (const item of api) {
                   suggestions.push(Object.assign(_makeCompletion(monaco, item, range), { label: c.name + "." + item.label }));
@@ -409,11 +511,13 @@ export function registerIntelliSense(monaco) {
       for (const item of GLOBAL_APIS) {
         suggestions.push(_makeCompletion(monaco, item, range));
       }
-      suggestions.push(_makeCompletion(monaco, { label: "function onStart()", detail: "Called once at start", insert: "onStart() {\n  \n}" }, range));
-      suggestions.push(_makeCompletion(monaco, { label: "function onUpdate()", detail: "Called every frame", insert: "onUpdate() {\n  \n}" }, range));
-      suggestions.push(_makeCompletion(monaco, { label: "function onFixedUpdate()", detail: "Called at fixed 60Hz", insert: "onFixedUpdate() {\n  \n}" }, range));
-      suggestions.push(_makeCompletion(monaco, { label: "function onCollision(other)", detail: "Called on collision", insert: "onCollision(other) {\n  \n}" }, range));
-      suggestions.push(_makeCompletion(monaco, { label: "function onDestroy()", detail: "Called when destroyed", insert: "onDestroy() {\n  \n}" }, range));
+      suggestions.push(_makeCompletion(monaco, { label: "function onStart()", detail: "Called once before the first onUpdate — use for initialization", insert: "onStart() {\n  \n}" }, range));
+      suggestions.push(_makeCompletion(monaco, { label: "function onUpdate(dt)", detail: "Called every frame. dt = seconds since last frame (use for movement)", insert: "onUpdate(dt) {\n  \n}" }, range));
+      suggestions.push(_makeCompletion(monaco, { label: "function onFixedUpdate(dt)", detail: "Called at a fixed 60 Hz rate — use for physics/rigidbody changes", insert: "onFixedUpdate(dt) {\n  \n}" }, range));
+      suggestions.push(_makeCompletion(monaco, { label: "function onCollision(other)", detail: "Called when this entity's collider touches another. 'other' has .x, .y, etc.", insert: "onCollision(other) {\n  \n}" }, range));
+      suggestions.push(_makeCompletion(monaco, { label: "function onTriggerEnter(other)", detail: "Called when entering a trigger collider (Is Trigger = on)", insert: "onTriggerEnter(other) {\n  \n}" }, range));
+      suggestions.push(_makeCompletion(monaco, { label: "function onTriggerExit(other)", detail: "Called when leaving a trigger collider", insert: "onTriggerExit(other) {\n  \n}" }, range));
+      suggestions.push(_makeCompletion(monaco, { label: "function onDestroy()", detail: "Called once when this entity is destroyed or the scene ends", insert: "onDestroy() {\n  \n}" }, range));
       return { suggestions: suggestions };
     },
   });

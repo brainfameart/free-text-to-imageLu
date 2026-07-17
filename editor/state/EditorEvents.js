@@ -514,6 +514,11 @@ let _lastSceneClick = { id: null, time: 0 };
           if (!entity.hasComponent(RIGIDBODY_2D)) {
             entity.addComponent(RIGIDBODY_2D, new Rigidbody2D());
             pushLog("log", "Added Rigidbody2D to '" + entity.name + "'.");
+            // Warn immediately if there is no Collider2D — a Rigidbody without
+            // a Collider passes through everything and will confuse new users.
+            if (!entity.hasComponent(COLLIDER_2D)) {
+              pushLog("warn", "⚠️ '" + entity.name + "' has a Rigidbody 2D but no Collider 2D. Physics collisions won't work — add a Collider 2D component so the object actually collides with walls, floors, and other bodies.");
+            }
           }
         } else if (componentName === "Collider2D") {
           if (!entity.hasComponent(COLLIDER_2D)) {

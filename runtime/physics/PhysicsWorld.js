@@ -536,6 +536,13 @@ export class PhysicsWorld {
       rb.resolvedVelocityX = rb.velocityX;
       rb.resolvedVelocityY = rb.velocityY;
       rb.grounded = false;
+      // No collider → no sweep → all contact-state flags must be
+      // cleared so scripts don't read stale values from a previous
+      // frame when the collider was present.
+      rb.isOnCeiling = false;
+      rb.isOnWall    = false;
+      rb.isOnSlope   = false;
+      rb.groundAngle = 0;
       return;
     }
 
@@ -563,6 +570,65 @@ export class PhysicsWorld {
     const corrected = this._characterController.computedMovement();
     const grounded = this._characterController.computedGrounded();
 
+    // Unity-style contact-state flags: isOnCeiling, isOnWall, isOnSlope,
+    // groundAngle. Computed from the character-controller's own collision
+    // normals (each normal points FROM the obstacle TOWARD the character,
+    // i.e. "which way does this surface push the character away").
+    //
+    // Coordinate convention: this engine is Y-down (gravity = +Y). So a
+    // floor's normal points UP = negative Y, and a ceiling's normal points
+    // DOWN = positive Y.
+    //
+    // SLOPE_LIMIT (45°): ground contacts whose surface normal is within
+    // 45° of world-up are walkable ground; steeper contacts are walls.
+    // This matches Unity's CharacterController.slopeLimit default.
+    const SLOPE_LIMIT_DEG = 45;
+    let onCeiling = false, onWall = false, onSlope = false;
+    let groundAngle = 0;
+
+    const numCols = this._characterController.numComputedCollisions();
+    for (let ci = 0; ci < numCols; ci++) {
+      const col = this._characterController.computedCollision(ci);
+      if (!col) continue;
+      // Rapier's character-controller collision object may expose the
+      // contact normal. Guard with a null-check so older WASM builds
+      // (which may not include it) fall through to the movement-based
+      // fallback below without throwing.
+      const normal = col.normal;
+      if (normal && typeof normal.y === "number") {
+        // Angle between the collision normal and world-up (0, -1 in Y-down).
+        // dot((nx,ny),(0,-1)) = -ny → angle = acos(-ny)
+        const dotWithUp = Math.max(-1, Math.min(1, -normal.y));
+        const angle = Math.acos(dotWithUp) * RAD2DEG;
+        if (angle <= SLOPE_LIMIT_DEG) {
+          // Ground or shallow slope — track the steepest angle seen.
+          if (angle > groundAngle) groundAngle = angle;
+          if (angle > 5) onSlope = true;
+        } else if (dotWithUp < 0) {
+          // Normal has a downward component → ceiling (pushes character down).
+          onCeiling = true;
+        } else {
+          // Mostly horizontal normal → lateral wall.
+          onWall = true;
+        }
+      }
+    }
+
+    // Movement-based fallback when normals are unavailable: infer
+    // ceiling/wall from how much of the desired displacement was blocked.
+    if (!onCeiling && !onWall && numCols > 0) {
+      // Ceiling: tried to move up but was blocked from above.
+      if (desiredY < -0.5 && corrected.y > desiredY + 1) onCeiling = true;
+      // Wall: tried to move horizontally but motion was largely blocked.
+      const absDesiredX = Math.abs(desiredX);
+      if (absDesiredX > 0.5 && Math.abs(corrected.x) < absDesiredX * 0.3) onWall = true;
+    }
+
+    rb.isOnCeiling = onCeiling;
+    rb.isOnWall    = onWall;
+    rb.isOnSlope   = grounded && onSlope;
+    rb.groundAngle = groundAngle;
+
     const current = handle.body.translation();
     handle.body.setNextKinematicTranslation({
       x: current.x + corrected.x,
@@ -578,18 +644,12 @@ export class PhysicsWorld {
     // resolved* fields so gameplay code (grounded checks, animation,
     // scripts asking "did I actually move this step?") sees what really
     // happened — WITHOUT clobbering velocityX/Y, which stay as the
-    // intended input the controller/Inspector/script set. Overwriting
-    // velocityX/Y here used to feed the blocked velocity back into
-    // ControllerSystem's acceleration lerp next frame, decelerating a
-    // kinematic body every time it pushed something (a real kinematic
-    // body has infinite mass and should never slow down from a collision).
+    // intended input the controller/Inspector/script set.
     rb.resolvedVelocityX = dt > 0 ? corrected.x / dt : 0;
     rb.resolvedVelocityY = dt > 0 ? corrected.y / dt : 0;
     // Real sweep-based grounded state (see the field's doc in
     // Rigidbody2D.js) — this is what ControllerSystem should check
-    // instead of guessing from a velocity epsilon, which is what
-    // caused jitter: a guess can flip-flop frame to frame near-zero
-    // velocity even while genuinely resting on the ground.
+    // instead of guessing from a velocity epsilon.
     rb.grounded = grounded;
   }
 

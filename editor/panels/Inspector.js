@@ -610,6 +610,9 @@ export function renderInspector() {
             "/>"
         ) +
         bodyTypeFieldsHtml +
+        (!entity.getComponent(COLLIDER_2D)
+          ? '<div class="static-body-note" style="padding:6px 4px;color:#c0863a;font-size:11px;">⚠️ No Collider 2D — this Rigidbody will pass through everything. Add a Collider 2D so physics collisions actually work.</div>'
+          : "") +
         '<button class="removecomp-btn" data-action="remove-component" data-component="Rigidbody2D" style="margin-top:6px;">Remove Component</button>'
     );
   }

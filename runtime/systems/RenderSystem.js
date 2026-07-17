@@ -185,11 +185,15 @@ export class RenderSystem extends System {
   }
 
   /**
-   * Positions worldContainer so the Main Camera's world position is
-   * centered on screen (0,0 of the container's parent), at 1:1 scale.
-   * This is what makes the editor's yellow camera gizmo an honest
-   * preview of play mode: whatever sits inside that yellow frame in the
-   * Scene view is exactly what the popup renders, no more, no less.
+   * Positions and scales worldContainer so the Main Camera's world
+   * position is centered on screen and Camera.size is honoured as a
+   * zoom level. Camera.size=5 (the default) is 1:1 — no zoom. A
+   * smaller size zooms in (fewer world-units fill the viewport), a
+   * larger size zooms out (more world-units visible). This is the
+   * standard Unity orthographic camera convention, and it is what makes
+   * `this.camera.zoom` in a script actually change how the game looks:
+   * zoom = 5 / size, so setting size=2.5 via the script doubles the
+   * visible scale (2× zoom in), and size=10 halves it (2× zoom out).
    */
   _applyMainCameraOffset(world) {
     const cameraEntity = world.query(TRANSFORM, CAMERA).find((e) => e.getComponent(CAMERA).isMain);
@@ -199,8 +203,14 @@ export class RenderSystem extends System {
     const transform = cameraEntity.getComponent(TRANSFORM);
     const { width, height } = getCameraResolution(camera);
 
-    this.worldContainer.x = width / 2 - transform.x;
-    this.worldContainer.y = height / 2 - transform.y;
+    // Default size=5 → zoom factor 1 (no scaling). Clamp size to a
+    // safe minimum so the container never gets an infinite scale.
+    const DEFAULT_CAMERA_SIZE = 5;
+    const zoom = DEFAULT_CAMERA_SIZE / Math.max(0.001, camera.size);
+
+    this.worldContainer.scale.set(zoom);
+    this.worldContainer.x = width / 2 - transform.x * zoom;
+    this.worldContainer.y = height / 2 - transform.y * zoom;
   }
 
   /**

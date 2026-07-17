@@ -149,7 +149,20 @@ function _createKinematicAPI(entity) {
     },
 
     /** Real sweep-based ground contact from the character controller (see Rigidbody2D.js's `grounded` field doc) — not a velocity-epsilon guess. */
+    /** True when the character controller's sweep says the body is on the ground. */
+    get isGrounded() { var r = _rb(entity); return r ? r.grounded : false; },
+    /** Alias for isGrounded — kept for compatibility with existing scripts. */
     get grounded() { var r = _rb(entity); return r ? r.grounded : false; },
+    /** True when the controller has detected a ceiling contact above the body. */
+    get isOnCeiling() { var r = _rb(entity); return r ? r.isOnCeiling : false; },
+    /** True when the controller has detected a wall contact on either side. */
+    get isOnWall() { var r = _rb(entity); return r ? r.isOnWall : false; },
+    /** True when the body is grounded on a sloped surface (groundAngle > 5°). */
+    get isOnSlope() { var r = _rb(entity); return r ? r.isOnSlope : false; },
+    /** Angle of the ground surface in degrees from horizontal (0=flat, 45=steep). Alias: slopeAngle. */
+    get groundAngle() { var r = _rb(entity); return r ? r.groundAngle : 0; },
+    /** Alias for groundAngle — matches Unity naming convention. */
+    get slopeAngle() { var r = _rb(entity); return r ? r.groundAngle : 0; },
     /** The ACTUAL (possibly blocked/slid) movement achieved last step — use this instead of velocity to check "did I really move?". */
     get resolvedVelocity() {
       var r = _rb(entity);
