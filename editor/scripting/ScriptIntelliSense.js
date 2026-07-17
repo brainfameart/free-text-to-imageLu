@@ -121,38 +121,16 @@ const THIS_SHORTCUTS_BASE = [
   { label: "enabled", detail: "Enable/disable this script", insert: "enabled = " },
 ];
 
-// Shown when entity has Sprite Renderer.
-const THIS_SPRITE_SHORTCUTS = [
-  { label: "texture", detail: "Sprite texture key", insert: "texture" },
-  { label: "color", detail: "Tint color (#rrggbb)", insert: 'color = "#' },
-  { label: "flipX", detail: "Flip sprite horizontally", insert: "flipX = " },
-  { label: "flipY", detail: "Flip sprite vertically", insert: "flipY = " },
-  { label: "opacity", detail: "Transparency: 0.0 (invisible) to 1.0 (opaque)", insert: "opacity = " },
-];
-
-// Shown when entity has any Rigidbody (velocity works on all types).
-const THIS_VELOCITY_SHORTCUTS = [
-  { label: "velocity", detail: "{ x, y } velocity object — read or assign {x,y}", insert: "velocity" },
-  { label: "velocityX", detail: "Horizontal velocity (px/s)", insert: "velocityX = " },
-  { label: "velocityY", detail: "Vertical velocity (px/s, positive = down)", insert: "velocityY = " },
-];
-
-// Shown when entity has a Kinematic Rigidbody.
-const THIS_KINEMATIC_SHORTCUTS = [
-  { label: "move(dx, dy)", detail: "Swept one-shot move this frame — blocked/slid by obstacles", insert: "move(" },
-  { label: "isGrounded", detail: "True when touching the ground (read-only)", insert: "isGrounded" },
-  { label: "isOnCeiling", detail: "True when touching a ceiling (read-only)", insert: "isOnCeiling" },
-  { label: "isOnWall", detail: "True when touching a wall (read-only)", insert: "isOnWall" },
-  { label: "isOnSlope", detail: "True when grounded on a slope (read-only)", insert: "isOnSlope" },
-  { label: "groundAngle", detail: "Ground surface angle in degrees, 0=flat (read-only)", insert: "groundAngle" },
-];
-
-// Shown when entity has a Dynamic Rigidbody.
-const THIS_DYNAMIC_SHORTCUTS = [
-  { label: "addForce(x, y)", detail: "Continuous force — call every frame to sustain a push", insert: "addForce(" },
-  { label: "addImpulse(x, y)", detail: "One-shot velocity kick — call once (e.g. in a jump)", insert: "addImpulse(" },
-];
-
+// NOTE: there is deliberately no THIS_SPRITE_SHORTCUTS, THIS_VELOCITY_
+// SHORTCUTS, THIS_KINEMATIC_SHORTCUTS, or THIS_DYNAMIC_SHORTCUTS array
+// here. Sprite and rigidbody/physics properties are reached ONLY
+// through this.sprite.* and this.rigidbody.* (see SPRITE_API and the
+// RIGIDBODY_API_* lists below, which mirror runtime/scripting/
+// components/SpriteAPI.js and RigidbodyAPI.js exactly) — one API per
+// capability, so autocomplete never offers two different-looking ways
+// to do the same thing (this.addForce() vs this.rigidbody.addForce())
+// that could behave differently, especially since RigidbodyAPI's
+// shape depends on the entity's actual body type.
 
 const GLOBAL_APIS = [
   { label: "find(name)", detail: "Find entity by name → same as scene.find(name). Returns an object with .x, .y, .sprite, .rigidbody, etc.", insert: 'find("' },
@@ -263,13 +241,10 @@ function _rigidbodyApiForEntities(entities) {
 // generic find() result). Shows everything so nothing valid is hidden.
 function _allCompletions(monaco, range) {
   const suggestions = [];
-  // All flat shortcuts
-  for (const arr of [
-    THIS_SHORTCUTS_BASE, THIS_SPRITE_SHORTCUTS,
-    THIS_VELOCITY_SHORTCUTS, THIS_KINEMATIC_SHORTCUTS,
-    THIS_DYNAMIC_SHORTCUTS,
-  ]) {
-    for (const item of arr) suggestions.push(_makeCompletion(monaco, item, range));
+  // Flat Transform/entity shortcuts (the only flat this.<x> shortcuts —
+  // see the note above GLOBAL_APIS for why sprite/rigidbody aren't here)
+  for (const item of THIS_SHORTCUTS_BASE) {
+    suggestions.push(_makeCompletion(monaco, item, range));
   }
   // Sub-object completions
   for (const c of COMPONENT_APIS) {
@@ -284,46 +259,15 @@ function _allCompletions(monaco, range) {
   return suggestions;
 }
 
-// Returns the Set of body types present in the given entity list.
-function _bodyTypesForEntities(entities) {
-  const types = new Set();
-  for (const e of entities) {
-    if (!e.hasComponent(RIGIDBODY_2D)) continue;
-    const rb = e.getComponent(RIGIDBODY_2D);
-    if (rb) types.add(rb.bodyType);
-  }
-  return types;
-}
-
-// Pushes all flat `this.` shortcut completions appropriate for the given
-// component key set and entity list into `suggestions`.
+// Pushes the flat `this.` shortcut completions (Transform/entity only —
+// see the note above GLOBAL_APIS) into `suggestions`. Sprite and
+// rigidbody/physics properties are offered exclusively via their
+// sub-object completions (this.sprite., this.rigidbody.) below in
+// provideCompletionItems, so `keys`/`entities` aren't needed here
+// anymore, but are kept as parameters for call-site compatibility.
 function _pushShortcutCompletions(monaco, range, suggestions, keys, entities) {
-  // Always-on shortcuts
   for (const item of THIS_SHORTCUTS_BASE) {
     suggestions.push(_makeCompletion(monaco, item, range));
-  }
-  // Sprite shortcuts — only when entity has a SpriteRenderer
-  if (keys.has(SPRITE_RENDERER)) {
-    for (const item of THIS_SPRITE_SHORTCUTS) {
-      suggestions.push(_makeCompletion(monaco, item, range));
-    }
-  }
-  // Rigidbody shortcuts — filtered by body type
-  if (keys.has(RIGIDBODY_2D)) {
-    for (const item of THIS_VELOCITY_SHORTCUTS) {
-      suggestions.push(_makeCompletion(monaco, item, range));
-    }
-    const bodyTypes = _bodyTypesForEntities(entities);
-    if (bodyTypes.has(BodyType.KINEMATIC)) {
-      for (const item of THIS_KINEMATIC_SHORTCUTS) {
-        suggestions.push(_makeCompletion(monaco, item, range));
-      }
-    }
-    if (bodyTypes.has(BodyType.DYNAMIC)) {
-      for (const item of THIS_DYNAMIC_SHORTCUTS) {
-        suggestions.push(_makeCompletion(monaco, item, range));
-      }
-    }
   }
 }
 

@@ -33,6 +33,20 @@
  * "why isn't my kinematic enemy moving with addForce" becomes an
  * immediate, readable error instead of a silent mystery.
  *
+ * IMPLEMENTATION NOTE — why the "unsupported on this body type" checks
+ * live in the Proxy, not as throwing getters inside each body-type's
+ * object literal: `Object.assign(target, { get x() { throw ... } })`
+ * (or any object literal with a throwing getter) evaluates that getter
+ * IMMEDIATELY while building the source object, not lazily when
+ * something later reads `.x`. A throwing getter placed straight in one
+ * of the _create*API object literals below would crash API
+ * CONSTRUCTION itself, not just misuse of it. So instead, each body
+ * type's object literal only defines what it actually supports, and
+ * MEMBERS_BY_TYPE (below) records which extra names are valid on OTHER
+ * body types — the Proxy consults that map to tell "wrong body type"
+ * (throws unsupported-body-type) apart from "not a real member at all"
+ * (throws unknown-api).
+ *
  * RUNTIME-ONLY FILE.
  */
 
@@ -42,37 +56,46 @@ function _rb(entity) {
   return entity.getComponent(RIGIDBODY_2D);
 }
 
-/** Shared read-only fields every body type exposes (velocity is
- * readable everywhere, even Static, where it's always zero). */
-function _baseReadOnly(entity) {
-  return {
-    get velocity() {
-      var r = _rb(entity);
-      return r ? { x: r.velocityX, y: r.velocityY } : { x: 0, y: 0 };
-    },
-    get type() {
-      var r = _rb(entity);
-      return r ? r.bodyType : null;
-    },
-  };
+/** Tags an Error with a machine-readable `kind` so ScriptSystem can
+ *  format a specific, actionable console message instead of a generic
+ *  "X is not a function" — see ScriptSystem.js's _formatError(). */
+function _tag(err, kind) {
+  err.kind = kind;
+  return err;
 }
 
-function _throwUnsupported(bodyType, member) {
-  throw new Error(
-    "rigidbody." + member + "() is not available on a " + bodyType +
+function _missingComponentError(entity, member) {
+  return _tag(new Error(
+    "'" + (entity.name || "Entity") + "' called this.rigidbody." + member +
+    " but has no Rigidbody 2D. Add one in the Inspector (Add Component → Rigidbody 2D)."
+  ), "missing-component");
+}
+
+function _unknownMemberError(entity, bodyType, member) {
+  return _tag(new Error(
+    "this.rigidbody." + member + " does not exist. Check the spelling — " +
+    "see the autocomplete list for this.rigidbody on a " + bodyType + " body."
+  ), "unknown-api");
+}
+
+function _unsupportedError(bodyType, member) {
+  return _tag(new Error(
+    "rigidbody." + member + " is not available on a " + bodyType +
     " body. " +
     (bodyType === BodyType.STATIC
       ? "Static bodies never move — change the Body Type to Dynamic or Kinematic in the Inspector if this object needs to move."
       : bodyType === BodyType.KINEMATIC
       ? "Kinematic bodies are moved directly (use rigidbody.velocity or rigidbody.move(dx, dy)), not by forces — Rapier never applies forces/impulses to a kinematic body. Use Dynamic if you want physics-driven forces."
       : "This body type does not support that operation.")
-  );
+  ), "unsupported-body-type");
 }
 
 /** DYNAMIC: full force/impulse/torque API. Rapier's solver owns everything. */
 function _createDynamicAPI(entity) {
-  var base = _baseReadOnly(entity);
-  return Object.assign(base, {
+  return {
+    get type() { var r = _rb(entity); return r ? r.bodyType : null; },
+
+    get velocity() { var r = _rb(entity); return r ? { x: r.velocityX, y: r.velocityY } : { x: 0, y: 0 }; },
     set velocity(v) {
       var r = _rb(entity);
       if (r) { r.velocityX = v.x; r.velocityY = v.y; }
@@ -118,10 +141,8 @@ function _createDynamicAPI(entity) {
       r.pendingAngularImpulse += t;
     },
 
-    // Explicitly unsupported on Dynamic — kinematic-only concepts.
-    move: function () { _throwUnsupported(BodyType.DYNAMIC, "move"); },
     get grounded() { return false; },
-  });
+  };
 }
 
 /** KINEMATIC: velocity drives the character-controller sweep; move()
@@ -129,8 +150,10 @@ function _createDynamicAPI(entity) {
  * results of that sweep. No force/impulse/torque — Rapier never
  * integrates forces into a kinematic body. */
 function _createKinematicAPI(entity) {
-  var base = _baseReadOnly(entity);
-  return Object.assign(base, {
+  return {
+    get type() { var r = _rb(entity); return r ? r.bodyType : null; },
+
+    get velocity() { var r = _rb(entity); return r ? { x: r.velocityX, y: r.velocityY } : { x: 0, y: 0 }; },
     set velocity(v) {
       var r = _rb(entity);
       if (r) { r.velocityX = v.x; r.velocityY = v.y; }
@@ -169,35 +192,41 @@ function _createKinematicAPI(entity) {
       return r ? { x: r.resolvedVelocityX, y: r.resolvedVelocityY } : { x: 0, y: 0 };
     },
 
-    // Explicitly unsupported on Kinematic — dynamic-only concepts.
-    addForce: function () { _throwUnsupported(BodyType.KINEMATIC, "addForce"); },
-    addImpulse: function () { _throwUnsupported(BodyType.KINEMATIC, "addImpulse"); },
-    addTorque: function () { _throwUnsupported(BodyType.KINEMATIC, "addTorque"); },
-    addAngularImpulse: function () { _throwUnsupported(BodyType.KINEMATIC, "addAngularImpulse"); },
     get gravityScale() { return 0; },
-    set gravityScale(v) { _throwUnsupported(BodyType.KINEMATIC, "gravityScale"); },
-  });
+  };
 }
 
-/** STATIC: read-only stub. A static body never moves by definition, so
- * every mutator throws instead of silently doing nothing. */
+/** STATIC: read-only stub. A static body never moves by definition —
+ * every member below is read-only or a fixed zero value; anything
+ * that would mutate it (or any Dynamic/Kinematic-only member) is
+ * handled by the Proxy's unsupported-body-type check instead of being
+ * defined here. */
 function _createStaticAPI(entity) {
-  var base = _baseReadOnly(entity);
-  return Object.assign(base, {
-    set velocity(v) { _throwUnsupported(BodyType.STATIC, "velocity"); },
+  return {
+    get type() { var r = _rb(entity); return r ? r.bodyType : BodyType.STATIC; },
+    get velocity() { return { x: 0, y: 0 }; },
     get velocityX() { return 0; },
-    set velocityX(v) { _throwUnsupported(BodyType.STATIC, "velocityX"); },
     get velocityY() { return 0; },
-    set velocityY(v) { _throwUnsupported(BodyType.STATIC, "velocityY"); },
     get grounded() { return false; },
-
-    move: function () { _throwUnsupported(BodyType.STATIC, "move"); },
-    addForce: function () { _throwUnsupported(BodyType.STATIC, "addForce"); },
-    addImpulse: function () { _throwUnsupported(BodyType.STATIC, "addImpulse"); },
-    addTorque: function () { _throwUnsupported(BodyType.STATIC, "addTorque"); },
-    addAngularImpulse: function () { _throwUnsupported(BodyType.STATIC, "addAngularImpulse"); },
-  });
+  };
 }
+
+// Every member name that exists on AT LEAST ONE body type. Used by the
+// Proxy to tell "this doesn't exist anywhere" (unknown-api / a typo)
+// apart from "this exists, but not for the CURRENT body type"
+// (unsupported-body-type — e.g. addForce on Kinematic/Static).
+const ALL_KNOWN_MEMBERS = new Set([
+  "type", "velocity", "velocityX", "velocityY", "mass", "gravityScale",
+  "linearDamping", "angularDamping", "addForce", "addImpulse",
+  "addTorque", "addAngularImpulse", "move", "grounded", "isGrounded",
+  "isOnCeiling", "isOnWall", "isOnSlope", "groundAngle", "slopeAngle",
+  "resolvedVelocity",
+]);
+
+// Members that exist but are READ-ONLY on Static specifically (used to
+// give "velocity = ..." on a Static body its own clear message instead
+// of a generic "unknown member" or a silent no-op).
+const STATIC_READONLY_MEMBERS = new Set(["velocity", "velocityX", "velocityY", "type", "grounded"]);
 
 /**
  * Builds the `this.rigidbody` object for a given entity, LIVE-checking
@@ -211,9 +240,6 @@ function _createStaticAPI(entity) {
  */
 export function createRigidbodyAPI(entity) {
   var apis = {}; // built lazily, one object per body type, cached
-  apis[BodyType.DYNAMIC] = null;
-  apis[BodyType.KINEMATIC] = null;
-  apis[BodyType.STATIC] = null;
 
   function _current() {
     var r = _rb(entity);
@@ -230,14 +256,45 @@ export function createRigidbodyAPI(entity) {
     {},
     {
       get: function (_target, prop) {
-        return _current()[prop];
+        if (typeof prop === "symbol") return undefined;
+        var key = String(prop);
+        if (key === "then") return undefined; // avoid Promise-like duck-typing false positives
+        // No Rigidbody2D component at all — distinct from "wrong body
+        // type", since adding ANY Rigidbody 2D fixes this, whereas
+        // "wrong body type" needs a specific type change.
+        if (!_rb(entity)) throw _missingComponentError(entity, key);
+
+        var current = _current();
+        if (key in current) {
+          var value = current[key];
+          // Re-bind methods so `this` inside them still resolves via
+          // the real per-body-type object, not this Proxy wrapper.
+          return typeof value === "function" ? value.bind(current) : value;
+        }
+        if (ALL_KNOWN_MEMBERS.has(key)) {
+          throw _unsupportedError(current.type || "?", key);
+        }
+        throw _unknownMemberError(entity, current.type || "?", key);
       },
       set: function (_target, prop, value) {
-        _current()[prop] = value;
-        return true;
+        var key = String(prop);
+        if (!_rb(entity)) throw _missingComponentError(entity, key);
+        var current = _current();
+        if (key in current) {
+          if (current.type === BodyType.STATIC && STATIC_READONLY_MEMBERS.has(key)) {
+            throw _unsupportedError(BodyType.STATIC, key);
+          }
+          current[key] = value;
+          return true;
+        }
+        if (ALL_KNOWN_MEMBERS.has(key)) {
+          throw _unsupportedError(current.type || "?", key);
+        }
+        throw _unknownMemberError(entity, current.type || "?", key);
       },
       has: function (_target, prop) {
-        return prop in _current();
+        var key = String(prop);
+        return _rb(entity) ? key in _current() : ALL_KNOWN_MEMBERS.has(key);
       },
     }
   );

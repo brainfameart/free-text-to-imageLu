@@ -70,7 +70,60 @@ function loadAudioAssets(audioAssets) {
   }
 }
 
+/**
+ * Wraps this popup's console.log/warn/error so every call is ALSO
+ * posted to the editor window as a "zengine_console_log" message —
+ * this is what makes a script's plain console.log("...") calls (not
+ * just thrown errors) show up in the editor's Console panel while
+ * Play mode is running in this separate popup window/document.
+ */
+function _wireConsoleForwarding() {
+  function forwardLog(level, args) {
+    if (!(window.opener && !window.opener.closed)) return;
+    const text = args
+      .map(function (a) {
+        if (a instanceof Error) return a.message;
+        if (typeof a === "object" && a !== null) {
+          try { return JSON.stringify(a); } catch (e) { return String(a); }
+        }
+        return String(a);
+      })
+      .join(" ");
+    window.opener.postMessage({
+      type: "zengine_console_log",
+      level: level,
+      message: text,
+    }, "*");
+  }
+
+  const realLog = console.log.bind(console);
+  const realWarn = console.warn.bind(console);
+  const realError = console.error.bind(console);
+
+  console.log = function (...args) {
+    realLog(...args);
+    forwardLog("log", args);
+  };
+  console.warn = function (...args) {
+    realWarn(...args);
+    forwardLog("warn", args);
+  };
+  console.error = function (...args) {
+    realError(...args);
+    forwardLog("error", args);
+  };
+}
+
 async function boot() {
+  // Forward this popup's own console.log/warn/error to the editor's
+  // Console panel FIRST, before anything else in boot() has a chance
+  // to log — so asset load failures, scene validation errors, and
+  // script console.log() calls are ALL visible in the editor Console
+  // panel, not just crashes. Wrapping console itself (rather than only
+  // catching thrown errors) is what makes plain console.log() calls
+  // show up too, not just errors.
+  _wireConsoleForwarding();
+
   const payload = window.opener && window.opener.__ZENGINE_PLAY_PAYLOAD__;
   if (!payload) {
     document.body.innerHTML =
@@ -122,7 +175,11 @@ async function boot() {
 
   // Wire script errors back to the editor's console via postMessage,
   // so script crashes are visible in the editor without the editor
-  // itself ever executing user code.
+  // itself ever executing user code. Deliberately does NOT also call
+  // console.error() here — that would double-report the same error,
+  // since console.error is itself forwarded as a zengine_console_log
+  // message by _wireConsoleForwarding() above. The real console.error
+  // (bound before wrapping) still gets it for anyone with devtools open.
   if (game.scriptSystem) {
     game.scriptSystem.onError(function (err) {
       if (window.opener && !window.opener.closed) {
@@ -132,9 +189,9 @@ async function boot() {
           message: err.message,
           line: err.line,
           method: err.method,
+          kind: err.kind,
         }, "*");
       }
-      console.error("[Script Error] " + err.scriptName + "." + err.method + "() line " + err.line + ": " + err.message);
     });
   }
 

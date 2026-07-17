@@ -13,29 +13,37 @@
  *
  * Property access uses getters/setters that read/write LIVE component
  * data, so a script doing `this.x = 100` immediately moves the entity
- * and `this.velocityX` always reflects the physics body's real velocity.
+ * and `this.rigidbody.velocity` always reflects the physics body's
+ * real velocity.
+ *
+ * ONE API PER CAPABILITY: this.x/y/position/rotation/scaleX/scaleY/
+ * translate/visible/enabled are flat shortcuts (Transform has only one
+ * shape, and other.x/other.y is the documented pattern inside
+ * onCollision(other)/onTriggerEnter(other)). Everything else —
+ * velocity, physics forces, sprite properties, animation, camera,
+ * audio — is reached ONLY through its sub-object (this.rigidbody.*,
+ * this.sprite.*, this.animator.*, this.camera.*, this.audio.*).
+ * There is deliberately no this.velocityX / this.addForce() / this.
+ * texture flat-shortcut duplicate of these: RigidbodyAPI.js in
+ * particular exposes a DIFFERENT shape per Rigidbody2D.bodyType
+ * (Dynamic/Kinematic/Static), and a second flat copy of that API
+ * would either have to duplicate the per-body-type logic or drift out
+ * of sync with it — two ways to do the same thing that could behave
+ * differently from each other. See scripting/components/RigidbodyAPI.js.
  *
  * Each `this.<subobject>` (transform, sprite, rigidbody, animator,
  * camera, audio) is built by its OWN file under scripting/components/,
  * not inlined here — that folder is where new scripting components get
  * added as the API grows (RULES.txt scripting/ folder convention),
  * keeping this file focused on wiring rather than growing without
- * bound. See scripting/components/RigidbodyAPI.js in particular: it
- * exposes a DIFFERENT API shape depending on the entity's actual
- * Rigidbody2D.bodyType (Dynamic/Kinematic/Static), rather than one
- * generic rigidbody object that silently no-ops for the wrong type.
+ * bound.
  *
  * RUNTIME-ONLY FILE.
  */
 
 import { TRANSFORM } from "../components/Transform.js";
-import { RIGIDBODY_2D } from "../components/Rigidbody2D.js";
 import { SCRIPT } from "../components/Script.js";
 import { COLLIDER_2D, ColliderShape } from "../components/Collider2D.js";
-import { SPRITE_RENDERER } from "../components/SpriteRenderer.js";
-import { SPRITE_ANIMATION } from "../components/SpriteAnimation.js";
-import { AUDIO_SOURCE } from "../components/AudioSource.js";
-import { CAMERA } from "../components/Camera.js";
 import { createTransformAPI } from "./components/TransformAPI.js";
 import { createSpriteAPI } from "./components/SpriteAPI.js";
 import { createRigidbodyAPI } from "./components/RigidbodyAPI.js";
@@ -108,54 +116,21 @@ class EntityContext {
   get enabled() { const s = this._entity.getComponent(SCRIPT); return s ? s.enabled : true; }
   set enabled(v) { const s = this._entity.getComponent(SCRIPT); if (s) s.enabled = !!v; }
 
-  get velocityX() { const r = this._entity.getComponent(RIGIDBODY_2D); return r ? r.velocityX : 0; }
-  set velocityX(v) { const r = this._entity.getComponent(RIGIDBODY_2D); if (r) r.velocityX = v; }
-
-  get velocityY() { const r = this._entity.getComponent(RIGIDBODY_2D); return r ? r.velocityY : 0; }
-  set velocityY(v) { const r = this._entity.getComponent(RIGIDBODY_2D); if (r) r.velocityY = v; }
-
-  // velocity as an { x, y } object — mirrors this.rigidbody.velocity
-  get velocity() { this._requireRigidbody("velocity"); return this.rigidbody.velocity; }
-  set velocity(v) { this._requireRigidbody("velocity"); this.rigidbody.velocity = v; }
-
-  // --- Sprite shortcuts (throw if no Sprite Renderer — same error as this.sprite.X) ---
-
-  get texture() { return this.sprite.texture; }
-  set texture(v) { this.sprite.texture = v; }
-
-  get color() { return this.sprite.color; }
-  set color(v) { this.sprite.color = v; }
-
-  get flipX() { return this.sprite.flipX; }
-  set flipX(v) { this.sprite.flipX = v; }
-
-  get flipY() { return this.sprite.flipY; }
-  set flipY(v) { this.sprite.flipY = v; }
-
-  get opacity() { return this.sprite.opacity; }
-  set opacity(v) { this.sprite.opacity = v; }
-
-  // --- Rigidbody shortcuts — throw if no Rigidbody 2D so the user
-  //     sees a clear message rather than a silent 0/false return. ---
-
-  _requireRigidbody(action) {
-    if (!this._entity.hasComponent(RIGIDBODY_2D)) {
-      throw new Error(
-        "'" + (this._entity.name || "Entity") + "' called this." + action +
-        " but has no Rigidbody 2D. Add one in the Inspector (Add Component → Rigidbody 2D)."
-      );
-    }
-  }
-
-  get isGrounded()  { this._requireRigidbody("isGrounded");  return this.rigidbody.isGrounded; }
-  get isOnCeiling() { this._requireRigidbody("isOnCeiling"); return this.rigidbody.isOnCeiling; }
-  get isOnWall()    { this._requireRigidbody("isOnWall");    return this.rigidbody.isOnWall; }
-  get isOnSlope()   { this._requireRigidbody("isOnSlope");   return this.rigidbody.isOnSlope; }
-  get groundAngle() { this._requireRigidbody("groundAngle"); return this.rigidbody.groundAngle; }
-
-  addForce(x, y)   { this._requireRigidbody("addForce()");   return this.rigidbody.addForce(x, y); }
-  addImpulse(x, y) { this._requireRigidbody("addImpulse()"); return this.rigidbody.addImpulse(x, y); }
-  move(dx, dy)     { this._requireRigidbody("move()");       return this.rigidbody.move(dx, dy); }
+  // NOTE: velocity, sprite (texture/color/flip/opacity), and rigidbody
+  // physics (isGrounded, addForce, move, etc.) are intentionally NOT
+  // duplicated here as this.<x> shortcuts. Each lives in exactly ONE
+  // place: this.rigidbody.* (scripting/components/RigidbodyAPI.js) and
+  // this.sprite.* (scripting/components/SpriteAPI.js). Rigidbody in
+  // particular exposes a DIFFERENT shape per body type (Dynamic/
+  // Kinematic/Static) — a flat this.addForce() shortcut here would
+  // either have to duplicate that per-body-type logic or risk
+  // diverging from it, giving scripts two ways to do the same thing
+  // that could behave differently from one another. Use
+  // this.rigidbody.addForce(), this.rigidbody.velocity,
+  // this.sprite.texture, etc. instead. (this.x/y/position and friends
+  // above stay as shortcuts because Transform has only one shape
+  // regardless of entity state, and other.x/other.y in
+  // onCollision(other) depends on them.)
 
   // --- Sub-objects (built once, read live data via closures) ---
 

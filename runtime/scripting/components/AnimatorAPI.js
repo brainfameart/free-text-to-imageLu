@@ -10,26 +10,35 @@
 
 import { SPRITE_ANIMATION } from "../../components/SpriteAnimation.js";
 
+function _tag(err, kind) {
+  err.kind = kind;
+  return err;
+}
+
 /** Throws a descriptive error when a script calls this.animator on an entity
  *  without a Sprite Animation component. */
 function _requireAnimator(entity) {
   var a = entity.getComponent(SPRITE_ANIMATION);
-  if (!a) throw new Error(
+  if (!a) throw _tag(new Error(
     "'" + (entity.name || "Entity") + "' called this.animator but has no Sprite Animation component. " +
     "Add one in the Inspector (Add Component → Sprite Animation)."
-  );
+  ), "missing-component");
   return a;
 }
+
+const ANIMATOR_MEMBERS = new Set(["play", "stop", "playing", "currentClip"]);
 
 /**
  * Builds the `this.animator` object for a given entity.
  * Accessing any method/property throws a clear error if the entity has
- * no Sprite Animation component.
+ * no Sprite Animation component. Accessing an unknown property (typo)
+ * throws a distinct "does not exist" error rather than returning
+ * undefined and failing later with a confusing "not a function".
  * @param {import('../../core/World.js').Entity} entity
  * @returns {object}
  */
 export function createAnimatorAPI(entity) {
-  return {
+  const target = {
     /** Play a named animation clip. Throws if no Sprite Animation component. */
     play: function (clipName) {
       var anim = _requireAnimator(entity);
@@ -60,4 +69,17 @@ export function createAnimatorAPI(entity) {
       return clip ? clip.name : null;
     },
   };
+  return new Proxy(target, {
+    get: function (t, prop) {
+      if (typeof prop === "symbol" || prop === "then") return t[prop];
+      if (!(prop in t) && !ANIMATOR_MEMBERS.has(String(prop))) {
+        throw _tag(new Error(
+          "this.animator." + String(prop) + " does not exist. Check the spelling — " +
+          "valid members are: " + Array.from(ANIMATOR_MEMBERS).join(", ") + "."
+        ), "unknown-api");
+      }
+      var v = t[prop];
+      return typeof v === "function" ? v.bind(t) : v;
+    },
+  });
 }

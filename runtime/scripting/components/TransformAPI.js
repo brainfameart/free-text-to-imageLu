@@ -16,13 +16,20 @@
 
 import { TRANSFORM } from "../../components/Transform.js";
 
+function _tag(err, kind) {
+  err.kind = kind;
+  return err;
+}
+
+const TRANSFORM_MEMBERS = new Set(["position", "rotation", "scale", "translate", "lookAt"]);
+
 /**
  * Builds the `this.transform` object for a given entity.
  * @param {import('../../core/World.js').Entity} entity
  * @returns {object}
  */
 export function createTransformAPI(entity) {
-  return {
+  const target = {
     get position() {
       var t = entity.getComponent(TRANSFORM);
       return t ? { x: t.x, y: t.y } : { x: 0, y: 0 };
@@ -56,4 +63,17 @@ export function createTransformAPI(entity) {
       if (t) t.rotation = Math.atan2(y - t.y, x - t.x) * 180 / Math.PI;
     },
   };
+  return new Proxy(target, {
+    get: function (t, prop) {
+      if (typeof prop === "symbol" || prop === "then") return t[prop];
+      if (!(prop in t) && !TRANSFORM_MEMBERS.has(String(prop))) {
+        throw _tag(new Error(
+          "this.transform." + String(prop) + " does not exist. Check the spelling — " +
+          "valid members are: " + Array.from(TRANSFORM_MEMBERS).join(", ") + "."
+        ), "unknown-api");
+      }
+      var v = t[prop];
+      return typeof v === "function" ? v.bind(t) : v;
+    },
+  });
 }

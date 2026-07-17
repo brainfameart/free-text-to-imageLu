@@ -158,6 +158,32 @@ function onTogglePlay(isPlaying) {
   }
 }
 
+/**
+ * Formats a { scriptName, message, line, method, kind } error report
+ * (see runtime/systems/ScriptSystem.js's _reportError / _formatError,
+ * and the `err.kind` tags set by scripting/components/*API.js) into
+ * one console line that always answers: which script, which line,
+ * which lifecycle call, and — for API misuse — what category of
+ * mistake it was and on what kind of object. The *API.js files already
+ * wrote the specific sentence (e.g. "has no Rigidbody 2D", "not
+ * available on a Static body", "does not exist") — this only adds the
+ * category prefix and location so every error reads consistently.
+ */
+function formatScriptErrorLog(data) {
+  if (data.scriptName === "(engine)") {
+    return "[Engine/" + data.method + "] " + data.message;
+  }
+  const where = "'" + data.scriptName + "'" +
+    (data.line && data.line !== "?" ? " line " + data.line : "") +
+    " (" + data.method + "())";
+  const prefix =
+    data.kind === "missing-component" ? "[Missing Component] " :
+    data.kind === "unsupported-body-type" ? "[Unsupported for this Body Type] " :
+    data.kind === "unknown-api" ? "[Unknown API] " :
+    "[Script Error] ";
+  return prefix + where + ": " + data.message;
+}
+
 function boot() {
   editorState.renderFn = render;
   attachEditorEvents(render, onTogglePlay);
@@ -168,17 +194,21 @@ function boot() {
       render();
     }
   });
-  // Receive error reports from the play popup — both script-lifecycle
-  // errors (scriptName is a real user script) and engine/runtime errors
-  // forwarded from the popup's window "error"/"unhandledrejection"
-  // listeners (scriptName is the literal "(engine)" sentinel — see
-  // editor/viewport/play-popup.js's _wireGlobalErrorForwarding).
+  // Receive both script/engine error reports AND plain console.log/
+  // warn/error calls from the play popup — Play mode runs in a
+  // separate popup window/document (see editor/viewport/play-popup.js),
+  // so without this bridge nothing a running script prints or throws
+  // would ever reach the editor's own Console panel.
   window.addEventListener("message", function (e) {
-    if (e.data && e.data.type === "zengine_script_error") {
-      var label = e.data.scriptName === "(engine)"
-        ? "[Engine/" + e.data.method + "]"
-        : "[Script] " + e.data.scriptName + "." + e.data.method + "() line " + e.data.line + ":";
-      pushLog("error", label + " " + e.data.message);
+    if (!e.data) return;
+    if (e.data.type === "zengine_console_log") {
+      // A script's own console.log/warn/error call during Play mode.
+      pushLog(e.data.level || "log", e.data.message);
+      render();
+      return;
+    }
+    if (e.data.type === "zengine_script_error") {
+      pushLog("error", formatScriptErrorLog(e.data));
       render();
     }
   });

@@ -17,10 +17,35 @@
  *   onTriggerExit(other)  — when leaving a trigger collider
  *   onDestroy()       — once, when the entity is destroyed / scene ends
  *
- * If a script throws, the error is caught here, reported via the
- * error callback (wired to the editor's console via postMessage),
- * and the script instance is disabled so it doesn't spam errors
- * every frame. The editor itself never crashes.
+ * FAULT ISOLATION: a thrown error inside one lifecycle CALL is caught
+ * right there and reported — it does NOT disable the whole script
+ * instance anymore (except onStart, see below). A bug in onUpdate this
+ * frame just means this entity's onUpdate is skipped THIS frame; next
+ * frame it's called again like normal. One bad line doesn't stop the
+ * rest of the game, and doesn't even stop the rest of THIS script.
+ * The only lifecycle that still disables the instance after a failure
+ * is onStart: it only ever runs once, so there's nothing to "retry
+ * next frame", and letting onUpdate run against state onStart never
+ * finished setting up would likely just throw again immediately anyway.
+ *
+ * ERROR CLASSIFICATION: scripting/components/*API.js tag thrown Errors
+ * with a machine-readable `err.kind` —
+ *   "missing-component"     this.rigidbody/.sprite/etc but the entity
+ *                            doesn't have that component at all
+ *   "unsupported-body-type" e.g. this.rigidbody.addForce() on a
+ *                            Kinematic/Static body
+ *   "unknown-api"            this.rigidbody.addFrce() — property/method
+ *                            that doesn't exist at all (a typo)
+ * Anything without a `kind` (a plain script bug — null deref, bad
+ * logic, etc.) is reported as "script-error". _formatError() below
+ * turns each kind into a specific, actionable one-line message rather
+ * than a generic "X is not a function".
+ *
+ * REPEAT THROTTLING: the same error firing every frame (e.g. an
+ * onUpdate bug) would otherwise spam the console 60x/second. Identical
+ * (script, method, message) errors are reported immediately once, then
+ * suppressed and finally summarized with a repeat count — see
+ * _shouldReport().
  *
  * RUNTIME-ONLY FILE.
  */
@@ -28,6 +53,11 @@
 import { SCRIPT } from "../components/Script.js";
 
 const FIXED_TIMESTEP = 1 / 60;
+
+// After the first report, wait this many ms before reporting the same
+// (script, method, message) combination again — as a "(x N times)"
+// summary rather than a fresh spammy line every single frame.
+const REPEAT_THROTTLE_MS = 3000;
 
 export class ScriptSystem {
   /**
@@ -41,30 +71,83 @@ export class ScriptSystem {
     this._fixedAccumulator = 0;
     /** @type {function|null} set by the play popup to receive error reports */
     this._errorCallback = null;
+    /** @type {Map<string, {count:number, lastReportedAt:number}>} throttle state, keyed by "scriptName|method|message" */
+    this._errorThrottle = new Map();
   }
 
   /**
-   * Sets a callback that receives { scriptName, message, line, method }.
+   * Sets a callback that receives { scriptName, message, line, method, kind }.
    * The play popup wires this to postMessage back to the editor.
    */
   onError(cb) {
     this._errorCallback = cb;
   }
 
+  /**
+   * Turns a raw Error (possibly tagged with `.kind` by one of the
+   * scripting/components/*API.js files) into a specific, actionable
+   * message. Falls back to the error's own message for plain script
+   * bugs (null deref, bad logic, etc.) that have no special kind.
+   */
+  _formatError(err) {
+    const raw = err && err.message ? err.message : String(err);
+    const kind = (err && err.kind) || "script-error";
+    // The *API.js files already write a complete, specific sentence for
+    // missing-component / unsupported-body-type / unknown-api — they
+    // know exactly which object, which member, and why. Nothing to add.
+    return { kind, message: raw };
+  }
+
   _reportError(scriptName, err, methodName) {
-    const message = err && err.message ? err.message : String(err);
-    // Try to extract a line number from the error stack
+    const { kind, message } = this._formatError(err);
+
+    // Try to extract a line number from the error stack (only
+    // meaningful for plain script-error bugs thrown from the user's
+    // own compiled source — API errors point at engine code instead,
+    // so their line is intentionally left as "?").
     let line = "?";
-    if (err && err.stack) {
+    if (kind === "script-error" && err && err.stack) {
       const m = err.stack.match(/<anonymous>:(\d+):(\d+)/);
       if (m) line = String(parseInt(m[1], 10) - 2); // offset for the wrapper preamble
     }
+
+    const throttleKey = scriptName + "|" + (methodName || "?") + "|" + message;
+    if (!this._shouldReport(throttleKey)) return;
+
     if (this._errorCallback) {
-      this._errorCallback({ scriptName, message, line, method: methodName || "?" });
+      this._errorCallback({ scriptName, message, line, method: methodName || "?", kind });
     }
     if (typeof console !== "undefined") {
-      console.error("[Script] " + scriptName + "." + (methodName || "?") + "(): " + message);
+      const where = "'" + scriptName + "'" + (line !== "?" ? " line " + line : "") + " (" + (methodName || "?") + "())";
+      console.error("[Script] " + where + ": " + message);
     }
+  }
+
+  /**
+   * Returns true if this exact (script, method, message) should be
+   * reported now — true the first time, then throttled to at most once
+   * per REPEAT_THROTTLE_MS while it keeps recurring (e.g. an onUpdate
+   * bug firing every frame), with a "(repeated Nx)" note so repeats
+   * aren't silently lost, just decluttered.
+   */
+  _shouldReport(key) {
+    const now = Date.now();
+    const entry = this._errorThrottle.get(key);
+    if (!entry) {
+      this._errorThrottle.set(key, { count: 1, lastReportedAt: now });
+      return true;
+    }
+    entry.count++;
+    if (now - entry.lastReportedAt >= REPEAT_THROTTLE_MS) {
+      const repeats = entry.count - 1;
+      entry.lastReportedAt = now;
+      entry.count = 0;
+      if (repeats > 0 && typeof console !== "undefined") {
+        console.warn("[Script] (previous error above repeated " + repeats + " more time" + (repeats === 1 ? "" : "s") + " in the last " + Math.round(REPEAT_THROTTLE_MS / 1000) + "s)");
+      }
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -128,6 +211,12 @@ export class ScriptSystem {
             inst.handlers.onStart.call(inst.context);
             inst.started = true;
           } catch (err) {
+            // onStart only ever runs once — there's no "next frame" to
+            // retry it on, and letting onUpdate run against state
+            // onStart never got to set up would likely just throw
+            // again immediately. This is the one case that still
+            // disables the instance; every other lifecycle call below
+            // recovers on its own next frame instead.
             this._reportError(script.scriptName, err, "onStart");
             inst.enabled = false;
           }
@@ -171,8 +260,10 @@ export class ScriptSystem {
         try {
           inst.handlers.onUpdate.call(inst.context, dt);
         } catch (err) {
+          // Do NOT disable the instance — skip just this frame's call.
+          // The rest of the game (and this entity's other lifecycle
+          // methods) keeps running; onUpdate is tried again next frame.
           this._reportError(inst.scriptName, err, "onUpdate");
-          inst.enabled = false;
         }
       }
     }
@@ -188,7 +279,6 @@ export class ScriptSystem {
           inst.handlers.onFixedUpdate.call(inst.context, fixedDt);
         } catch (err) {
           this._reportError(inst.scriptName, err, "onFixedUpdate");
-          inst.enabled = false;
         }
       }
     }
@@ -209,7 +299,6 @@ export class ScriptSystem {
         inst.handlers.onCollision.call(inst.context, otherContext);
       } catch (err) {
         this._reportError(inst.scriptName, err, "onCollision");
-        inst.enabled = false;
       }
     }
   }
@@ -225,7 +314,6 @@ export class ScriptSystem {
         inst.handlers[handlerName].call(inst.context, otherContext);
       } catch (err) {
         this._reportError(inst.scriptName, err, handlerName);
-        inst.enabled = false;
       }
     }
   }
@@ -245,5 +333,6 @@ export class ScriptSystem {
     this.instances.clear();
     this._started = false;
     this._fixedAccumulator = 0;
+    this._errorThrottle.clear();
   }
 }

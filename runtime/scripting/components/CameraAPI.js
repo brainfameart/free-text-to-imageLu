@@ -11,16 +11,23 @@
 import { TRANSFORM } from "../../components/Transform.js";
 import { CAMERA } from "../../components/Camera.js";
 
+function _tag(err, kind) {
+  err.kind = kind;
+  return err;
+}
+
 /** Throws a descriptive error when a script calls this.camera on an entity
  *  without a Camera component. */
 function _requireCamera(entity) {
   var c = entity.getComponent(CAMERA);
-  if (!c) throw new Error(
+  if (!c) throw _tag(new Error(
     "'" + (entity.name || "Entity") + "' called this.camera but has no Camera component. " +
     "Add one in the Inspector (Add Component → Camera)."
-  );
+  ), "missing-component");
   return c;
 }
+
+const CAMERA_MEMBERS = new Set(["zoom", "shake"]);
 
 /**
  * Builds the `this.camera` object for a given entity.
@@ -32,7 +39,7 @@ function _requireCamera(entity) {
  * @returns {object}
  */
 export function createCameraAPI(entity) {
-  return {
+  const target = {
     /** Camera size (zoom level). Default 5 = no zoom. Smaller = zoomed in, larger = zoomed out. */
     get zoom() { return _requireCamera(entity).size; },
     set zoom(v) { _requireCamera(entity).size = Math.max(0.001, v); },
@@ -59,4 +66,17 @@ export function createCameraAPI(entity) {
       step();
     },
   };
+  return new Proxy(target, {
+    get: function (t, prop) {
+      if (typeof prop === "symbol" || prop === "then") return t[prop];
+      if (!(prop in t) && !CAMERA_MEMBERS.has(String(prop))) {
+        throw _tag(new Error(
+          "this.camera." + String(prop) + " does not exist. Check the spelling — " +
+          "valid members are: " + Array.from(CAMERA_MEMBERS).join(", ") + "."
+        ), "unknown-api");
+      }
+      var v = t[prop];
+      return typeof v === "function" ? v.bind(t) : v;
+    },
+  });
 }

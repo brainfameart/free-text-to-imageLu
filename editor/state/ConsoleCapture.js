@@ -53,13 +53,21 @@ export function installConsoleCapture() {
     pushLog("error", "[Unhandled Promise] " + reason);
   });
 
-  // 3. Mirror console.warn / console.error / console.log into the panel
-  //    too, so PixiJS's own internal console.warn() calls (deprecated
-  //    API usage, missing textures, etc.) show up here as well. Keep
-  //    calling the real console methods so browser devtools still work
-  //    normally alongside this.
+  // 3. Mirror console.log / console.warn / console.error into the panel
+  //    too, so both PixiJS's own internal console.warn() calls
+  //    (deprecated API usage, missing textures, etc.) AND a user
+  //    script's plain console.log("...") calls during Play mode show
+  //    up here. Keep calling the real console methods so browser
+  //    devtools still work normally alongside this.
+  const realLog = console.log.bind(console);
   const realWarn = console.warn.bind(console);
   const realError = console.error.bind(console);
+
+  console.log = (...args) => {
+    realLog(...args);
+    const text = args.map(stringifyArg).join(" ");
+    pushLog("log", text);
+  };
 
   console.warn = (...args) => {
     realWarn(...args);

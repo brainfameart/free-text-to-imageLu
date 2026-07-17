@@ -87,7 +87,7 @@ const DEFAULT_TEMPLATE =
   '// ' + 'Called every frame\n' +
   'function onUpdate() {\n' +
   '  // this.x, this.y — position\n' +
-  '  // this.velocityX, this.velocityY — velocity\n' +
+  '  // this.rigidbody.velocity — velocity (needs a Rigidbody 2D)\n' +
   '  // input.keyDown("Space") — check input\n' +
   '}\n';
 
