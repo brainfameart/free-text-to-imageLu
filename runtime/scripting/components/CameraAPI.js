@@ -78,5 +78,27 @@ export function createCameraAPI(entity) {
       var v = t[prop];
       return typeof v === "function" ? v.bind(t) : v;
     },
+    set: function (t, prop, value) {
+      var key = String(prop);
+      if (!(key in t) && !CAMERA_MEMBERS.has(key)) {
+        throw _tag(new Error(
+          "this.camera." + key + " does not exist. Check the spelling — " +
+          "valid members are: " + Array.from(CAMERA_MEMBERS).join(", ") + "."
+        ), "unknown-api");
+      }
+      // Without this file having had a set trap at all before, writing
+      // to this.camera.shake (a method, not a property — get-only by
+      // nature of being a function) would fall through to JS's own
+      // raw, untagged "Cannot assign to read only property" TypeError.
+      // See AnimatorAPI.js's set trap for the same pattern.
+      var descriptor = Object.getOwnPropertyDescriptor(t, key);
+      if (descriptor && typeof t[key] === "function") {
+        throw _tag(new Error(
+          "this.camera." + key + " is a method, not a settable property — call it as this.camera." + key + "(...) instead of assigning to it."
+        ), "unknown-api");
+      }
+      t[key] = value;
+      return true;
+    },
   });
 }

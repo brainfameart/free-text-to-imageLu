@@ -72,6 +72,14 @@ export class CharacterController {
     targetName = "", // name of the entity to pursue
     followSpeed = 150, // pursuit speed in px/s
     followDistance = 5, // stop when within this many pixels of the target
+
+    // Set (transiently, for one ControllerSystem update) by
+    // this.controller.simulateJump() (see scripting/components/
+    // ControllerAPI.js) to trigger a jump from script logic — consumed
+    // and reset to false by ControllerSystem.js right after reading it,
+    // the same one-shot request pattern Rigidbody2D's pendingForceX/Y
+    // uses. Plain data (RULES.txt section 4), not a function/callback.
+    requestJump = false,
   } = {}) {
     this.controllerType = controllerType;
 
@@ -96,5 +104,7 @@ export class CharacterController {
     this.targetName = targetName;
     this.followSpeed = followSpeed;
     this.followDistance = followDistance;
+
+    this.requestJump = requestJump;
   }
 }

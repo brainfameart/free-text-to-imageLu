@@ -75,5 +75,25 @@ export function createTransformAPI(entity) {
       var v = t[prop];
       return typeof v === "function" ? v.bind(t) : v;
     },
+    set: function (t, prop, value) {
+      var key = String(prop);
+      if (!(key in t) && !TRANSFORM_MEMBERS.has(key)) {
+        throw _tag(new Error(
+          "this.transform." + key + " does not exist. Check the spelling — " +
+          "valid members are: " + Array.from(TRANSFORM_MEMBERS).join(", ") + "."
+        ), "unknown-api");
+      }
+      // Without this file having had a set trap at all before, writing
+      // to this.transform.translate or .lookAt (methods, not settable
+      // properties) would fall through to JS's own raw, untagged
+      // TypeError. See AnimatorAPI.js's set trap for the same pattern.
+      if (typeof t[key] === "function") {
+        throw _tag(new Error(
+          "this.transform." + key + " is a method, not a settable property — call it as this.transform." + key + "(...) instead of assigning to it."
+        ), "unknown-api");
+      }
+      t[key] = value;
+      return true;
+    },
   });
 }

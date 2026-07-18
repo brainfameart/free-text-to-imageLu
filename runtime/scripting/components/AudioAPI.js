@@ -60,5 +60,27 @@ export function createAudioAPI(entity) {
       var v = t[prop];
       return typeof v === "function" ? v.bind(t) : v;
     },
+    set: function (t, prop, value) {
+      var key = String(prop);
+      if (!(key in t) && !AUDIO_MEMBERS.has(key)) {
+        throw _tag(new Error(
+          "this.audio." + key + " does not exist. Check the spelling — " +
+          "valid members are: " + Array.from(AUDIO_MEMBERS).join(", ") + "."
+        ), "unknown-api");
+      }
+      // Read-only guard — see AnimatorAPI.js's set trap for why this
+      // check exists: without it, assigning to a getter-only property
+      // (playing) throws JS's own raw, untagged TypeError instead of a
+      // clear script-facing message.
+      var descriptor = Object.getOwnPropertyDescriptor(t, key);
+      if (descriptor && descriptor.get && !descriptor.set) {
+        throw _tag(new Error(
+          "this.audio." + key + " is read-only — it reflects the audio source's real state and can't be set directly." +
+          (key === "playing" ? " Use this.audio.play() or this.audio.stop() instead." : "")
+        ), "unknown-api");
+      }
+      t[key] = value;
+      return true;
+    },
   });
 }

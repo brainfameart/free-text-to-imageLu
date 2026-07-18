@@ -69,7 +69,25 @@ export function createSpriteAPI(entity) {
       return t[prop];
     },
     set: function (t, prop, value) {
-      t[prop] = value;
+      var key = String(prop);
+      if (!(key in t) && !SPRITE_MEMBERS.has(key)) {
+        throw _tag(new Error(
+          "this.sprite." + key + " does not exist. Check the spelling — " +
+          "valid members are: " + Array.from(SPRITE_MEMBERS).join(", ") + "."
+        ), "unknown-api");
+      }
+      // Read-only guard (none of SPRITE_MEMBERS are read-only today,
+      // but this keeps the file self-maintaining if one becomes
+      // read-only later, instead of silently letting JS's own raw,
+      // untagged TypeError leak through — see AnimatorAPI.js's set
+      // trap for the same pattern).
+      var descriptor = Object.getOwnPropertyDescriptor(t, key);
+      if (descriptor && descriptor.get && !descriptor.set) {
+        throw _tag(new Error(
+          "this.sprite." + key + " is read-only and can't be set directly."
+        ), "unknown-api");
+      }
+      t[key] = value;
       return true;
     },
   });

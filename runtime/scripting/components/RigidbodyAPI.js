@@ -95,15 +95,39 @@ function _createDynamicAPI(entity) {
   return {
     get type() { var r = _rb(entity); return r ? r.bodyType : null; },
 
+    // IMPORTANT #1: for a Dynamic body, rb.velocityX/Y is READ-BACK-ONLY —
+    // PhysicsWorld.js overwrites it every step with whatever Rapier's
+    // solver actually computed (gravity, collisions, etc), so writing
+    // to it here would just get silently clobbered next frame and the
+    // object would never actually move. Setting velocity on a Dynamic
+    // body instead writes rb.driveVelocityX/Y — the same one-shot
+    // "seed Rapier's setLinvel this step" field ControllerSystem uses
+    // (see components/Rigidbody2D.js's doc comment and
+    // PhysicsWorld.js's driveVelocityX handling) — so a script setting
+    // this.rigidbody.velocity actually moves the body, same as a
+    // Character Controller does.
+    //
+    // IMPORTANT #2: unlike Kinematic (where velocity is STICKY — set it
+    // once and it keeps applying every frame until changed), Dynamic's
+    // driveVelocityX/Y is deliberately ONE-SHOT: PhysicsWorld.js resets
+    // it to null right after applying it each physics step, then lets
+    // Rapier's own solver take back over (gravity, drag, collisions).
+    // So `this.rigidbody.velocity = {x:5,y:0}` in onStart() only takes
+    // effect for a single step on a Dynamic body — call it every frame
+    // (e.g. in onUpdate) if you want it to keep holding that speed, the
+    // same way addForce() needs to be called every frame to sustain a
+    // push. If you want truly persistent, code-driven velocity that
+    // doesn't fight gravity/collisions between updates, use a Kinematic
+    // body instead.
     get velocity() { var r = _rb(entity); return r ? { x: r.velocityX, y: r.velocityY } : { x: 0, y: 0 }; },
     set velocity(v) {
       var r = _rb(entity);
-      if (r) { r.velocityX = v.x; r.velocityY = v.y; }
+      if (r) { r.driveVelocityX = v.x; r.driveVelocityY = v.y; }
     },
     get velocityX() { var r = _rb(entity); return r ? r.velocityX : 0; },
-    set velocityX(v) { var r = _rb(entity); if (r) r.velocityX = v; },
+    set velocityX(v) { var r = _rb(entity); if (r) r.driveVelocityX = v; },
     get velocityY() { var r = _rb(entity); return r ? r.velocityY : 0; },
-    set velocityY(v) { var r = _rb(entity); if (r) r.velocityY = v; },
+    set velocityY(v) { var r = _rb(entity); if (r) r.driveVelocityY = v; },
 
     get mass() { var r = _rb(entity); return r ? r.mass : 1; },
     set mass(v) { var r = _rb(entity); if (r) r.mass = v; },
@@ -223,11 +247,6 @@ const ALL_KNOWN_MEMBERS = new Set([
   "resolvedVelocity",
 ]);
 
-// Members that exist but are READ-ONLY on Static specifically (used to
-// give "velocity = ..." on a Static body its own clear message instead
-// of a generic "unknown member" or a silent no-op).
-const STATIC_READONLY_MEMBERS = new Set(["velocity", "velocityX", "velocityY", "type", "grounded"]);
-
 /**
  * Builds the `this.rigidbody` object for a given entity, LIVE-checking
  * the entity's current Rigidbody2D.bodyType on every property/method
@@ -281,8 +300,27 @@ export function createRigidbodyAPI(entity) {
         if (!_rb(entity)) throw _missingComponentError(entity, key);
         var current = _current();
         if (key in current) {
-          if (current.type === BodyType.STATIC && STATIC_READONLY_MEMBERS.has(key)) {
-            throw _unsupportedError(BodyType.STATIC, key);
+          // Generic read-only guard: ANY property defined with only a
+          // getter (no setter) in _createDynamicAPI/_createKinematicAPI/
+          // _createStaticAPI's object literals — e.g. type, isGrounded,
+          // isOnCeiling, resolvedVelocity, Static's velocity, Kinematic's
+          // gravityScale, etc. Without this check, `current[key] = value`
+          // below would still run and throw JavaScript's own generic
+          // "Cannot set property X ... which has only a getter"
+          // TypeError — technically correct, but untagged (falls through
+          // ScriptSystem as a bare "script-error" with no specific
+          // explanation) and not written for a script author to read.
+          // This catches it FIRST with a clear, tagged, actionable
+          // message instead, and — because it reads the descriptor
+          // dynamically rather than a hard-coded list of names — it
+          // automatically covers any future read-only field added to
+          // any body type's API without needing a matching list update.
+          var descriptor = Object.getOwnPropertyDescriptor(current, key);
+          if (descriptor && descriptor.get && !descriptor.set) {
+            throw _tag(new Error(
+              "rigidbody." + key + " is read-only on a " + (current.type || "?") +
+              " body — it reflects the body's real simulated state and can't be set directly."
+            ), "unsupported-body-type");
           }
           current[key] = value;
           return true;

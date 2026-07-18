@@ -48,6 +48,23 @@ const LENGTH_UNIT_PX_PER_METER = 100;
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
 
+// SINGLE SOURCE OF TRUTH for "how steep can a slope be before it's a
+// wall instead of walkable ground" — used both to configure Rapier's
+// OWN character-controller sweep behavior (setMaxSlopeClimbAngle,
+// below) and to classify isOnSlope/groundAngle from the resulting
+// collision normals (_syncKinematicMovement, further below). Matches
+// Unity's CharacterController.slopeLimit default of 45°. Keeping both
+// uses pinned to this one constant is what guarantees "can the
+// character actually climb this slope" and "what does the script see
+// via isOnSlope/groundAngle" never disagree with each other.
+const SLOPE_LIMIT_DEG = 45;
+// Below this angle (between flat ground and SLOPE_LIMIT_DEG), Rapier
+// auto-slides the character down rather than letting it stand still —
+// matches Rapier's own documented example (30°, paired with a 45°
+// climb limit) for a natural, Unity-like "band" of walkable-but-slidey
+// ground between dead flat and too-steep-to-climb.
+const SLOPE_SLIDE_LIMIT_DEG = 30;
+
 function rapierBodyType(RAPIER, bodyType) {
   switch (bodyType) {
     case BodyType.STATIC:
@@ -108,6 +125,40 @@ export class PhysicsWorld {
       this._characterController = this.rapierWorld.createCharacterController(
         this._characterControllerOffset
       );
+
+      // CRITICAL: Rapier's KinematicCharacterController defaults `up`
+      // to positive-Y — but this engine is Y-DOWN (gravity = +GRAVITY_Y
+      // above, screen-down = positive Y, matching Transform/Camera
+      // everywhere else in the engine). Without this explicit setUp
+      // call, Rapier computes its OWN internal ground/slope detection
+      // (computedGrounded(), and the angle checked against
+      // maxSlopeClimbAngle/minSlopeSlideAngle below) against exactly
+      // the WRONG up direction — i.e. floors could be misread as
+      // ceilings and vice versa at the Rapier level, before this
+      // file's own normal-based classification (see
+      // _syncKinematicMovement below) even runs. (0, -1) is "up" in
+      // this engine's Y-down convention — negative Y is away from the
+      // floor, against gravity.
+      this._characterController.setUp({ x: 0, y: -1 });
+
+      // Match Rapier's OWN slope handling to the SLOPE_LIMIT_DEG (45°)
+      // constant used below for isOnSlope/groundAngle classification —
+      // without this, Rapier runs its sweep/movement logic against
+      // whichever internal default it happens to ship with, which is
+      // not guaranteed to agree with what this file reports to
+      // scripts: the character could physically be stopped by (or
+      // allowed to climb) a slope at an angle that isOnSlope/
+      // groundAngle disagrees with, since those are two independently
+      // computed values. Setting both here keeps "can the character
+      // actually walk up this slope" and "what does the script see via
+      // this.controller.isGrounded/this.rigidbody.groundAngle" in sync
+      // — the same 45° Unity uses as CharacterController.slopeLimit's
+      // own default. minSlopeSlideAngle (auto-slide below this) is set
+      // lower (30°) than maxSlopeClimbAngle so there's a walkable band
+      // between "flat ground, no sliding" and "too steep to climb" —
+      // matching Rapier's own documented example values.
+      this._characterController.setMaxSlopeClimbAngle(SLOPE_LIMIT_DEG * DEG2RAD);
+      this._characterController.setMinSlopeSlideAngle(SLOPE_SLIDE_LIMIT_DEG * DEG2RAD);
 
       // Sliding: without this, hitting a wall at an angle just stops
       // the character dead instead of sliding along it — every other
@@ -582,7 +633,6 @@ export class PhysicsWorld {
     // SLOPE_LIMIT (45°): ground contacts whose surface normal is within
     // 45° of world-up are walkable ground; steeper contacts are walls.
     // This matches Unity's CharacterController.slopeLimit default.
-    const SLOPE_LIMIT_DEG = 45;
     let onCeiling = false, onWall = false, onSlope = false;
     let groundAngle = 0;
 
@@ -590,11 +640,19 @@ export class PhysicsWorld {
     for (let ci = 0; ci < numCols; ci++) {
       const col = this._characterController.computedCollision(ci);
       if (!col) continue;
-      // Rapier's character-controller collision object may expose the
-      // contact normal. Guard with a null-check so older WASM builds
-      // (which may not include it) fall through to the movement-based
-      // fallback below without throwing.
-      const normal = col.normal;
+      // Rapier's CharacterCollision exposes normal1 (world-space outward
+      // normal ON THE OBSTACLE — i.e. pointing away from its surface,
+      // which for a floor the character stands on points straight up,
+      // toward the character — exactly the "which way does this surface
+      // push the character away" semantics this classification assumes)
+      // and normal2 (local-space normal on the character's own shape,
+      // NOT what we want here). There is no plain `.normal` field on
+      // this object — using that name here previously made this check
+      // always false, silently skipping straight to the cruder
+      // movement-based fallback below for EVERY collision, every frame,
+      // regardless of what Rapier actually computed. normal1 is the
+      // correct, precise, per-collision-normal field to read.
+      const normal = col.normal1;
       if (normal && typeof normal.y === "number") {
         // Angle between the collision normal and world-up (0, -1 in Y-down).
         // dot((nx,ny),(0,-1)) = -ny → angle = acos(-ny)
@@ -614,8 +672,11 @@ export class PhysicsWorld {
       }
     }
 
-    // Movement-based fallback when normals are unavailable: infer
-    // ceiling/wall from how much of the desired displacement was blocked.
+    // Movement-based fallback — kept as a safety net for the rare case
+    // a collision entry has no usable normal1 (e.g. a degenerate/zero
+    // vector from an edge-case contact), NOT as the primary path
+    // anymore now that normal1 above is read correctly and fires for
+    // every normal collision.
     if (!onCeiling && !onWall && numCols > 0) {
       // Ceiling: tried to move up but was blocked from above.
       if (desiredY < -0.5 && corrected.y > desiredY + 1) onCeiling = true;

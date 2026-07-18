@@ -267,6 +267,55 @@ export class ScriptSystem {
         }
       }
     }
+
+    // Actually remove every entity queued this frame via this.destroy()
+    // (see ScriptAPI.js's EntityContext.destroy()) — done LAST, after
+    // every system (controller/physics/animation/render/this system's
+    // own onUpdate above) has already had its pass for the frame, so
+    // nothing reads a half-destroyed entity mid-frame. This is also
+    // where onDestroy() actually fires for a per-entity destroy() call
+    // (as opposed to a whole-scene teardown, which fires it via this
+    // class's own destroy() method instead — see that method's doc
+    // comment).
+    this._flushDestroyed(world);
+  }
+
+  /**
+   * Removes every entity queued via this.destroy() this frame: fires
+   * onDestroy on that entity's own script instances (same try/catch/
+   * report pattern as every other lifecycle call — a buggy onDestroy
+   * doesn't stop the rest of cleanup), then drops its instances Map
+   * entry and its cached EntityContext (scriptApi.clearContext) so
+   * nothing keeps a stale reference once World.flushDestroyed() below
+   * actually removes it — the same reuse-safety clearContexts() exists
+   * for on a whole-scene reload, just scoped to one entity here.
+   * World.flushDestroyed() itself removes the entity from
+   * world.entities; PhysicsWorld.step() and RenderSystem.update()
+   * (next frame) then notice it's gone from their queries the same way
+   * they already do for any entity removed via the editor's Delete —
+   * no separate physics/render cleanup call is needed here.
+   */
+  _flushDestroyed(world) {
+    const removedEntities = world.flushDestroyed();
+    if (removedEntities.length === 0) return;
+    for (const entity of removedEntities) {
+      const instances = this.instances.get(entity.id);
+      if (instances) {
+        for (const inst of instances) {
+          if (inst.enabled && inst.handlers.onDestroy) {
+            try {
+              inst.handlers.onDestroy.call(inst.context);
+            } catch (err) {
+              this._reportError(inst.scriptName, err, "onDestroy");
+            }
+          }
+        }
+        this.instances.delete(entity.id);
+      }
+      if (this.scriptApi && this.scriptApi.clearContext) {
+        this.scriptApi.clearContext(entity.id);
+      }
+    }
   }
 
   _tickFixed(world, fixedDt) {

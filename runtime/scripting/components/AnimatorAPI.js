@@ -81,5 +81,32 @@ export function createAnimatorAPI(entity) {
       var v = t[prop];
       return typeof v === "function" ? v.bind(t) : v;
     },
+    set: function (t, prop, value) {
+      var key = String(prop);
+      if (!(key in t) && !ANIMATOR_MEMBERS.has(key)) {
+        throw _tag(new Error(
+          "this.animator." + key + " does not exist. Check the spelling — " +
+          "valid members are: " + Array.from(ANIMATOR_MEMBERS).join(", ") + "."
+        ), "unknown-api");
+      }
+      // Read-only guard: without a Proxy set trap at all (as this file
+      // had before), assigning to a getter-only property (playing,
+      // currentClip) falls through to JS's own default behavior and
+      // throws a raw, untagged "Cannot set property X ... which has
+      // only a getter" TypeError — technically correct, but it isn't
+      // written for a script author and ScriptSystem can't classify it
+      // into a specific console message. Checking the descriptor here
+      // catches it first with a clear, tagged, actionable error, and
+      // self-maintains if more read-only fields are added later.
+      var descriptor = Object.getOwnPropertyDescriptor(t, key);
+      if (descriptor && descriptor.get && !descriptor.set) {
+        throw _tag(new Error(
+          "this.animator." + key + " is read-only — it reflects the animation's real state and can't be set directly." +
+          (key === "playing" ? " Use this.animator.play(clipName) or this.animator.stop() instead." : "")
+        ), "unknown-api");
+      }
+      t[key] = value;
+      return true;
+    },
   });
 }

@@ -21,22 +21,25 @@
  * shape, and other.x/other.y is the documented pattern inside
  * onCollision(other)/onTriggerEnter(other)). Everything else —
  * velocity, physics forces, sprite properties, animation, camera,
- * audio — is reached ONLY through its sub-object (this.rigidbody.*,
- * this.sprite.*, this.animator.*, this.camera.*, this.audio.*).
+ * audio, movement-type tunables (jump/car/follow settings) — is
+ * reached ONLY through its sub-object (this.rigidbody.*, this.sprite.*,
+ * this.animator.*, this.camera.*, this.audio.*, this.controller.*).
  * There is deliberately no this.velocityX / this.addForce() / this.
- * texture flat-shortcut duplicate of these: RigidbodyAPI.js in
- * particular exposes a DIFFERENT shape per Rigidbody2D.bodyType
- * (Dynamic/Kinematic/Static), and a second flat copy of that API
- * would either have to duplicate the per-body-type logic or drift out
- * of sync with it — two ways to do the same thing that could behave
- * differently from each other. See scripting/components/RigidbodyAPI.js.
+ * texture / this.isOnGround flat-shortcut duplicate of these:
+ * RigidbodyAPI.js exposes a DIFFERENT shape per Rigidbody2D.bodyType
+ * (Dynamic/Kinematic/Static), and ControllerAPI.js exposes a DIFFERENT
+ * shape per CharacterController.controllerType (Character/Platformer/
+ * Top-Down/Car/Follow/Free) — a second flat copy of either would have
+ * to duplicate that per-type logic or drift out of sync with it, two
+ * ways to do the same thing that could behave differently from each
+ * other. See scripting/components/RigidbodyAPI.js and ControllerAPI.js.
  *
  * Each `this.<subobject>` (transform, sprite, rigidbody, animator,
- * camera, audio) is built by its OWN file under scripting/components/,
- * not inlined here — that folder is where new scripting components get
- * added as the API grows (RULES.txt scripting/ folder convention),
- * keeping this file focused on wiring rather than growing without
- * bound.
+ * camera, audio, controller) is built by its OWN file under
+ * scripting/components/, not inlined here — that folder is where new
+ * scripting components get added as the API grows (RULES.txt
+ * scripting/ folder convention), keeping this file focused on wiring
+ * rather than growing without bound.
  *
  * RUNTIME-ONLY FILE.
  */
@@ -50,6 +53,7 @@ import { createRigidbodyAPI } from "./components/RigidbodyAPI.js";
 import { createAnimatorAPI } from "./components/AnimatorAPI.js";
 import { createCameraAPI } from "./components/CameraAPI.js";
 import { createAudioAPI } from "./components/AudioAPI.js";
+import { createControllerAPI } from "./components/ControllerAPI.js";
 
 /**
  * The `this` context inside a user script. All property access reads
@@ -116,6 +120,44 @@ class EntityContext {
   get enabled() { const s = this._entity.getComponent(SCRIPT); return s ? s.enabled : true; }
   set enabled(v) { const s = this._entity.getComponent(SCRIPT); if (s) s.enabled = !!v; }
 
+  /**
+   * Destroys this entity — removes it from the scene, exactly like
+   * Unity's Destroy(gameObject). Safe to call from ANY lifecycle
+   * method (onUpdate, onCollision, onTriggerEnter, even onStart) and
+   * safe to call more than once (later calls are harmless no-ops).
+   *
+   * DEFERRED, not immediate — matches Unity's own Destroy() semantics
+   * exactly: the entity is only actually removed at the END of this
+   * frame (see World.js's queueDestroy()/flushDestroyed() and
+   * ScriptSystem.js's update(), which calls flushDestroyed() after
+   * every system has finished its pass for the frame). That means:
+   *   - this.x, this.rigidbody.velocity, etc. all keep working
+   *     normally for the REST of this frame after calling destroy() —
+   *     the entity isn't half-torn-down mid-callback.
+   *   - Other scripts' onCollision(other) firing later THIS SAME
+   *     frame for this entity still receive a valid `other` context.
+   *   - Starting next frame, the entity is gone: it won't appear in
+   *     find()/scene.query(), its onUpdate/onFixedUpdate won't run,
+   *     its Rapier physics body is removed, its Pixi sprite is
+   *     removed, and onDestroy() fires on it exactly once right
+   *     before it's actually removed.
+   * If you need to know synchronously whether an entity is already
+   * queued for removal (e.g. to avoid double-scoring a pickup two
+   * scripts both collided with this same frame), check this.destroyed.
+   */
+  destroy() {
+    this._world.queueDestroy(this._entity.id);
+  }
+
+  /** True once destroy() has been called on this entity (this frame or
+   *  a callback later this same frame) but before it's actually been
+   *  removed — see destroy()'s doc comment for the full deferred-
+   *  removal timeline. Never true again after the entity is gone
+   *  (there's no context left to read it from at that point). */
+  get destroyed() {
+    return this._world.isPendingDestroy(this._entity.id);
+  }
+
   // NOTE: velocity, sprite (texture/color/flip/opacity), and rigidbody
   // physics (isGrounded, addForce, move, etc.) are intentionally NOT
   // duplicated here as this.<x> shortcuts. Each lives in exactly ONE
@@ -143,6 +185,12 @@ class EntityContext {
     this.animator = createAnimatorAPI(entity);
     this.camera = createCameraAPI(entity);
     this.audio = createAudioAPI(entity);
+    // Movement-type-aware — see scripting/components/ControllerAPI.js.
+    // Exposes isGrounded/simulateJump/jumpForce/etc. ONLY for Character
+    // Controller/Platformer, car tunables ONLY for Car, and so on,
+    // instead of a flat this.rigidbody.isOnGround duplicate that would
+    // mean the same thing two different ways.
+    this.controller = createControllerAPI(entity);
   }
 }
 
@@ -234,6 +282,20 @@ export class ScriptAPI {
    */
   clearContexts() {
     this._contexts.clear();
+  }
+
+  /**
+   * Drops the cached EntityContext for ONE entity id. Used when a
+   * single entity is destroyed via this.destroy() (see EntityContext's
+   * destroy() method and ScriptSystem.js's flushDestroyed handling) —
+   * the rest of the scene keeps running, so a full clearContexts()
+   * would be wrong here (it would drop every OTHER entity's live
+   * context too); this only removes the one that no longer exists, for
+   * the same reuse-safety reason clearContexts() exists at all.
+   * @param {string} id
+   */
+  clearContext(id) {
+    this._contexts.delete(id);
   }
 
   /**

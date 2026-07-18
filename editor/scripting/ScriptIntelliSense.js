@@ -22,6 +22,7 @@ import { RIGIDBODY_2D, BodyType } from "../../runtime/components/Rigidbody2D.js"
 import { CAMERA } from "../../runtime/components/Camera.js";
 import { AUDIO_SOURCE } from "../../runtime/components/AudioSource.js";
 import { SPRITE_ANIMATION } from "../../runtime/components/SpriteAnimation.js";
+import { CHARACTER_CONTROLLER, ControllerType } from "../../runtime/components/CharacterController.js";
 
 let _registered = false;
 
@@ -86,6 +87,49 @@ const RIGIDBODY_API_STATIC = [
   { label: "velocity", detail: "Always { x:0, y:0 } — static bodies never move", insert: "velocity" },
 ];
 
+// Controller scripting API is SPLIT PER MOVEMENT TYPE, matching
+// runtime/scripting/components/ControllerAPI.js exactly — mirrors the
+// same body-type-split convention RigidbodyAPI.js uses. Autocomplete
+// only shows the members valid for the entity's ACTUAL Movement Type
+// (Inspector's CharacterController.controllerType), so a Car never
+// sees isGrounded/simulateJump and a Follow never sees moveSpeed.
+const CONTROLLER_API_WALK_COMMON = [
+  { label: "controllerType", detail: "'Character Controller' | 'Platformer' | 'Top-Down' (read-only)", insert: "controllerType" },
+  { label: "moveSpeed", detail: "Horizontal move speed in px/s", insert: "moveSpeed = " },
+  { label: "acceleration", detail: "How fast velocity approaches target speed (higher = snappier)", insert: "acceleration = " },
+  { label: "airControl", detail: "0-1 multiplier on acceleration while airborne (Platformer only, ignored elsewhere)", insert: "airControl = " },
+  { label: "useGravity", detail: "Whether gravity applies (always true for Platformer, always false for Top-Down)", insert: "useGravity = " },
+  { label: "useDefaultInput", detail: "Whether WASD/Arrows are wired automatically — turn off to drive movement entirely from script", insert: "useDefaultInput = " },
+];
+const CONTROLLER_API_JUMPABLE = CONTROLLER_API_WALK_COMMON.concat([
+  { label: "canJump", detail: "Whether jump is enabled", insert: "canJump = " },
+  { label: "jumpForce", detail: "Upward velocity applied on jump (px/s)", insert: "jumpForce = " },
+  { label: "maxJumps", detail: "1 = no double jump, 2 = double jump, etc.", insert: "maxJumps = " },
+  { label: "isGrounded", detail: "True when touching the ground (read-only)", insert: "isGrounded" },
+  { label: "simulateJump()", detail: "Trigger a jump from script, same as pressing Space — respects canJump/maxJumps", insert: "simulateJump()" },
+]);
+const CONTROLLER_API_CHARACTER = CONTROLLER_API_JUMPABLE;
+const CONTROLLER_API_PLATFORMER = CONTROLLER_API_JUMPABLE;
+const CONTROLLER_API_TOP_DOWN = CONTROLLER_API_WALK_COMMON;
+const CONTROLLER_API_CAR = [
+  { label: "controllerType", detail: "'Car' (read-only)", insert: "controllerType" },
+  { label: "maxSpeed", detail: "Top forward speed in px/s (reverse caps at half this)", insert: "maxSpeed = " },
+  { label: "acceleration", detail: "How fast the car speeds up (px/s²) — maps to the Inspector's Acceleration field", insert: "acceleration = " },
+  { label: "brakeForce", detail: "How fast it brakes / goes into reverse (px/s²)", insert: "brakeForce = " },
+  { label: "turnSpeed", detail: "Max turn rate in deg/s at full speed (scales down at lower speeds)", insert: "turnSpeed = " },
+  { label: "driftFactor", detail: "0-1: how much lateral velocity is retained (higher = more slide)", insert: "driftFactor = " },
+  { label: "useDefaultInput", detail: "Whether WASD/Arrows (throttle/brake/steer) are wired automatically", insert: "useDefaultInput = " },
+];
+const CONTROLLER_API_FOLLOW = [
+  { label: "controllerType", detail: "'Follow' (read-only)", insert: "controllerType" },
+  { label: "targetName", detail: "Name of the entity to pursue", insert: 'targetName = "' },
+  { label: "followSpeed", detail: "Pursuit speed in px/s", insert: "followSpeed = " },
+  { label: "followDistance", detail: "Stop when within this many pixels of the target", insert: "followDistance = " },
+];
+const CONTROLLER_API_FREE = [
+  { label: "controllerType", detail: "'Free' — fully script-driven, ControllerSystem does nothing for this entity. Drive this.rigidbody directly.", insert: "controllerType" },
+];
+
 const ANIMATOR_API = [
   { label: "play(clipName)", detail: "Play a named animation clip", insert: 'play("' },
   { label: "stop()", detail: "Stop the current animation", insert: "stop()" },
@@ -119,18 +163,23 @@ const THIS_SHORTCUTS_BASE = [
   { label: "translate(dx, dy)", detail: "Move by a delta amount this frame", insert: "translate(" },
   { label: "visible", detail: "Show/hide the entity", insert: "visible = " },
   { label: "enabled", detail: "Enable/disable this script", insert: "enabled = " },
+  { label: "destroy()", detail: "Destroy this entity — removed at the end of this frame, onDestroy() fires just before removal", insert: "destroy()" },
+  { label: "destroyed", detail: "True once destroy() has been called on this entity but before it's actually removed (read-only)", insert: "destroyed" },
 ];
 
 // NOTE: there is deliberately no THIS_SPRITE_SHORTCUTS, THIS_VELOCITY_
-// SHORTCUTS, THIS_KINEMATIC_SHORTCUTS, or THIS_DYNAMIC_SHORTCUTS array
-// here. Sprite and rigidbody/physics properties are reached ONLY
-// through this.sprite.* and this.rigidbody.* (see SPRITE_API and the
-// RIGIDBODY_API_* lists below, which mirror runtime/scripting/
-// components/SpriteAPI.js and RigidbodyAPI.js exactly) — one API per
-// capability, so autocomplete never offers two different-looking ways
-// to do the same thing (this.addForce() vs this.rigidbody.addForce())
-// that could behave differently, especially since RigidbodyAPI's
-// shape depends on the entity's actual body type.
+// SHORTCUTS, THIS_KINEMATIC_SHORTCUTS, THIS_DYNAMIC_SHORTCUTS, or
+// THIS_CONTROLLER_SHORTCUTS array here. Sprite, rigidbody/physics, and
+// movement-type properties are reached ONLY through this.sprite.*,
+// this.rigidbody.*, and this.controller.* (see SPRITE_API and the
+// RIGIDBODY_API_*/CONTROLLER_API_* lists below, which mirror
+// runtime/scripting/components/SpriteAPI.js, RigidbodyAPI.js, and
+// ControllerAPI.js exactly) — one API per capability, so autocomplete
+// never offers two different-looking ways to do the same thing
+// (this.addForce() vs this.rigidbody.addForce(), or this.isOnGround vs
+// this.controller.isGrounded) that could behave differently, especially
+// since RigidbodyAPI's shape depends on the entity's actual body type
+// and ControllerAPI's shape depends on the entity's actual movement type.
 
 const GLOBAL_APIS = [
   { label: "find(name)", detail: "Find entity by name → same as scene.find(name). Returns an object with .x, .y, .sprite, .rigidbody, etc.", insert: 'find("' },
@@ -236,6 +285,47 @@ function _rigidbodyApiForEntities(entities) {
   return merged;
 }
 
+// Same idea as _rigidbodyApiForBodyType/_rigidbodyApiForEntities, but
+// for CharacterController.controllerType — mirrors
+// runtime/scripting/components/ControllerAPI.js exactly, so
+// autocomplete never offers e.g. simulateJump() on a Car/Follow/Free
+// entity only for it to throw at runtime.
+function _controllerApiForType(controllerType) {
+  if (controllerType === ControllerType.CHARACTER) return CONTROLLER_API_CHARACTER;
+  if (controllerType === ControllerType.PLATFORMER) return CONTROLLER_API_PLATFORMER;
+  if (controllerType === ControllerType.TOP_DOWN) return CONTROLLER_API_TOP_DOWN;
+  if (controllerType === ControllerType.CAR) return CONTROLLER_API_CAR;
+  if (controllerType === ControllerType.FOLLOW) return CONTROLLER_API_FOLLOW;
+  return CONTROLLER_API_FREE;
+}
+
+function _controllerApiForEntities(entities) {
+  const seen = new Set();
+  const lists = [];
+  for (const e of entities) {
+    if (!e.hasComponent(CHARACTER_CONTROLLER)) continue;
+    const cc = e.getComponent(CHARACTER_CONTROLLER);
+    const controllerType = cc ? cc.controllerType : ControllerType.FREE;
+    if (seen.has(controllerType)) continue;
+    seen.add(controllerType);
+    lists.push(_controllerApiForType(controllerType));
+  }
+  if (lists.length === 0) return CONTROLLER_API_FREE;
+  if (lists.length === 1) return lists[0];
+  // Mixed movement types across owners — union by label, same approach
+  // _rigidbodyApiForEntities uses for mixed body types.
+  const merged = [];
+  const labelsSeen = new Set();
+  for (const list of lists) {
+    for (const item of list) {
+      if (labelsSeen.has(item.label)) continue;
+      labelsSeen.add(item.label);
+      merged.push(item);
+    }
+  }
+  return merged;
+}
+
 // Full list of every shortcut + component API + global.
 // Used when the engine can't track a variable's type (untracked variable,
 // generic find() result). Shows everything so nothing valid is hidden.
@@ -292,6 +382,21 @@ const RIGIDBODY_API_ALL = (function () {
   return merged;
 })();
 
+// Union of every controller API across all movement types — same
+// untracked-fallback purpose as RIGIDBODY_API_ALL above.
+const CONTROLLER_API_ALL = (function () {
+  const merged = [];
+  const seen = new Set();
+  for (const list of [CONTROLLER_API_CHARACTER, CONTROLLER_API_TOP_DOWN, CONTROLLER_API_CAR, CONTROLLER_API_FOLLOW, CONTROLLER_API_FREE]) {
+    for (const item of list) {
+      if (seen.has(item.label)) continue;
+      seen.add(item.label);
+      merged.push(item);
+    }
+  }
+  return merged;
+})();
+
 // Maps a component key to its sub-object name + API list.
 const COMPONENT_APIS = [
   { key: TRANSFORM, name: "transform", api: TRANSFORM_API },
@@ -300,6 +405,7 @@ const COMPONENT_APIS = [
   { key: SPRITE_ANIMATION, name: "animator", api: ANIMATOR_API },
   { key: CAMERA, name: "camera", api: CAMERA_API },
   { key: AUDIO_SOURCE, name: "audio", api: AUDIO_API },
+  { key: CHARACTER_CONTROLLER, name: "controller", api: CONTROLLER_API_ALL },
 ];
 
 function _makeCompletion(monaco, item, range) {
@@ -385,9 +491,14 @@ export function registerIntelliSense(monaco) {
         // Sub-object completions (this.sprite, this.rigidbody, etc.)
         for (const c of COMPONENT_APIS) {
           if (keys.has(c.key)) {
-            // Rigidbody is body-type-aware so a Kinematic entity's this.
-            // never sees addForce()/addImpulse() in autocomplete.
-            const api = c.key === RIGIDBODY_2D ? _rigidbodyApiForEntities(contextEntities) : c.api;
+            // Rigidbody is body-type-aware and Controller is movement-
+            // type-aware, so a Kinematic entity's this. never sees
+            // addForce()/addImpulse(), and a Car/Follow/Free entity's
+            // this. never sees isGrounded()/simulateJump() in
+            // autocomplete.
+            const api = c.key === RIGIDBODY_2D ? _rigidbodyApiForEntities(contextEntities)
+              : c.key === CHARACTER_CONTROLLER ? _controllerApiForEntities(contextEntities)
+              : c.api;
             for (const item of api) {
               suggestions.push(Object.assign(_makeCompletion(monaco, item, range), { label: c.name + "." + item.label }));
             }
@@ -408,6 +519,7 @@ export function registerIntelliSense(monaco) {
         else if (subObj === "animator") items = ANIMATOR_API;
         else if (subObj === "camera") items = CAMERA_API;
         else if (subObj === "audio") items = AUDIO_API;
+        else if (subObj === "controller") items = _controllerApiForEntities(_getContextEntities());
         else if (subObj === "scene") items = SCENE_API;
         else if (subObj === "physics") items = PHYSICS_API;
         else if (subObj === "input") items = INPUT_API;
@@ -437,6 +549,8 @@ export function registerIntelliSense(monaco) {
               if (entityKeys.has(c.key)) {
                 const api = c.key === RIGIDBODY_2D
                   ? _rigidbodyApiForEntities(foundEntities)
+                  : c.key === CHARACTER_CONTROLLER
+                  ? _controllerApiForEntities(foundEntities)
                   : c.api;
                 for (const item of api) {
                   suggestions.push(Object.assign(_makeCompletion(monaco, item, range), { label: c.name + "." + item.label }));

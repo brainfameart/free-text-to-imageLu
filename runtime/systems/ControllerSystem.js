@@ -92,16 +92,27 @@ export class ControllerSystem extends System {
       const controller = entity.getComponent(CHARACTER_CONTROLLER);
       const rigidbody = entity.getComponent(RIGIDBODY_2D);
 
-      if (!controller.useDefaultInput || controller.controllerType === ControllerType.FREE) continue;
+      // FREE means "fully script-driven" (see CharacterController.js's
+      // doc comment) — this system does nothing at all for it, so a
+      // script's own this.rigidbody calls are never fought/overridden.
+      if (controller.controllerType === ControllerType.FREE) continue;
       // Static bodies never move — nothing to drive.
       if (rigidbody.bodyType === BodyType.STATIC) continue;
 
       const type = controller.controllerType;
       if (type === ControllerType.CAR) {
-        this._applyCar(entity, controller, rigidbody, dt);
+        if (controller.useDefaultInput) this._applyCar(entity, controller, rigidbody, dt);
       } else if (type === ControllerType.FOLLOW) {
         this._applyFollow(entity, controller, rigidbody, dt, world);
       } else if (rigidbody.bodyType === BodyType.DYNAMIC) {
+        // NOTE: unlike useDefaultInput's old all-or-nothing gate, this
+        // still runs even with useDefaultInput=false for Character/
+        // Platformer/Top-Down — it just skips reading the keyboard
+        // (see the `controller.useDefaultInput ? ... : false` reads
+        // inside _applyDynamic/_applyKinematic below) so gravity and
+        // controller.simulateJump() (scripting/components/
+        // ControllerAPI.js) still work for a controller a script wants
+        // to trigger jumps on without also taking over WASD.
         this._applyDynamic(entity.id, controller, rigidbody, dt);
       } else {
         this._applyKinematic(entity.id, controller, rigidbody, dt);
@@ -116,11 +127,17 @@ export class ControllerSystem extends System {
    * contact pushback, and landing on slopes all stay fully Rapier's.
    */
   _applyDynamic(entityId, controller, rigidbody, dt) {
-    const left = this.input.isDown("ArrowLeft", "KeyA");
-    const right = this.input.isDown("ArrowRight", "KeyD");
-    const up = this.input.isDown("ArrowUp", "KeyW");
-    const down = this.input.isDown("ArrowDown", "KeyS");
-    const jumpPressed = this.input.isDown("Space");
+    const useKeys = controller.useDefaultInput;
+    const left = useKeys && this.input.isDown("ArrowLeft", "KeyA");
+    const right = useKeys && this.input.isDown("ArrowRight", "KeyD");
+    const up = useKeys && this.input.isDown("ArrowUp", "KeyW");
+    const down = useKeys && this.input.isDown("ArrowDown", "KeyS");
+    // A script can request a jump via this.controller.simulateJump()
+    // (scripting/components/ControllerAPI.js sets requestJump=true on
+    // the component); consumed here alongside the keyboard Space key
+    // so both trigger the exact same jump logic/limits.
+    const jumpPressed = (useKeys && this.input.isDown("Space")) || controller.requestJump;
+    controller.requestJump = false;
 
     const moveX = (right ? 1 : 0) - (left ? 1 : 0);
     const targetX = moveX * controller.moveSpeed;
@@ -145,6 +162,17 @@ export class ControllerSystem extends System {
     // a jump impulse (a velocity kick), never to simulate gravity
     // ourselves — that would double up with Rapier's.
     const grounded = Math.abs(rigidbody.velocityY) < 20; // small epsilon: resting/near-zero vertical speed
+    // Store back onto the component (same field the Kinematic sweep in
+    // PhysicsWorld.js already populates) so this.controller.isGrounded
+    // (see scripting/components/ControllerAPI.js) reads real state on a
+    // Dynamic body too, not just Kinematic. This IS a coarser signal
+    // than Kinematic's real sweep-based grounded (no isOnCeiling/
+    // isOnWall/isOnSlope/groundAngle equivalent exists for Dynamic —
+    // Rapier's own solver handles those contacts, this engine doesn't
+    // track them per-axis for Dynamic bodies), but it's the same
+    // approximation this system already used internally, just now
+    // exposed instead of staying a local-only const.
+    rigidbody.grounded = grounded;
     if (grounded) this._jumpsUsed.set(entityId, 0);
 
     if (controller.canJump && jumpPressed) {
@@ -163,11 +191,13 @@ export class ControllerSystem extends System {
    * uses for Dynamic bodies, to keep the two body types feeling similar.
    */
   _applyKinematic(entityId, controller, rigidbody, dt) {
-    const left = this.input.isDown("ArrowLeft", "KeyA");
-    const right = this.input.isDown("ArrowRight", "KeyD");
-    const up = this.input.isDown("ArrowUp", "KeyW");
-    const down = this.input.isDown("ArrowDown", "KeyS");
-    const jumpPressed = this.input.isDown("Space");
+    const useKeys = controller.useDefaultInput;
+    const left = useKeys && this.input.isDown("ArrowLeft", "KeyA");
+    const right = useKeys && this.input.isDown("ArrowRight", "KeyD");
+    const up = useKeys && this.input.isDown("ArrowUp", "KeyW");
+    const down = useKeys && this.input.isDown("ArrowDown", "KeyS");
+    const jumpPressed = (useKeys && this.input.isDown("Space")) || controller.requestJump;
+    controller.requestJump = false;
 
     const moveX = (right ? 1 : 0) - (left ? 1 : 0);
     const targetX = moveX * controller.moveSpeed;
