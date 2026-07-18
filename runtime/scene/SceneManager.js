@@ -35,6 +35,35 @@ export function getSceneList() {
   return _scenes.map((s) => ({ id: s.id, name: s.name }));
 }
 
+/**
+ * Returns the full scene list including serialized data payloads.
+ * Used by the editor to pass all scenes to the play popup so
+ * scene.load() can work there.
+ * @returns {Array<{id:string,name:string,data:object|null}>}
+ */
+export function getAllScenesData() {
+  return _scenes.map((s) => ({ id: s.id, name: s.name, data: s.data }));
+}
+
+/**
+ * Populates the scene list from an external array (e.g. passed from
+ * the editor to the play popup). Does NOT load any scene into the World
+ * — call switchToScene() or deserializeScene() after this.
+ * @param {Array<{id:string,name:string,data:object}>} scenesData
+ */
+export function loadAllScenesData(scenesData) {
+  if (!scenesData || !scenesData.length) return;
+  _scenes = scenesData.map((s) => ({ id: s.id, name: s.name, data: s.data }));
+  // activeIndex stays -1 until switchToScene/initSceneManager is called.
+  // Compute the max existing id number so createScene() doesn't collide.
+  let maxId = 0;
+  for (const s of _scenes) {
+    const n = parseInt((s.id || "").replace("scene", ""), 10);
+    if (!isNaN(n) && n > maxId) maxId = n;
+  }
+  _nextSceneId = maxId + 1;
+}
+
 export function getActiveSceneId() {
   return _activeIndex >= 0 ? _scenes[_activeIndex].id : null;
 }

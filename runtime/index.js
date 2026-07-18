@@ -25,12 +25,14 @@ import { serializeScene, deserializeScene } from "./scene/SceneSerializer.js";
 import {
   initSceneManager,
   getSceneList,
+  getAllScenesData,
   getActiveSceneId,
   createScene,
   saveActiveScene,
   switchToScene,
   renameScene,
   deleteScene,
+  loadAllScenesData,
 } from "./scene/SceneManager.js";
 import { ScriptAPI } from "./scripting/ScriptAPI.js";
 import { importSpriteFiles, getAllSpriteAssets, getSpriteAsset, importAudioFiles, getAllAudioAssets, getAudioAsset } from "./assets/AssetRegistry.js";
@@ -133,9 +135,17 @@ export function createGame({ pixiApp, followMainCamera = false }) {
   // only calls syncSpriteRender() selectively, never game.loop.start().
   const scriptSystem = new ScriptSystem(scriptApi);
   world.addSystem(scriptSystem);
+
+  // Wire ScriptSystem into PhysicsSystem so collision and trigger events
+  // dispatched by Rapier's EventQueue are forwarded to user script handlers
+  // (onCollision, onTriggerEnter, onTriggerExit) every physics step.
+  physicsSystem.setScriptSystem(scriptSystem);
   const loop = new GameLoop(world);
 
   // Remember the initial scene data so scene.restart() can reload it.
+  // Stored as a deep-clone so in-flight mutations to the original object
+  // (component properties updated during play, etc.) never corrupt the
+  // restart snapshot — deserializeScene reads the clone unchanged each time.
   let _initialSceneData = null;
 
   /**
@@ -174,21 +184,33 @@ export function createGame({ pixiApp, followMainCamera = false }) {
   scriptApi._restartFn = function () {
     if (_initialSceneData) {
       _teardownForSceneChange();
-      deserializeScene(world, _initialSceneData);
-      // scriptSystem.destroy() above already reset _started/instances,
-      // but this stays explicit and harmless in case that ever changes.
+      // Deep-clone so deserializeScene can freely mutate the object it
+      // receives without corrupting the snapshot stored here — otherwise
+      // a second restart would see already-modified data.
+      deserializeScene(world, JSON.parse(JSON.stringify(_initialSceneData)));
       scriptSystem._started = false;
     }
   };
   scriptApi._loadSceneFn = function (sceneName) {
-    var scenes = getSceneList();
-    var found = scenes.find(function (s) { return s.name === sceneName; });
+    // Search SceneManager's full list (includes data payloads loaded via
+    // loadAllScenesData in the play popup — see play-popup.js).
+    var allScenes = getAllScenesData();
+    var found = allScenes.find(function (s) { return s.name === sceneName; });
     if (found) {
       _teardownForSceneChange();
-      switchToScene(world, found.id);
-      scriptSystem._started = false;
+      if (found.data) {
+        // Play popup path: load directly from the stored data payload.
+        deserializeScene(world, JSON.parse(JSON.stringify(found.data)));
+        scriptSystem._started = false;
+      } else {
+        // Editor path: scene is currently live (data=null means it's
+        // the active one in SceneManager) — use switchToScene().
+        switchToScene(world, found.id);
+        scriptSystem._started = false;
+      }
     } else if (typeof console !== "undefined") {
-      console.log("[ScriptAPI] scene.load('" + sceneName + "') — no scene found with that name");
+      console.log("[ScriptAPI] scene.load('" + sceneName + "') — no scene found with that name. Available scenes: " +
+        (getAllScenesData().map(function(s){ return s.name; }).join(", ") || "(none)"));
     }
   };
 
@@ -198,7 +220,13 @@ export function createGame({ pixiApp, followMainCamera = false }) {
     scriptApi,
     loadScene: (url) => loadSceneFromUrl(world, url),
     loadDefault: () => loadDefaultScene(world),
-    loadFromData: (sceneData) => { _initialSceneData = sceneData; deserializeScene(world, sceneData); },
+    loadFromData: (sceneData) => {
+      // Deep-clone immediately so mutations during play never corrupt the
+      // restart snapshot — same reason _restartFn clones before passing
+      // to deserializeScene (see comment there).
+      _initialSceneData = JSON.parse(JSON.stringify(sceneData));
+      deserializeScene(world, sceneData);
+    },
     getSceneData: () => serializeScene(world),
     validate: () => validateScene(world),
     destroyRenderer: () => renderSystem.destroy(),
@@ -223,6 +251,16 @@ export function createGame({ pixiApp, followMainCamera = false }) {
     switchToScene: (sceneId) => switchToScene(world, sceneId),
     renameScene: (sceneId, name) => renameScene(world, sceneId, name),
     deleteScene: (sceneId) => deleteScene(world, sceneId),
+
+    /**
+     * Populates SceneManager with a full set of scene payloads passed
+     * from the editor (via PlayWindow.js → window.__ZENGINE_PLAY_PAYLOAD__).
+     * This is what makes scene.load('Name') work in the play popup —
+     * without it SceneManager's _scenes list is empty and every load()
+     * call fails with "no scene found", even when the name is exact.
+     * @param {Array<{id:string,name:string,data:object}>} allScenes
+     */
+    loadAllScenes: (allScenes) => loadAllScenesData(allScenes),
   };
 }
 

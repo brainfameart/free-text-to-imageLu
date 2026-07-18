@@ -120,6 +120,7 @@ export function switchScene(sceneId) {
 
   syncSpriteRender();
   refreshGizmos();
+  syncBackgroundColor();
   return true;
 }
 

@@ -124,6 +124,7 @@ export class RenderSystem extends System {
         transform.scaleY * frameScaleY * depthScale * (spriteRenderer.flipY ? -1 : 1)
       );
       sprite.tint = PIXI.utils ? PIXI.utils.string2hex(spriteRenderer.color) : 0xffffff;
+      sprite.alpha = (spriteRenderer.opacity != null) ? Math.max(0, Math.min(1, spriteRenderer.opacity)) : 1;
 
       // Draw order: Transform.z is the sole source of truth (see file
       // header). Pixi's zIndex sort applies a stable sort in modern

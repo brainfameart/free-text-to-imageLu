@@ -122,5 +122,14 @@ export const editorState = {
 };
 
 export function pushLog(type, msg) {
-  editorState.logs.push({ type, msg });
+  // Unity-style console collapse: if the last entry has the exact same
+  // type and message, increment its count instead of adding a new line.
+  // This prevents a console.log() called every frame from spamming the
+  // panel — it shows "hi ×30" instead of 30 separate "hi" rows.
+  const last = editorState.logs[editorState.logs.length - 1];
+  if (last && last.type === type && last.msg === msg) {
+    last.count = (last.count || 1) + 1;
+    return;
+  }
+  editorState.logs.push({ type, msg, count: 1 });
 }

@@ -24,10 +24,17 @@ export class PhysicsSystem extends System {
   constructor() {
     super();
     this.physicsWorld = new PhysicsWorld();
+    /** @type {import('../systems/ScriptSystem.js').ScriptSystem|null} */
+    this._scriptSystem = null;
+  }
+
+  /** Wire the ScriptSystem so physics collision/trigger events are dispatched. */
+  setScriptSystem(scriptSystem) {
+    this._scriptSystem = scriptSystem;
   }
 
   update(world, dt) {
-    this.physicsWorld.step(world, dt);
+    this.physicsWorld.step(world, dt, this._scriptSystem);
   }
 
   /**

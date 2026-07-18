@@ -155,6 +155,10 @@ export function renderInspector() {
             '" data-field="SpriteRenderer.color" />'
         ) +
         row(
+          "Opacity",
+          numInput("", spriteRenderer.opacity != null ? spriteRenderer.opacity : 1, "SpriteRenderer.opacity")
+        ) +
+        row(
           "Flip",
           '<div class="flip-row"><label><input type="checkbox" data-field="SpriteRenderer.flipX"' +
             (spriteRenderer.flipX ? " checked" : "") +

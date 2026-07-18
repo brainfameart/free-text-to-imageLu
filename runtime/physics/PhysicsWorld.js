@@ -118,10 +118,17 @@ export class PhysicsWorld {
     /** @type {import('@dimforge/rapier2d-compat').KinematicCharacterController|null} shared across every KINEMATIC body — the controller only needs the collider + desired movement per call, so one instance is enough for the whole world. */
     this._characterController = null;
 
+    /** Reverse map from Rapier collider handle index → entityId for event dispatch */
+    this._colliderHandleMap = new Map();
+    /** Rapier EventQueue used to drain collision/trigger events after each step */
+    this._eventQueue = null;
+
     this._readyPromise = loadRapier().then((RAPIER) => {
       this.RAPIER = RAPIER;
       this.rapierWorld = new RAPIER.World({ x: 0, y: GRAVITY_Y });
       this.rapierWorld.lengthUnit = LENGTH_UNIT_PX_PER_METER;
+      // true = drains intersection (sensor) events in addition to contact events
+      this._eventQueue = new RAPIER.EventQueue(true);
       this._characterController = this.rapierWorld.createCharacterController(
         this._characterControllerOffset
       );
@@ -212,7 +219,7 @@ export class PhysicsWorld {
    * @param {import('../core/World.js').World} world
    * @param {number} dt
    */
-  step(world, dt) {
+  step(world, dt, scriptSystem) {
     if (!this.ready) return;
 
     const entities = world.query(TRANSFORM).filter(
@@ -236,6 +243,7 @@ export class PhysicsWorld {
     // components (or were destroyed)
     for (const [entityId, handle] of this._handles) {
       if (!seen.has(entityId)) {
+        if (handle.collider) this._colliderHandleMap.delete(handle.collider.handle);
         this.rapierWorld.removeRigidBody(handle.body);
         this._handles.delete(entityId);
       }
@@ -249,7 +257,7 @@ export class PhysicsWorld {
     this._syncTilemapColliders(world);
 
     this.rapierWorld.timestep = stepDt;
-    this.rapierWorld.step();
+    this.rapierWorld.step(this._eventQueue);
 
     // write results back onto Transform for every DYNAMIC / KINEMATIC body
     for (const entity of entities) {
@@ -280,6 +288,37 @@ export class PhysicsWorld {
       // movement). A KinematicPositionBased body has no meaningful
       // linvel() from Rapier's solver to read back here, since we drive
       // it via setNextKinematicTranslation rather than forces/velocity.
+    }
+
+    // Drain the event queue and dispatch collision / trigger events to
+    // the ScriptSystem so user scripts receive onCollision, onTriggerEnter,
+    // and onTriggerExit callbacks. Rapier only emits events for colliders
+    // that opted in via setActiveEvents (done in _syncCollider above).
+    if (this._eventQueue && scriptSystem) {
+      this._eventQueue.drainCollisionEvents((handle1, handle2, started) => {
+        const entityId1 = this._colliderHandleMap.get(handle1);
+        const entityId2 = this._colliderHandleMap.get(handle2);
+        if (!entityId1 || !entityId2) return;
+        const entity1 = world.getEntity(entityId1);
+        const entity2 = world.getEntity(entityId2);
+        if (!entity1 || !entity2) return;
+
+        // Determine sensor/trigger status from live Rapier collider objects.
+        const coll1 = this.rapierWorld.getCollider(handle1);
+        const coll2 = this.rapierWorld.getCollider(handle2);
+        const isSensor = (coll1 && coll1.isSensor()) || (coll2 && coll2.isSensor());
+
+        if (isSensor) {
+          // Trigger event: fire on both entities for enter and exit.
+          scriptSystem.fireTrigger(entityId1, entity2, world, started);
+          scriptSystem.fireTrigger(entityId2, entity1, world, started);
+        } else if (started) {
+          // Solid collision enter: Unity only fires onCollision on contact
+          // start (not on every sustained-contact frame).
+          scriptSystem.fireCollision(entityId1, entity2, world);
+          scriptSystem.fireCollision(entityId2, entity1, world);
+        }
+      });
     }
   }
 
@@ -404,6 +443,7 @@ export class PhysicsWorld {
       // simulated=false: remove any live body, do nothing further, but
       // keep no handle so it's recreated cleanly if re-enabled.
       if (handle) {
+        if (handle.collider) this._colliderHandleMap.delete(handle.collider.handle);
         this.rapierWorld.removeRigidBody(handle.body);
         this._handles.delete(entity.id);
       }
@@ -413,7 +453,10 @@ export class PhysicsWorld {
     const needsNewBody = !handle || handle.bodyType !== effectiveBodyType;
 
     if (needsNewBody) {
-      if (handle) this.rapierWorld.removeRigidBody(handle.body);
+      if (handle) {
+        if (handle.collider) this._colliderHandleMap.delete(handle.collider.handle);
+        this.rapierWorld.removeRigidBody(handle.body);
+      }
 
       // Body type just changed (or is being created) — drop any
       // force/impulse/move request queued for a previous body type so
@@ -437,7 +480,7 @@ export class PhysicsWorld {
         .setRotation(transform.rotation * DEG2RAD);
 
       const body = this.rapierWorld.createRigidBody(desc);
-      handle = { body, collider: null, bodyType: effectiveBodyType, colliderSig: null };
+      handle = { body, collider: null, bodyType: effectiveBodyType, colliderSig: null, _entityId: entity.id };
       this._handles.set(entity.id, handle);
     } else {
       // Static bodies never move via simulation, but the editor may
@@ -660,8 +703,12 @@ export class PhysicsWorld {
         const angle = Math.acos(dotWithUp) * RAD2DEG;
         if (angle <= SLOPE_LIMIT_DEG) {
           // Ground or shallow slope — track the steepest angle seen.
+          // onSlope is resolved AFTER the loop from groundAngle so that
+          // being simultaneously on flat ground AND a slope (e.g. near
+          // the base of a ramp) doesn't make the state flicker between
+          // ground/slope/groundslope every frame — only the steepest
+          // walkable contact determines whether we're "on a slope".
           if (angle > groundAngle) groundAngle = angle;
-          if (angle > 5) onSlope = true;
         } else if (dotWithUp < 0) {
           // Normal has a downward component → ceiling (pushes character down).
           onCeiling = true;
@@ -684,6 +731,14 @@ export class PhysicsWorld {
       const absDesiredX = Math.abs(desiredX);
       if (absDesiredX > 0.5 && Math.abs(corrected.x) < absDesiredX * 0.3) onWall = true;
     }
+
+    // isOnSlope: derive from groundAngle after ALL contacts are processed,
+    // not per-contact — this prevents flickering when the character
+    // simultaneously touches flat ground and a slope (e.g. at the base
+    // of a ramp), which would otherwise alternate states every frame.
+    // Matches Unity: CharacterController.isGrounded is true on both, and
+    // slope detection is a single stable value, not a per-contact toggle.
+    onSlope = groundAngle > 5;
 
     rb.isOnCeiling = onCeiling;
     rb.isOnWall    = onWall;
@@ -880,6 +935,15 @@ export class PhysicsWorld {
 
     handle.collider = this.rapierWorld.createCollider(desc, handle.body);
     handle.colliderSig = sig;
+
+    // Register the new collider in the reverse-lookup map so event
+    // draining can find the owning entityId from Rapier's handle index.
+    this._colliderHandleMap.set(handle.collider.handle, handle._entityId);
+
+    // Opt this collider into the EventQueue so collision and sensor
+    // (trigger) events are actually delivered — Rapier only emits events
+    // for colliders that have explicitly requested them.
+    handle.collider.setActiveEvents(this.RAPIER.ActiveEvents.COLLISION_EVENTS);
   }
 
   /** Removes every tracked Rapier body (used when the World/scene is cleared). */
@@ -889,6 +953,7 @@ export class PhysicsWorld {
       this.rapierWorld.removeRigidBody(handle.body);
     }
     this._handles.clear();
+    this._colliderHandleMap.clear();
     for (const body of this._tilemapBodies.values()) {
       this.rapierWorld.removeRigidBody(body);
     }

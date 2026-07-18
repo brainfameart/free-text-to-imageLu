@@ -500,7 +500,13 @@ export function registerIntelliSense(monaco) {
               : c.key === CHARACTER_CONTROLLER ? _controllerApiForEntities(contextEntities)
               : c.api;
             for (const item of api) {
-              suggestions.push(Object.assign(_makeCompletion(monaco, item, range), { label: c.name + "." + item.label }));
+              // insertText must be the FULL sub-object path (e.g. "camera.zoom")
+              // so that clicking "camera.zoom" in the list after typing "this."
+              // inserts the full token, not just "zoom".
+              suggestions.push(Object.assign(
+                _makeCompletion(monaco, item, range),
+                { label: c.name + "." + item.label, insertText: c.name + "." + item.insert }
+              ));
             }
             suggestions.push(_makeCompletion(monaco, { label: c.name, detail: c.name + " component", insert: c.name + "." }, range));
           }

@@ -343,6 +343,12 @@ svg.icon{display:inline-block;vertical-align:middle;flex-shrink:0;}
 .animpanel-frame-del:hover{background:#a83a3a;}
 
 
+/* Console log count badge — shown on the right of a log row when
+   the same message repeats (Unity-style "hi ×30" collapse). */
+.log-count{margin-left:auto;flex-shrink:0;min-width:18px;height:16px;padding:0 5px;border-radius:8px;background:#3a3a3a;color:#bbb;font-size:10px;font-family:monospace;display:inline-flex;align-items:center;justify-content:center;font-weight:600;border:1px solid #222;}
+.log-row.error .log-count{background:#4a2020;color:#ff9090;}
+.log-row.warn .log-count{background:#3a2e10;color:#e8b860;}
+
 /* ––––– Status Bar ––––– */
 .statusbar{height:22px;background:#282828;border-top:1px solid #1a1a1a;display:flex;align-items:center;justify-content:space-between;padding:0 8px;font-size:10px;color:#aaa;flex-shrink:0;}
 .statusbar .left{display:flex;align-items:center;gap:8px;}

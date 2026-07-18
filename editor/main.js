@@ -146,6 +146,14 @@ function render() {
 
   mountOrUpdateSceneViewport(render);
   mountScriptEditor();
+
+  // Auto-scroll the console list to the newest entry after every render,
+  // so fresh log lines are always visible without manual scrolling —
+  // exactly how Unity's Console panel works.
+  if (editorState.bottomTab === "console") {
+    const consoleList = document.getElementById("console-list-el");
+    if (consoleList) consoleList.scrollTop = consoleList.scrollHeight;
+  }
 }
 
 function onTogglePlay(isPlaying) {

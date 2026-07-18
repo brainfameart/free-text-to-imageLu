@@ -21,6 +21,7 @@ export class SpriteRenderer {
   constructor({
     spriteKey = null,
     color = "#ffffff",
+    opacity = 1,
     flipX = false,
     flipY = false,
     referenceWidth = null,
@@ -28,6 +29,7 @@ export class SpriteRenderer {
   } = {}) {
     this.spriteKey = spriteKey;
     this.color = color;
+    this.opacity = opacity;
     this.flipX = flipX;
     this.flipY = flipY;
 

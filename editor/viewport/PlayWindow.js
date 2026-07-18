@@ -21,6 +21,7 @@ import { TRANSFORM } from "../../runtime/components/Transform.js";
 import { getCameraResolution } from "../../runtime/core/CameraUtils.js";
 import { getAllSpriteAssets, getAllFrameAssets, getAllAudioAssets } from "../../runtime/assets/AssetRegistry.js";
 import { editorState, pushLog } from "../state/EditorState.js";
+import { getAllScenesData } from "../../runtime/scene/SceneManager.js";
 
 let playWin = null;
 
@@ -53,7 +54,12 @@ export function openPlayWindow(game) {
   }
   const camera = mainCameraEntity.getComponent(CAMERA);
   const { width, height } = getCameraResolution(camera);
+  // Save the active scene first so its data slot in SceneManager is
+  // current, then capture ALL scenes (with data) — the play popup needs
+  // the full list so scene.load('Name') can find scenes by name.
+  game.saveActiveScene();
   const sceneData = game.getSceneData();
+  const allScenes = getAllScenesData(); // [{id,name,data}] — full payloads
 
   // The popup boots a completely separate JS module realm (its own
   // <script type="module"> import graph), so AssetManager.js's texture
@@ -75,7 +81,7 @@ export function openPlayWindow(game) {
   // Hand the payload off through window.__ZENGINE_PLAY_PAYLOAD__ so the
   // popup (a separate document/context) can read it on load, regardless
   // of open/reuse timing.
-  window.__ZENGINE_PLAY_PAYLOAD__ = { sceneData, width, height, spriteAssets, audioAssets };
+  window.__ZENGINE_PLAY_PAYLOAD__ = { sceneData, allScenes, width, height, spriteAssets, audioAssets };
 
   if (isPlayWindowOpen()) {
     playWin.location.reload();

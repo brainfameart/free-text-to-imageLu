@@ -163,11 +163,14 @@ export function renderBottom() {
       "</button>" +
       "</div>" +
       "</div>" +
-      '<div class="console-list">' +
+      '<div class="console-list" id="console-list-el">' +
       editorState.logs
         .map((l) => {
           const ic = l.type === "error" || l.type === "warn" ? "alerttriangle" : "info";
-          return '<div class="log-row ' + l.type + '"><span class="licon">' + icon(ic, 12) + '</span><span class="lmsg">' + l.msg + "</span></div>";
+          const countBadge = (l.count && l.count > 1)
+            ? '<span class="log-count">' + l.count + '</span>'
+            : "";
+          return '<div class="log-row ' + l.type + '"><span class="licon">' + icon(ic, 12) + '</span><span class="lmsg">' + l.msg + "</span>" + countBadge + "</div>";
         })
         .join("") +
       "</div>" +

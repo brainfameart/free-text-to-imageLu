@@ -154,6 +154,17 @@ async function boot() {
   mount.appendChild(pixiApp.view);
 
   const game = createGame({ pixiApp, followMainCamera: true });
+
+  // Register ALL scenes so scene.load('Name') can find them by name
+  // during play. Without this the popup's SceneManager starts empty and
+  // every scene.load() call logs "no scene found" even when the name is
+  // spelled correctly. allScenes carries {id,name,data} for every scene
+  // the editor has, captured by PlayWindow.js right before opening the
+  // popup (with the active scene saved first so its data is current).
+  if (payload.allScenes && payload.allScenes.length) {
+    game.loadAllScenes(payload.allScenes);
+  }
+
   game.loadFromData(sceneData);
 
   // Applied once, right here, at the moment Play was pressed — this
