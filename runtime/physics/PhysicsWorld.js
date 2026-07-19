@@ -120,6 +120,12 @@ export class PhysicsWorld {
 
     /** Reverse map from Rapier collider handle index → entityId for event dispatch */
     this._colliderHandleMap = new Map();
+    /** Per-kinematic "currently touching" set, used to fire onCollision only
+     *  on the enter transition (see _syncKinematicMovement). */
+    this._kinematicContacts = new Map();
+    /** Per-dynamic "currently touching" set for dynamic<->dynamic and dynamic<->static
+     *  pairs, used to fire onCollisionExit when the event queue reports started=false. */
+    this._dynamicContacts = new Map();
     /** Rapier EventQueue used to drain collision/trigger events after each step */
     this._eventQueue = null;
 
@@ -222,6 +228,12 @@ export class PhysicsWorld {
   step(world, dt, scriptSystem) {
     if (!this.ready) return;
 
+    // Stash for _syncKinematicMovement, which runs below and needs both
+    // to dispatch onCollision for kinematic-vs-static/kinematic contacts
+    // (see the comment there for why Rapier's event queue misses those).
+    this._stepWorld = world;
+    this._stepScriptSystem = scriptSystem;
+
     const entities = world.query(TRANSFORM).filter(
       (e) => e.hasComponent(RIGIDBODY_2D) || e.hasComponent(COLLIDER_2D)
     );
@@ -312,13 +324,113 @@ export class PhysicsWorld {
           // Trigger event: fire on both entities for enter and exit.
           scriptSystem.fireTrigger(entityId1, entity2, world, started);
           scriptSystem.fireTrigger(entityId2, entity1, world, started);
-        } else if (started) {
-          // Solid collision enter: Unity only fires onCollision on contact
-          // start (not on every sustained-contact frame).
-          scriptSystem.fireCollision(entityId1, entity2, world);
-          scriptSystem.fireCollision(entityId2, entity1, world);
+        } else {
+          // Solid collision — kinematic-involved pairs are dispatched from
+          // _syncKinematicMovement / _dispatchKinematicCollisions instead
+          // (the event queue misses most of those due to the character-
+          // controller gap). For pure dynamic<->dynamic and dynamic<->static
+          // pairs the event queue is reliable for both enter and exit.
+          const h1 = this._handles.get(entityId1);
+          const h2 = this._handles.get(entityId2);
+          const kin1 = h1 && h1.bodyType === BodyType.KINEMATIC;
+          const kin2 = h2 && h2.bodyType === BodyType.KINEMATIC;
+          if (!(kin1 || kin2)) {
+            const pairKey = entityId1 < entityId2 ? entityId1 + '|' + entityId2 : entityId2 + '|' + entityId1;
+            if (started) {
+              this._dynamicContacts.set(pairKey, { id1: entityId1, id2: entityId2 });
+              scriptSystem.fireCollision(entityId1, entity2, world);
+              scriptSystem.fireCollision(entityId2, entity1, world);
+            } else {
+              // Collision exit: fire onCollisionExit for dynamic<->dynamic and dynamic<->static
+              this._dynamicContacts.delete(pairKey);
+              scriptSystem.fireCollisionExit(entityId1, entity2, world);
+              scriptSystem.fireCollisionExit(entityId2, entity1, world);
+            }
+          }
         }
       });
+    }
+
+    // The event queue above does NOT fire onCollision for kinematic-vs-
+    // static/kinematic pairs when the body is STATIONARY \u2014 the character
+    // controller keeps a small gap so no contact manifold is generated,
+    // and a body that is spawned overlapping a collider (or resting on
+    // one without moving this frame) never appears in the sweep's
+    // computedCollision() list either. Probe those contacts here so
+    // onCollisionEnter fires reliably regardless of whether the kinematic
+    // body moved this step. Merges into the same _kinematicContacts set
+    // the movement-sweep dispatch uses, so no pair is double-fired.
+    this._dispatchKinematicCollisions(world, scriptSystem);
+  }
+
+  /**
+   * Detects solid contacts for every KINEMATIC body via Rapier's
+   * contactPair query (independent of movement), and fires onCollision
+   * on the not-touching \u2192 touching transition. Catches stationary /
+   * spawned-overlapping / tilemap contacts that the movement sweep
+   * misses. Dynamic obstacles are skipped \u2014 the event queue already
+   * delivers dynamic-vs-kinematic. Tilemap cell colliders are iterated
+   * directly (they aren't in _colliderHandleMap) so kinematic-vs-tilemap
+   * onCollisionEnter works too.
+   */
+  _dispatchKinematicCollisions(world, scriptSystem) {
+    if (!this.ready || !scriptSystem) return;
+    const RAPIER = this.RAPIER;
+
+    // Flat list of every other collider to test against: entity colliders
+    // (reverse-mapped from handle \u2192 entityId) + tilemap cell colliders
+    // (mapped to their owning tilemap entity id).
+    const others = [];
+    for (const [handle, entityId] of this._colliderHandleMap) {
+      const col = this.rapierWorld.getCollider(handle);
+      if (col) others.push({ collider: col, entityId });
+    }
+    for (const [tilemapId, cellMap] of this._tilemapCellColliders) {
+      for (const collider of cellMap.values()) {
+        others.push({ collider, entityId: tilemapId });
+      }
+    }
+
+    for (const [entityId, handle] of this._handles) {
+      if (handle.bodyType !== BodyType.KINEMATIC) continue;
+      if (!handle.collider) continue;
+      const selfCollider = handle.collider;
+
+      // Start from whatever the movement-sweep dispatch already recorded
+      // this step, so movement-detected contacts are preserved (and not
+      // re-fired) while contactPair-only contacts are added on top.
+      const prev = this._kinematicContacts.get(entityId) || new Set();
+      const next = new Set(prev);
+
+      for (const { collider: otherCollider, entityId: otherId } of others) {
+        if (otherId === entityId) continue;
+        let pair = null;
+        try { pair = this.rapierWorld.contactPair(selfCollider, otherCollider); } catch (_) { continue; }
+        if (!pair) continue;
+
+        next.add(otherId);
+        if (!prev.has(otherId)) {
+          const me = world.getEntity(entityId);
+          const other = world.getEntity(otherId);
+          if (me && other) {
+            scriptSystem.fireCollision(entityId, other, world);
+            scriptSystem.fireCollision(otherId, me, world);
+          }
+        }
+      }
+
+      // Fire onCollisionExit for any IDs that were in prev but not in next
+      for (const goneId of prev) {
+        if (!next.has(goneId)) {
+          const me = world.getEntity(entityId);
+          const gone = world.getEntity(goneId);
+          if (me && gone) {
+            scriptSystem.fireCollisionExit(entityId, gone, world);
+            scriptSystem.fireCollisionExit(goneId, me, world);
+          }
+        }
+      }
+      this._kinematicContacts.set(entityId, next);
     }
   }
 
@@ -719,6 +831,63 @@ export class PhysicsWorld {
       }
     }
 
+    // Dispatch onCollision for kinematic-vs-static and
+    // kinematic-vs-kinematic contacts. Rapier's event queue does NOT emit
+    // collision events for those pairs when the character controller is
+    // involved — the sweep stops the body *before* it penetrates, so no
+    // contact manifold is ever generated for the queue to drain. The
+    // controller's own computedCollision() list DOES see those swept
+    // contacts, so we dispatch onCollision from here. Dynamic obstacles
+    // are skipped: dynamic-vs-kinematic is still delivered by the event
+    // queue (the dynamic body's contact manifold), so firing here too
+    // would double-fire. We track the currently-touching set per
+    // kinematic body and only fire on the not-touching → touching
+    // transition (enter), matching Unity's onCollision semantics and the
+    // queue's own `started` gating in drainCollisionEvents.
+    {
+      const ssys = this._stepScriptSystem;
+      const w = this._stepWorld;
+      if (ssys && w) {
+        const myId = handle._entityId;
+        const prev = this._kinematicContacts.get(myId) || new Set();
+        const next = new Set();
+        for (let ci = 0; ci < numCols; ci++) {
+          const col = this._characterController.computedCollision(ci);
+          if (!col || col.collider == null) continue;
+          const otherId = this._colliderHandleMap.get(col.collider);
+          if (!otherId || otherId === myId) continue;
+          // Dynamic obstacles are NO LONGER skipped here — the event
+          // queue does NOT reliably fire for kinematic-vs-dynamic (the
+          // character-controller gap prevents a real contact manifold),
+          // so skipping them left "kinematic moves INTO a dynamic body"
+          // with no onCollisionEnter at all. Now dispatched here; the
+          // event queue's solid branch skips kinematic-involved pairs
+          // (see drainCollisionEvents) to avoid double-firing.
+          next.add(otherId);
+          if (!prev.has(otherId)) {
+            const me = w.getEntity(myId);
+            const other = w.getEntity(otherId);
+            if (me && other) {
+              ssys.fireCollision(myId, other, w);
+              ssys.fireCollision(otherId, me, w);
+            }
+          }
+        }
+        // Fire onCollisionExit for contacts that ended this sweep
+        for (const goneId of prev) {
+          if (!next.has(goneId)) {
+            const me = w.getEntity(myId);
+            const gone = w.getEntity(goneId);
+            if (me && gone) {
+              ssys.fireCollisionExit(myId, gone, w);
+              ssys.fireCollisionExit(goneId, me, w);
+            }
+          }
+        }
+        this._kinematicContacts.set(myId, next);
+      }
+    }
+
     // Movement-based fallback — kept as a safety net for the rare case
     // a collision entry has no usable normal1 (e.g. a degenerate/zero
     // vector from an edge-case contact), NOT as the primary path
@@ -954,6 +1123,8 @@ export class PhysicsWorld {
     }
     this._handles.clear();
     this._colliderHandleMap.clear();
+    this._kinematicContacts.clear();
+    this._dynamicContacts.clear();
     for (const body of this._tilemapBodies.values()) {
       this.rapierWorld.removeRigidBody(body);
     }

@@ -131,7 +131,7 @@ async function boot() {
     return;
   }
 
-  const { sceneData, width, height, spriteAssets, audioAssets } = payload;
+  let { sceneData, width, height, spriteAssets, audioAssets } = payload;
 
   // Register real textures BEFORE the scene loads, so sprite entities
   // resolve to the actual imported images on their very first frame
@@ -249,6 +249,21 @@ async function boot() {
 
   game.loop.start();
   window.__zengineGame = game;
+
+  // When a script calls scene.load() / scene.restart() and the new
+  // scene's Main Camera has a different orientation/dimension than the
+  // one this window booted with (e.g. Landscape → Portrait), resize the
+  // renderer + mount and re-fit so the play window matches the new
+  // scene's camera exactly — same getCameraResolution source of truth
+  // PlayWindow used to size the boot window.
+  game.onSceneCameraChanged(function (w, h, bgColor) {
+    width = w;
+    height = h;
+    pixiApp.renderer.resize(w, h);
+    mount.style.width = w + "px";
+    mount.style.height = h + "px";
+    applyAspectFit(w, h);
+  });
 
   applyAspectFit(width, height);
   window.addEventListener("resize", () => applyAspectFit(width, height));

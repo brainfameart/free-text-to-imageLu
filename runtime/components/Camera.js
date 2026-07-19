@@ -49,6 +49,7 @@ export class Camera {
     customWidth = 800,
     customHeight = 600,
     enablePseudo3D = false,
+    renderToSpriteEntityId = null,
   } = {}) {
     this.backgroundColor = backgroundColor;
     this.projection = projection;
@@ -66,5 +67,14 @@ export class Camera {
     this.customWidth = customWidth;
     this.customHeight = customHeight;
     this.enablePseudo3D = enablePseudo3D;
+
+    // When set (via this.camera.renderToSprite(spriteEntity) in a script),
+    // CameraRenderSystem renders THIS camera's view into a RenderTexture
+    // every frame and assigns it as the target sprite's texture — the
+    // standard minimap / security-camera technique. null = no render-to-
+    // texture (the camera only drives the main screen, if it's the Main
+    // Camera). The value is the target entity's id (not its name) so it
+    // survives renames. See runtime/systems/CameraRenderSystem.js.
+    this.renderToSpriteEntityId = renderToSpriteEntityId;
   }
 }

@@ -210,8 +210,19 @@ export class RenderSystem extends System {
     const zoom = DEFAULT_CAMERA_SIZE / Math.max(0.001, camera.size);
 
     this.worldContainer.scale.set(zoom);
-    this.worldContainer.x = width / 2 - transform.x * zoom;
-    this.worldContainer.y = height / 2 - transform.y * zoom;
+    // Apply the camera entity's rotation too, so a rotated Main Camera
+    // actually rotates the world view in play mode (previously rotation
+    // was silently dropped here, losing camera orientation). Rotate the
+    // camera-to-screen offset by the camera's world-space rotation so
+    // the camera's focal point still lands on screen center.
+    const rotRad = (transform.rotation * Math.PI) / 180;
+    this.worldContainer.rotation = rotRad;
+    const sx = transform.x * zoom;
+    const sy = transform.y * zoom;
+    const cos = Math.cos(rotRad);
+    const sin = Math.sin(rotRad);
+    this.worldContainer.x = width / 2 - (sx * cos - sy * sin);
+    this.worldContainer.y = height / 2 - (sx * sin + sy * cos);
   }
 
   /**
@@ -267,6 +278,18 @@ export class RenderSystem extends System {
    */
   getTrackedSprites() {
     return this._sprites.entries();
+  }
+
+  /**
+   * Returns the live PIXI.Sprite this system tracks for the given
+   * entity id, or null if the entity has no SpriteRenderer / hasn't
+   * been rendered yet. Used by CameraRenderSystem to override the
+   * target minimap sprite's texture with a camera render each frame.
+   * @param {string} entityId
+   * @returns {PIXI.Sprite|null}
+   */
+  getSprite(entityId) {
+    return this._sprites.get(entityId) || null;
   }
 
   destroy() {

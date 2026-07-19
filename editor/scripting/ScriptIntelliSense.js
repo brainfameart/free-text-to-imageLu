@@ -140,6 +140,7 @@ const ANIMATOR_API = [
 const CAMERA_API = [
   { label: "zoom", detail: "Camera size/zoom. Default 5 = no zoom. Smaller = zoomed in, larger = zoomed out.", insert: "zoom = " },
   { label: "shake(intensity, duration)", detail: "Shake the camera. intensity=pixels of shake, duration=seconds.", insert: "shake(" },
+  { label: "renderToSprite(spriteEntity)", detail: "Render this camera's view onto a sprite's texture every frame (minimap / security feed). Pass an entity from find(), e.g. renderToSprite(find('Minimap'))", insert: "renderToSprite(" },
 ];
 
 const AUDIO_API = [
@@ -578,7 +579,9 @@ export function registerIntelliSense(monaco) {
       suggestions.push(_makeCompletion(monaco, { label: "function onStart()", detail: "Called once before the first onUpdate — use for initialization", insert: "onStart() {\n  \n}" }, range));
       suggestions.push(_makeCompletion(monaco, { label: "function onUpdate(dt)", detail: "Called every frame. dt = seconds since last frame (use for movement)", insert: "onUpdate(dt) {\n  \n}" }, range));
       suggestions.push(_makeCompletion(monaco, { label: "function onFixedUpdate(dt)", detail: "Called at a fixed 60 Hz rate — use for physics/rigidbody changes", insert: "onFixedUpdate(dt) {\n  \n}" }, range));
-      suggestions.push(_makeCompletion(monaco, { label: "function onCollision(other)", detail: "Called when this entity's collider touches another. 'other' has .x, .y, etc.", insert: "onCollision(other) {\n  \n}" }, range));
+      suggestions.push(_makeCompletion(monaco, { label: "function onCollision(other)", detail: "Called when this entity's collider touches another (alias for onCollisionEnter). 'other' has .x, .y, etc.", insert: "onCollision(other) {\n  \n}" }, range));
+      suggestions.push(_makeCompletion(monaco, { label: "function onCollisionEnter(other)", detail: "Called when collision begins. 'other' has .x, .y, .name, etc. Works for all body types.", insert: "onCollisionEnter(other) {\n  \n}" }, range));
+      suggestions.push(_makeCompletion(monaco, { label: "function onCollisionExit(other)", detail: "Called when collision ends. 'other' has .x, .y, .name, etc. Works for all body types.", insert: "onCollisionExit(other) {\n  \n}" }, range));
       suggestions.push(_makeCompletion(monaco, { label: "function onTriggerEnter(other)", detail: "Called when entering a trigger collider (Is Trigger = on)", insert: "onTriggerEnter(other) {\n  \n}" }, range));
       suggestions.push(_makeCompletion(monaco, { label: "function onTriggerExit(other)", detail: "Called when leaving a trigger collider", insert: "onTriggerExit(other) {\n  \n}" }, range));
       suggestions.push(_makeCompletion(monaco, { label: "function onDestroy()", detail: "Called once when this entity is destroyed or the scene ends", insert: "onDestroy() {\n  \n}" }, range));

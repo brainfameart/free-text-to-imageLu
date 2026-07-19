@@ -16,6 +16,7 @@ import { ControllerSystem } from "./systems/ControllerSystem.js";
 import { PhysicsSystem } from "./systems/PhysicsSystem.js";
 import { AnimationSystem } from "./systems/AnimationSystem.js";
 import { RenderSystem } from "./systems/RenderSystem.js";
+import { CameraRenderSystem } from "./systems/CameraRenderSystem.js";
 import { LightingSystem } from "./systems/LightingSystem.js";
 import { AudioSystem } from "./systems/AudioSystem.js";
 import { TilemapSystem } from "./systems/TilemapSystem.js";
@@ -37,6 +38,8 @@ import {
 import { ScriptAPI } from "./scripting/ScriptAPI.js";
 import { importSpriteFiles, getAllSpriteAssets, getSpriteAsset, importAudioFiles, getAllAudioAssets, getAudioAsset } from "./assets/AssetRegistry.js";
 import { getCameraResolution, getCameraWorldRect } from "./core/CameraUtils.js";
+import { CAMERA } from "./components/Camera.js";
+import { TRANSFORM } from "./components/Transform.js";
 
 /**
  * Creates a fully wired game instance against a PIXI Application that the
@@ -121,6 +124,13 @@ export function createGame({ pixiApp, followMainCamera = false }) {
   // always available here since renderSystem is constructed just above.
   const lightingSystem = new LightingSystem(gameContentContainer, renderSystem, pixiApp);
   world.addSystem(lightingSystem);
+  // CameraRenderSystem runs AFTER RenderSystem + LightingSystem so the
+  // worldContainer is fully synced and lit before capture. It renders
+  // any camera with renderToSpriteEntityId set (set via
+  // this.camera.renderToSprite(spriteEntity) in a script) into a
+  // RenderTexture and assigns it to the target sprite — minimaps.
+  const cameraRenderSystem = new CameraRenderSystem(gameContentContainer, renderSystem, pixiApp);
+  world.addSystem(cameraRenderSystem);
 
   // AudioSystem doesn't touch gameContentContainer at all (it drives
   // plain HTMLAudioElements, not PIXI display objects) so its place in
@@ -180,15 +190,49 @@ export function createGame({ pixiApp, followMainCamera = false }) {
     scriptApi.clearContexts();
   }
 
+  // Host hook (play popup) notified when a scene load/restart changes the
+  // Main Camera — used to resize the canvas when the new scene's camera
+  // has a different orientation/dimension than the one the window booted
+  // with. null in the editor (no resize needed there).
+  let _onSceneCameraChanged = null;
+
+  // Re-applies the newly-loaded scene's Main Camera background color to
+  // the renderer. RenderSystem already re-applies camera position/zoom
+  // every frame (followMainCamera), but the clear color is only set once
+  // at boot by the player/editor — so after a scene.load()/restart it
+  // would otherwise keep showing the previous scene's background. This
+  // is a no-op when there's no Main Camera yet (just-loaded empty scene).
+  // Also notifies the host hook of the new resolution so the play popup
+  // can resize its canvas/mount when the camera orientation/dimensions
+  // changed (e.g. scene.load() into a Portrait scene from a Landscape one).
+  function _applySceneCamera() {
+    const camEntity = world.query(TRANSFORM, CAMERA).find(function (e) {
+      const c = e.getComponent(CAMERA);
+      return c && c.isMain;
+    });
+    if (camEntity) {
+      const cam = camEntity.getComponent(CAMERA);
+      RenderSystem.applyBackgroundColor(pixiApp, cam.backgroundColor);
+      if (_onSceneCameraChanged) {
+        const res = getCameraResolution(cam);
+        _onSceneCameraChanged(res.width, res.height, cam.backgroundColor);
+      }
+    }
+  }
+
   // Wire up scene management callbacks on the ScriptAPI.
   scriptApi._restartFn = function () {
     if (_initialSceneData) {
       _teardownForSceneChange();
+      // Release RenderTextures from the previous scene's minimap cameras
+      // so they don't leak across scene reloads.
+      cameraRenderSystem.clear();
       // Deep-clone so deserializeScene can freely mutate the object it
       // receives without corrupting the snapshot stored here — otherwise
       // a second restart would see already-modified data.
       deserializeScene(world, JSON.parse(JSON.stringify(_initialSceneData)));
       scriptSystem._started = false;
+      _applySceneCamera();
     }
   };
   scriptApi._loadSceneFn = function (sceneName) {
@@ -198,15 +242,19 @@ export function createGame({ pixiApp, followMainCamera = false }) {
     var found = allScenes.find(function (s) { return s.name === sceneName; });
     if (found) {
       _teardownForSceneChange();
+      // Release RenderTextures from the previous scene's minimap cameras.
+      cameraRenderSystem.clear();
       if (found.data) {
         // Play popup path: load directly from the stored data payload.
         deserializeScene(world, JSON.parse(JSON.stringify(found.data)));
         scriptSystem._started = false;
+        _applySceneCamera();
       } else {
         // Editor path: scene is currently live (data=null means it's
         // the active one in SceneManager) — use switchToScene().
         switchToScene(world, found.id);
         scriptSystem._started = false;
+        _applySceneCamera();
       }
     } else if (typeof console !== "undefined") {
       console.log("[ScriptAPI] scene.load('" + sceneName + "') — no scene found with that name. Available scenes: " +
@@ -231,7 +279,13 @@ export function createGame({ pixiApp, followMainCamera = false }) {
     validate: () => validateScene(world),
     destroyRenderer: () => renderSystem.destroy(),
     destroyLighting: () => lightingSystem.destroy(),
+    destroyCameraRenders: () => cameraRenderSystem.destroy(),
     destroyControllers: () => controllerSystem.destroy(),
+    /** Register a callback fired when a scene load/restart changes the
+     *  Main Camera (resolution + background). The play popup uses this
+     *  to resize its canvas + aspect-fit when scene.load() switches to
+     *  a scene whose camera has a different orientation/dimension. */
+    onSceneCameraChanged: (fn) => { _onSceneCameraChanged = fn; },
     destroyAudio: () => audioSystem.destroy(),
     destroyTilemaps: () => tilemapSystem.destroy(),
 

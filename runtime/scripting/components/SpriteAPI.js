@@ -52,10 +52,14 @@ export function createSpriteAPI(entity) {
     set flipX(v) { _requireSprite(entity).flipX = !!v; },
     get flipY() { return _requireSprite(entity).flipY; },
     set flipY(v) { _requireSprite(entity).flipY = !!v; },
-    /** 0.0–1.0 transparency alias. Internally stored as an alpha on the tint color;
-     *  a full implementation would blend with the color channel. */
-    get opacity() { _requireSprite(entity); return 1; },
-    set opacity(v) { _requireSprite(entity); /* full alpha-blend support is a future enhancement */ },
+    /** 0.0–1.0 transparency. RenderSystem copies this onto the live
+     *  PIXI sprite's `.alpha` each frame, so changing it at runtime fades
+     *  the sprite in/out immediately (no re-deserialize needed). */
+    get opacity() { return _requireSprite(entity).opacity; },
+    set opacity(v) {
+      const n = Number(v);
+      _requireSprite(entity).opacity = (Number.isFinite(n) ? n : 1);
+    },
   };
   return new Proxy(target, {
     get: function (t, prop) {

@@ -12,9 +12,11 @@
  *   onStart()          — once, before the first onUpdate
  *   onUpdate(dt)       — every render frame
  *   onFixedUpdate(dt)  — at a fixed 60 Hz timestep (accumulator)
- *   onCollision(other) — when this entity's collider touches another
- *   onTriggerEnter(other) — when entering a trigger collider
- *   onTriggerExit(other)  — when leaving a trigger collider
+ *   onCollision(other)      — when this entity's collider touches another (enter)
+ *   onCollisionEnter(other) — alias for onCollision; prefer this for clarity
+ *   onCollisionExit(other)  — when this entity's collider stops touching another
+ *   onTriggerEnter(other)   — when entering a trigger collider
+ *   onTriggerExit(other)    — when leaving a trigger collider
  *   onDestroy()       — once, when the entity is destroyed / scene ends
  *
  * FAULT ISOLATION: a thrown error inside one lifecycle CALL is caught
@@ -165,6 +167,8 @@ export class ScriptSystem {
         "  onUpdate: typeof onUpdate !== 'undefined' ? onUpdate : null,\n" +
         "  onFixedUpdate: typeof onFixedUpdate !== 'undefined' ? onFixedUpdate : null,\n" +
         "  onCollision: typeof onCollision !== 'undefined' ? onCollision : null,\n" +
+        "  onCollisionEnter: typeof onCollisionEnter !== 'undefined' ? onCollisionEnter : null,\n" +
+        "  onCollisionExit: typeof onCollisionExit !== 'undefined' ? onCollisionExit : null,\n" +
         "  onTriggerEnter: typeof onTriggerEnter !== 'undefined' ? onTriggerEnter : null,\n" +
         "  onTriggerExit: typeof onTriggerExit !== 'undefined' ? onTriggerExit : null,\n" +
         "  onDestroy: typeof onDestroy !== 'undefined' ? onDestroy : null,\n" +
@@ -343,11 +347,35 @@ export class ScriptSystem {
     if (!instances) return;
     const otherContext = otherEntity ? this.scriptApi.createEntityContext(otherEntity) : null;
     for (const inst of instances) {
-      if (!inst.enabled || !inst.handlers.onCollision) continue;
+      if (!inst.enabled) continue;
+      // Fire onCollision (legacy) and onCollisionEnter (preferred alias)
+      if (inst.handlers.onCollision) {
+        try {
+          inst.handlers.onCollision.call(inst.context, otherContext);
+        } catch (err) {
+          this._reportError(inst.scriptName, err, "onCollision");
+        }
+      }
+      if (inst.handlers.onCollisionEnter) {
+        try {
+          inst.handlers.onCollisionEnter.call(inst.context, otherContext);
+        } catch (err) {
+          this._reportError(inst.scriptName, err, "onCollisionEnter");
+        }
+      }
+    }
+  }
+
+  fireCollisionExit(entityId, otherEntity, world) {
+    const instances = this.instances.get(entityId);
+    if (!instances) return;
+    const otherContext = otherEntity ? this.scriptApi.createEntityContext(otherEntity) : null;
+    for (const inst of instances) {
+      if (!inst.enabled || !inst.handlers.onCollisionExit) continue;
       try {
-        inst.handlers.onCollision.call(inst.context, otherContext);
+        inst.handlers.onCollisionExit.call(inst.context, otherContext);
       } catch (err) {
-        this._reportError(inst.scriptName, err, "onCollision");
+        this._reportError(inst.scriptName, err, "onCollisionExit");
       }
     }
   }

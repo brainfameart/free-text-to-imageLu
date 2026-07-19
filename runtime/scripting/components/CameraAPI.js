@@ -27,7 +27,7 @@ function _requireCamera(entity) {
   return c;
 }
 
-const CAMERA_MEMBERS = new Set(["zoom", "shake"]);
+const CAMERA_MEMBERS = new Set(["zoom", "shake", "renderToSprite"]);
 
 /**
  * Builds the `this.camera` object for a given entity.
@@ -43,6 +43,26 @@ export function createCameraAPI(entity) {
     /** Camera size (zoom level). Default 5 = no zoom. Smaller = zoomed in, larger = zoomed out. */
     get zoom() { return _requireCamera(entity).size; },
     set zoom(v) { _requireCamera(entity).size = Math.max(0.001, v); },
+    /**
+     * Renders this camera's view onto the given sprite entity's texture
+     * every frame (a minimap / security-camera feed). Pass an entity
+     * returned by find() (e.g. this.camera.renderToSprite(find('Minimap'))).
+     * The sprite's existing texture is replaced each frame with a live
+     * RenderTexture of what this camera sees. Call with null to stop.
+     */
+    renderToSprite: function (spriteEntity) {
+      var c = _requireCamera(entity);
+      if (spriteEntity == null) { c.renderToSpriteEntityId = null; return; }
+      // Accept an EntityContext (what find() returns — has _entity.id)
+      // or a raw entity (has .id directly).
+      var id = spriteEntity._entity ? spriteEntity._entity.id : spriteEntity.id;
+      if (!id) {
+        throw _tag(new Error(
+          "camera.renderToSprite(spriteEntity) — pass an entity returned by find(), e.g. find('Minimap')."
+        ), "unknown-api");
+      }
+      c.renderToSpriteEntityId = id;
+    },
     shake: function (intensity, duration) {
       // Guard: throw if the entity has no Camera component, consistent
       // with every other camera API method.
