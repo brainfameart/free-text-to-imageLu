@@ -123,6 +123,12 @@ export class PhysicsWorld {
     /** Per-kinematic "currently touching" set, used to fire onCollision only
      *  on the enter transition (see _syncKinematicMovement). */
     this._kinematicContacts = new Map();
+    /** Subset of _kinematicContacts that was established by the event queue
+     *  (dynamic body moved into a stationary kinematic). Kept separate so
+     *  _syncKinematicMovement's sweep — which can't see a dynamic body
+     *  touching a zero-velocity kinematic — doesn't evict those contacts and
+     *  fire false onCollisionExit every frame. */
+    this._kinematicEventContacts = new Map();
     /** Per-dynamic "currently touching" set for dynamic<->dynamic and dynamic<->static
      *  pairs, used to fire onCollisionExit when the event queue reports started=false. */
     this._dynamicContacts = new Map();
@@ -325,23 +331,77 @@ export class PhysicsWorld {
           scriptSystem.fireTrigger(entityId1, entity2, world, started);
           scriptSystem.fireTrigger(entityId2, entity1, world, started);
         } else {
-          // Solid collision — kinematic-involved pairs are dispatched from
-          // _syncKinematicMovement / _dispatchKinematicCollisions instead
-          // (the event queue misses most of those due to the character-
-          // controller gap). For pure dynamic<->dynamic and dynamic<->static
-          // pairs the event queue is reliable for both enter and exit.
+          // Solid collision dispatch.
           const h1 = this._handles.get(entityId1);
           const h2 = this._handles.get(entityId2);
           const kin1 = h1 && h1.bodyType === BodyType.KINEMATIC;
           const kin2 = h2 && h2.bodyType === BodyType.KINEMATIC;
-          if (!(kin1 || kin2)) {
+
+          if (kin1 || kin2) {
+            // One side is kinematic. Kinematic-vs-static and
+            // kinematic-vs-kinematic contacts are handled entirely by the
+            // character-controller sweep in _syncKinematicMovement — skip
+            // those here to avoid double-firing.
+            //
+            // Dynamic-vs-kinematic MUST come through the event queue when
+            // the kinematic is stationary: a zero-velocity kinematic's sweep
+            // calls computeColliderMovement with desiredX/Y = 0 and the
+            // snap-to-ground only sweeps downward, so a dynamic body moving
+            // into the kinematic from any other direction never appears in
+            // computedCollision() and would be silently missed without this.
+            const dyn1 = h1 && h1.bodyType === BodyType.DYNAMIC;
+            const dyn2 = h2 && h2.bodyType === BodyType.DYNAMIC;
+            if (!(dyn1 || dyn2)) return; // kinematic-vs-static / kinematic-vs-kinematic: sweep only
+
+            // Exactly one kinematic, one dynamic.
+            const kinId    = kin1 ? entityId1 : entityId2;
+            const dynId    = kin1 ? entityId2 : entityId1;
+            const kinEnt   = kin1 ? entity1   : entity2;
+            const dynEnt   = kin1 ? entity2   : entity1;
+
+            if (!this._kinematicEventContacts.has(kinId)) {
+              this._kinematicEventContacts.set(kinId, new Set());
+            }
+            const eventSet = this._kinematicEventContacts.get(kinId);
+
+            if (started) {
+              // Guard against double-fire: the sweep in _syncKinematicMovement
+              // may have already fired onCollisionEnter this same step if the
+              // kinematic was also moving toward the dynamic. Check
+              // _kinematicContacts (which _syncKinematicMovement writes before
+              // rapierWorld.step() runs) before firing.
+              const sweepSet = this._kinematicContacts.get(kinId);
+              const alreadyFired = sweepSet && sweepSet.has(dynId);
+              // Register in the event set so _syncKinematicMovement preserves
+              // this contact and does not fire a false onCollisionExit next frame.
+              eventSet.add(dynId);
+              // Mirror into _kinematicContacts so exit tracking is consistent.
+              if (!sweepSet) this._kinematicContacts.set(kinId, new Set());
+              this._kinematicContacts.get(kinId).add(dynId);
+              if (!alreadyFired) {
+                scriptSystem.fireCollision(kinId, dynEnt, world);
+                scriptSystem.fireCollision(dynId, kinEnt, world);
+              }
+            } else {
+              // Exit: only fire if we were actually tracking this contact.
+              // (Rapier can sometimes emit stale exit events for pairs we
+              // never saw enter — guard with the eventSet membership check.)
+              if (!eventSet.has(dynId)) return;
+              eventSet.delete(dynId);
+              const kc = this._kinematicContacts.get(kinId);
+              if (kc) kc.delete(dynId);
+              scriptSystem.fireCollisionExit(kinId, dynEnt, world);
+              scriptSystem.fireCollisionExit(dynId, kinEnt, world);
+            }
+          } else {
+            // Pure dynamic<->dynamic or dynamic<->static: event queue is
+            // reliable for both enter and exit.
             const pairKey = entityId1 < entityId2 ? entityId1 + '|' + entityId2 : entityId2 + '|' + entityId1;
             if (started) {
               this._dynamicContacts.set(pairKey, { id1: entityId1, id2: entityId2 });
               scriptSystem.fireCollision(entityId1, entity2, world);
               scriptSystem.fireCollision(entityId2, entity1, world);
             } else {
-              // Collision exit: fire onCollisionExit for dynamic<->dynamic and dynamic<->static
               this._dynamicContacts.delete(pairKey);
               scriptSystem.fireCollisionExit(entityId1, entity2, world);
               scriptSystem.fireCollisionExit(entityId2, entity1, world);
@@ -854,7 +914,12 @@ export class PhysicsWorld {
         for (let ci = 0; ci < numCols; ci++) {
           const col = this._characterController.computedCollision(ci);
           if (!col || col.collider == null) continue;
-          const otherId = this._colliderHandleMap.get(col.collider);
+          // col.collider is a Rapier Collider object; _colliderHandleMap
+          // is keyed by the integer collider.handle — using the object
+          // directly as a key always misses (returns undefined) and
+          // silently leaves `next` empty every frame, so onCollisionEnter
+          // never fires for kinematic bodies regardless of movement.
+          const otherId = this._colliderHandleMap.get(col.collider.handle);
           if (!otherId || otherId === myId) continue;
           // Dynamic obstacles are NO LONGER skipped here — the event
           // queue does NOT reliably fire for kinematic-vs-dynamic (the
@@ -873,6 +938,15 @@ export class PhysicsWorld {
             }
           }
         }
+        // Preserve contacts established by the event queue (dynamic bodies
+        // that moved into this kinematic while it was stationary). Those
+        // pairs are managed by drainCollisionEvents — the sweep can't see
+        // them when velocity=0. Without this, next would be empty for a
+        // stationary kinematic, the dynamic contact would not be in next,
+        // and the sweep would fire a false onCollisionExit every frame.
+        const eventContacts = this._kinematicEventContacts.get(myId) || new Set();
+        for (const id of eventContacts) next.add(id);
+
         // Fire onCollisionExit for contacts that ended this sweep
         for (const goneId of prev) {
           if (!next.has(goneId)) {
@@ -1124,6 +1198,7 @@ export class PhysicsWorld {
     this._handles.clear();
     this._colliderHandleMap.clear();
     this._kinematicContacts.clear();
+    this._kinematicEventContacts.clear();
     this._dynamicContacts.clear();
     for (const body of this._tilemapBodies.values()) {
       this.rapierWorld.removeRigidBody(body);
