@@ -195,7 +195,6 @@ function _createKinematicAPI(entity) {
       r.pendingMoveY = (r.pendingMoveY || 0) + dy;
     },
 
-    /** Real sweep-based ground contact from the character controller (see Rigidbody2D.js's `grounded` field doc) — not a velocity-epsilon guess. */
     /** True when the character controller's sweep says the body is on the ground. */
     get isGrounded() { var r = _rb(entity); return r ? r.grounded : false; },
     /** Alias for isGrounded — kept for compatibility with existing scripts. */
@@ -204,17 +203,39 @@ function _createKinematicAPI(entity) {
     get isOnCeiling() { var r = _rb(entity); return r ? r.isOnCeiling : false; },
     /** True when the controller has detected a wall contact on either side. */
     get isOnWall() { var r = _rb(entity); return r ? r.isOnWall : false; },
-    /** True when the body is grounded on a sloped surface (groundAngle > 5°). */
+    /** True when the body is grounded on a sloped surface (groundAngle >= slopeMinAngle). */
     get isOnSlope() { var r = _rb(entity); return r ? r.isOnSlope : false; },
-    /** Angle of the ground surface in degrees from horizontal (0=flat, 45=steep). Alias: slopeAngle. */
-    get groundAngle() { var r = _rb(entity); return r ? r.groundAngle : 0; },
-    /** Alias for groundAngle — matches Unity naming convention. */
-    get slopeAngle() { var r = _rb(entity); return r ? r.groundAngle : 0; },
     /** The ACTUAL (possibly blocked/slid) movement achieved last step — use this instead of velocity to check "did I really move?". */
     get resolvedVelocity() {
       var r = _rb(entity);
       return r ? { x: r.resolvedVelocityX, y: r.resolvedVelocityY } : { x: 0, y: 0 };
     },
+
+    /**
+     * Maximum angle from horizontal (degrees) that counts as walkable
+     * ground for THIS body. Contacts steeper than this are walls or
+     * unclimbable slopes. Default 45.
+     * Example: this.rigidbody.groundAngleLimit = 60
+     */
+    get groundAngleLimit() { var r = _rb(entity); return r ? r.groundAngleLimit : 45; },
+    set groundAngleLimit(v) { var r = _rb(entity); if (r) r.groundAngleLimit = v; },
+
+    /**
+     * Contacts between groundAngleLimit and this angle (degrees) are
+     * "too steep" but NOT walls. Only contacts at or above this angle
+     * (nearly vertical) set isOnWall. Default 70.
+     * Example: this.rigidbody.wallAngleLimit = 80
+     */
+    get wallAngleLimit() { var r = _rb(entity); return r ? r.wallAngleLimit : 70; },
+    set wallAngleLimit(v) { var r = _rb(entity); if (r) r.wallAngleLimit = v; },
+
+    /**
+     * Minimum groundAngle (degrees) before isOnSlope becomes true.
+     * Contacts below this are treated as flat ground. Default 10.
+     * Example: this.rigidbody.slopeMinAngle = 15
+     */
+    get slopeMinAngle() { var r = _rb(entity); return r ? r.slopeMinAngle : 10; },
+    set slopeMinAngle(v) { var r = _rb(entity); if (r) r.slopeMinAngle = v; },
 
     get gravityScale() { return 0; },
   };
@@ -243,8 +264,9 @@ const ALL_KNOWN_MEMBERS = new Set([
   "type", "velocity", "velocityX", "velocityY", "mass", "gravityScale",
   "linearDamping", "angularDamping", "addForce", "addImpulse",
   "addTorque", "addAngularImpulse", "move", "grounded", "isGrounded",
-  "isOnCeiling", "isOnWall", "isOnSlope", "groundAngle", "slopeAngle",
+  "isOnCeiling", "isOnWall", "isOnSlope",
   "resolvedVelocity",
+  "groundAngleLimit", "wallAngleLimit", "slopeMinAngle",
 ]);
 
 /**

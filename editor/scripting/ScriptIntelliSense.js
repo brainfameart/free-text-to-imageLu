@@ -76,11 +76,12 @@ const RIGIDBODY_API_KINEMATIC = RIGIDBODY_API_COMMON.concat([
   { label: "move(dx, dy)", detail: "One-shot swept move this frame — blocked/slid by obstacles just like velocity", insert: "move(" },
   { label: "isGrounded", detail: "True when the character controller is touching the ground (read-only)", insert: "isGrounded" },
   { label: "isOnCeiling", detail: "True when touching a ceiling surface above (read-only)", insert: "isOnCeiling" },
-  { label: "isOnWall", detail: "True when touching a wall laterally (read-only)", insert: "isOnWall" },
-  { label: "isOnSlope", detail: "True when grounded on a sloped surface (groundAngle > 5°) (read-only)", insert: "isOnSlope" },
-  { label: "groundAngle", detail: "Surface angle in degrees from horizontal (0=flat, 45=steep slope) (read-only)", insert: "groundAngle" },
-  { label: "slopeAngle", detail: "Alias for groundAngle (read-only)", insert: "slopeAngle" },
+  { label: "isOnWall", detail: "True when touching a wall — only fires for surfaces steeper than wallAngleLimit (read-only)", insert: "isOnWall" },
+  { label: "isOnSlope", detail: "True when grounded on a slope steeper than slopeMinAngle (read-only)", insert: "isOnSlope" },
   { label: "resolvedVelocity", detail: "{ x, y } — actual movement this step after collisions (read-only)", insert: "resolvedVelocity" },
+  { label: "groundAngleLimit", detail: "Max angle from horizontal (deg) that counts as walkable ground — default 45. Steeper contacts are unclimbable or walls.", insert: "groundAngleLimit = " },
+  { label: "wallAngleLimit", detail: "Min angle (deg) before a surface counts as a wall — default 70. Contacts between groundAngleLimit and this are steep-but-not-wall.", insert: "wallAngleLimit = " },
+  { label: "slopeMinAngle", detail: "Min angle (deg) before isOnSlope fires — default 10. Raise to ignore minor floor tilt noise.", insert: "slopeMinAngle = " },
 ]);
 const RIGIDBODY_API_STATIC = [
   { label: "type", detail: "'Static' — body never moves. Change Body Type in the Inspector to Dynamic or Kinematic.", insert: "type" },

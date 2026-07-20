@@ -163,12 +163,38 @@ export class Rigidbody2D {
     //
     // isOnCeiling: touching a surface above (normal pushes character down)
     // isOnWall:    touching a wall laterally (normal is mostly horizontal)
-    // isOnSlope:   grounded on a non-flat surface (groundAngle > 5°)
+    // isOnSlope:   grounded on a non-flat surface (groundAngle >= slopeMinAngle)
     // groundAngle: angle of the ground surface in degrees from horizontal
-    //              (0 = flat, 45 = steep slope, up to the slope limit)
+    //              (0 = flat, 45 = steep slope, up to the groundAngleLimit)
     this.isOnCeiling = false;
     this.isOnWall = false;
     this.isOnSlope = false;
     this.groundAngle = 0;
+
+    // KINEMATIC-only, user-configurable angle thresholds (degrees).
+    // These let scripts define exactly what counts as ground, slope, and
+    // wall for THIS body — no global constant to edit, no engine rebuild.
+    //
+    // groundAngleLimit: contacts whose normal is within this angle of
+    //   world-up are treated as walkable ground (and tracked for
+    //   isGrounded/groundAngle). Contacts steeper than this are either
+    //   walls or unclimbable slopes. Default 45° matches Unity's
+    //   CharacterController.slopeLimit default and Rapier's own example.
+    //   Script: this.rigidbody.groundAngleLimit = 60
+    //
+    // wallAngleLimit: contacts between groundAngleLimit and this angle
+    //   are "too steep to walk on" but are NOT walls — they are
+    //   unclimbable slopes. Only contacts at or above this angle (i.e.
+    //   nearly vertical) set isOnWall. Default 70°.
+    //   Script: this.rigidbody.wallAngleLimit = 80
+    //
+    // slopeMinAngle: minimum groundAngle (degrees) before isOnSlope
+    //   becomes true. Contacts below this are treated as flat ground.
+    //   Default 10° (raised from the old 5° to reduce false positives
+    //   from floating-point noise on flat floors).
+    //   Script: this.rigidbody.slopeMinAngle = 15
+    this.groundAngleLimit = 45;
+    this.wallAngleLimit   = 70;
+    this.slopeMinAngle    = 10;
   }
 }

@@ -64,6 +64,19 @@ const SLOPE_LIMIT_DEG = 45;
 // climb limit) for a natural, Unity-like "band" of walkable-but-slidey
 // ground between dead flat and too-steep-to-climb.
 const SLOPE_SLIDE_LIMIT_DEG = 30;
+// Contacts whose normal angle is between SLOPE_LIMIT_DEG and this
+// threshold are "too steep to walk on" but are NOT true walls — do NOT
+// set isOnWall for them. Only normals whose angle exceeds this value
+// (nearly vertical surfaces) are reported as walls. Separating the two
+// thresholds stops steep-but-walkable-looking slopes from triggering
+// isOnWall and stops wall-jump logic from firing while on a ramp.
+const WALL_ANGLE_DEG = 70;
+// Number of consecutive physics frames Rapier's computedGrounded() must
+// return false before isGrounded is actually cleared. Prevents the
+// 1-frame "ground → air → ground" flicker that occurs on uneven terrain,
+// step edges, or when the character briefly loses the snap-to-ground
+// contact while still visually standing on the surface.
+const GROUNDED_GRACE_FRAMES = 3;
 
 function rapierBodyType(RAPIER, bodyType) {
   switch (bodyType) {
@@ -132,6 +145,11 @@ export class PhysicsWorld {
     /** Per-dynamic "currently touching" set for dynamic<->dynamic and dynamic<->static
      *  pairs, used to fire onCollisionExit when the event queue reports started=false. */
     this._dynamicContacts = new Map();
+    /** Per-kinematic entity: number of consecutive physics frames that
+     *  Rapier's computedGrounded() has returned false. Used to implement
+     *  GROUNDED_GRACE_FRAMES hysteresis so a single skipped snap-to-ground
+     *  frame does not cause a visible ground→air→ground flicker. */
+    this._ungroundedFrames = new Map();
     /** Rapier EventQueue used to drain collision/trigger events after each step */
     this._eventQueue = null;
 
@@ -796,8 +814,19 @@ export class PhysicsWorld {
         y: current.y + desiredY,
       });
       if (!rb.lockRotation) {
-        const currentRotation = handle.body.rotation();
-        handle.body.setNextKinematicRotation(currentRotation + rb.angularVelocity * dt);
+        // Use transform.rotation as the base, not handle.body.rotation().
+        // Scripts run before _syncKinematicMovement and write directly to
+        // the Transform component ("this.rotation = ..."). If we read the
+        // Rapier body's last-committed rotation instead, the script's change
+        // is silently discarded: _syncKinematicMovement calls
+        // setNextKinematicRotation with the old value, and after the step
+        // line 292 overwrites transform.rotation with that same old value.
+        // Reading transform.rotation here closes the loop so "this.rotation
+        // += N" accumulates correctly each frame.
+        const entity = this._stepWorld && this._stepWorld.getEntity(handle._entityId);
+        const tf = entity && entity.getComponent(TRANSFORM);
+        const baseRot = tf ? tf.rotation * DEG2RAD : handle.body.rotation();
+        handle.body.setNextKinematicRotation(baseRot + rb.angularVelocity * dt);
       }
       rb.resolvedVelocityX = rb.velocityX;
       rb.resolvedVelocityY = rb.velocityY;
@@ -817,6 +846,19 @@ export class PhysicsWorld {
     // still works but assumes mass 0 (no push at all) since a kinematic
     // body has no intrinsic mass of its own in Rapier's eyes.
     this._characterController.setCharacterMass(Math.max(0.0001, rb.mass));
+
+    // Per-body angle thresholds (fallback to global defaults when not set
+    // — old scenes that predate these fields will behave identically).
+    const groundLimit = (rb.groundAngleLimit != null) ? rb.groundAngleLimit : SLOPE_LIMIT_DEG;
+    const wallLimit   = (rb.wallAngleLimit   != null) ? rb.wallAngleLimit   : WALL_ANGLE_DEG;
+    const slopeMin    = (rb.slopeMinAngle    != null) ? rb.slopeMinAngle    : 10;
+
+    // Sync the character controller's own slope-climb limit so it matches
+    // whatever the script set for groundAngleLimit — the controller uses
+    // it to decide whether to slide or stop at a steep contact, and it
+    // must stay consistent with our contact-classification below or the
+    // body will be stopped by surfaces it also classifies as "not ground".
+    this._characterController.setMaxSlopeClimbAngle(groundLimit * DEG2RAD);
 
     const desiredX = rb.velocityX * dt + extraMoveX;
     const desiredY = rb.velocityY * dt + extraMoveY;
@@ -845,49 +887,57 @@ export class PhysicsWorld {
     // floor's normal points UP = negative Y, and a ceiling's normal points
     // DOWN = positive Y.
     //
-    // SLOPE_LIMIT (45°): ground contacts whose surface normal is within
-    // 45° of world-up are walkable ground; steeper contacts are walls.
-    // This matches Unity's CharacterController.slopeLimit default.
+    // Per-body classification thresholds resolved earlier in this function.
+    // groundLimit: contacts within this angle of up → walkable ground.
+    // wallLimit:   contacts at or above this angle from up → genuine wall.
+    // slopeMin:    minimum groundAngle to set isOnSlope.
     let onCeiling = false, onWall = false, onSlope = false;
     let groundAngle = 0;
+    // hasGroundContact: true if ANY collision normal classifies as ground.
+    // This is the PRIMARY source for isGrounded — it is stable even when
+    // velocityY = 0 (zero downward movement means computedGrounded() can
+    // return false while the body is plainly resting on a floor, which
+    // causes the 0→10→0→10 gravity flicker loop when scripts read
+    // isGrounded to gate their own gravity). computedGrounded() is used
+    // only as a secondary signal for snap-to-ground cases where Rapier
+    // detects ground contact through its internal probe rather than an
+    // actual swept collision (e.g. very first frame of landing, or when
+    // the body's velocity is zero but snap pulls it flush to the floor).
+    let hasGroundContact = false;
 
     const numCols = this._characterController.numComputedCollisions();
     for (let ci = 0; ci < numCols; ci++) {
       const col = this._characterController.computedCollision(ci);
       if (!col) continue;
-      // Rapier's CharacterCollision exposes normal1 (world-space outward
-      // normal ON THE OBSTACLE — i.e. pointing away from its surface,
-      // which for a floor the character stands on points straight up,
-      // toward the character — exactly the "which way does this surface
-      // push the character away" semantics this classification assumes)
-      // and normal2 (local-space normal on the character's own shape,
-      // NOT what we want here). There is no plain `.normal` field on
-      // this object — using that name here previously made this check
-      // always false, silently skipping straight to the cruder
-      // movement-based fallback below for EVERY collision, every frame,
-      // regardless of what Rapier actually computed. normal1 is the
-      // correct, precise, per-collision-normal field to read.
+      // col.normal1 is the world-space outward normal ON THE OBSTACLE —
+      // for a floor the character stands on it points straight up toward
+      // the character. normal2 is local-space on the character's own
+      // shape and is NOT what we want here.
       const normal = col.normal1;
       if (normal && typeof normal.y === "number") {
-        // Angle between the collision normal and world-up (0, -1 in Y-down).
-        // dot((nx,ny),(0,-1)) = -ny → angle = acos(-ny)
+        // dot((nx,ny),(0,-1)) = -ny  →  angle = acos(-ny)  (Y-down world)
         const dotWithUp = Math.max(-1, Math.min(1, -normal.y));
         const angle = Math.acos(dotWithUp) * RAD2DEG;
-        if (angle <= SLOPE_LIMIT_DEG) {
-          // Ground or shallow slope — track the steepest angle seen.
-          // onSlope is resolved AFTER the loop from groundAngle so that
-          // being simultaneously on flat ground AND a slope (e.g. near
-          // the base of a ramp) doesn't make the state flicker between
-          // ground/slope/groundslope every frame — only the steepest
-          // walkable contact determines whether we're "on a slope".
+        if (angle <= groundLimit) {
+          // Ground or walkable slope — track the steepest angle seen.
+          // isOnSlope is resolved after the loop so touching both flat
+          // ground AND a slope simultaneously doesn't cause per-contact
+          // flickering; only the steepest walkable normal decides.
+          hasGroundContact = true;
           if (angle > groundAngle) groundAngle = angle;
         } else if (dotWithUp < 0) {
-          // Normal has a downward component → ceiling (pushes character down).
+          // Normal has downward component → ceiling (pushes character down).
           onCeiling = true;
-        } else {
-          // Mostly horizontal normal → lateral wall.
+        } else if (angle >= wallLimit) {
+          // Near-vertical surface → genuine wall.
+          // Contacts between groundLimit and wallLimit are "too steep to
+          // climb" but are NOT walls — they are unclimbable slopes.
+          // Treating them as walls caused isOnWall to fire on ramps,
+          // confusing wall-jump logic even with no vertical surface nearby.
           onWall = true;
         }
+        // else: angle in (groundLimit, wallLimit) — unclimbable slope,
+        // ignored for both ground AND wall state intentionally.
       }
     }
 
@@ -975,17 +1025,33 @@ export class PhysicsWorld {
       if (absDesiredX > 0.5 && Math.abs(corrected.x) < absDesiredX * 0.3) onWall = true;
     }
 
-    // isOnSlope: derive from groundAngle after ALL contacts are processed,
-    // not per-contact — this prevents flickering when the character
-    // simultaneously touches flat ground and a slope (e.g. at the base
-    // of a ramp), which would otherwise alternate states every frame.
-    // Matches Unity: CharacterController.isGrounded is true on both, and
-    // slope detection is a single stable value, not a per-contact toggle.
-    onSlope = groundAngle > 5;
+    // isOnSlope: derive from groundAngle after ALL contacts are processed
+    // (not per-contact) so touching flat ground + a slope simultaneously
+    // doesn't cause per-contact flickering. Use per-body slopeMin so
+    // floating-point noise on flat floors doesn't trigger isOnSlope.
+    onSlope = groundAngle >= slopeMin;
+
+    // isGrounded: contact-normal-based, NOT purely from computedGrounded().
+    //
+    // Why: computedGrounded() requires actual downward swept movement to
+    // detect the floor. When a script reads isGrounded=true and sets
+    // velocityY=0, the NEXT step has desiredY=0 — no downward sweep —
+    // so computedGrounded() returns false. After GROUNDED_GRACE_FRAMES it
+    // clears, gravity is applied (velocityY>0), the sweep fires again,
+    // grounded goes true, script zeros velocity, repeat → the infamous
+    // 0→10→0→10 flickering loop.
+    //
+    // hasGroundContact is derived from actual collision normals (which
+    // Rapier reports even for a zero-velocity body resting on a floor)
+    // and is therefore immune to this loop. computedGrounded() is kept
+    // as a secondary signal only for the snap-to-ground probe edge case
+    // (very first landing frame where a zero-area contact doesn't always
+    // produce a usable normal1).
+    const groundedFromContacts = hasGroundContact || grounded;
 
     rb.isOnCeiling = onCeiling;
     rb.isOnWall    = onWall;
-    rb.isOnSlope   = grounded && onSlope;
+    rb.isOnSlope   = groundedFromContacts && onSlope;
     rb.groundAngle = groundAngle;
 
     const current = handle.body.translation();
@@ -995,8 +1061,13 @@ export class PhysicsWorld {
     });
 
     if (!rb.lockRotation) {
-      const currentRotation = handle.body.rotation();
-      handle.body.setNextKinematicRotation(currentRotation + rb.angularVelocity * dt);
+      // Same transform.rotation-as-base logic as the no-collider path above:
+      // scripts write to Transform before this runs; using handle.body.rotation()
+      // would silently throw away that write every frame.
+      const entity = this._stepWorld && this._stepWorld.getEntity(handle._entityId);
+      const tf = entity && entity.getComponent(TRANSFORM);
+      const baseRot = tf ? tf.rotation * DEG2RAD : handle.body.rotation();
+      handle.body.setNextKinematicRotation(baseRot + rb.angularVelocity * dt);
     }
 
     // Report the ACTUAL (possibly blocked/slid) movement to the
@@ -1006,10 +1077,27 @@ export class PhysicsWorld {
     // intended input the controller/Inspector/script set.
     rb.resolvedVelocityX = dt > 0 ? corrected.x / dt : 0;
     rb.resolvedVelocityY = dt > 0 ? corrected.y / dt : 0;
-    // Real sweep-based grounded state (see the field's doc in
-    // Rigidbody2D.js) — this is what ControllerSystem should check
-    // instead of guessing from a velocity epsilon.
-    rb.grounded = grounded;
+
+    // Grounded hysteresis on top of the contact-normal result.
+    // groundedFromContacts already eliminates the main flicker cause (the
+    // zero-velocity / no-downward-sweep case). The grace frames here are
+    // a second safety net for the rarer case where the contact list itself
+    // is briefly empty for one frame (e.g. landing on a thin edge, a step
+    // corner, or the first frame of the snap-to-ground snapping the body
+    // down into a new contact). Without it, even contact-based grounded
+    // can drop for a single frame when the sweep geometry is degenerate.
+    const myId = handle._entityId;
+    if (groundedFromContacts) {
+      this._ungroundedFrames.set(myId, 0);
+      rb.grounded = true;
+    } else {
+      const streak = (this._ungroundedFrames.get(myId) || 0) + 1;
+      this._ungroundedFrames.set(myId, streak);
+      if (streak >= GROUNDED_GRACE_FRAMES) rb.grounded = false;
+      // else: body was grounded last frame and contacts just vanished —
+      // keep grounded=true for up to GROUNDED_GRACE_FRAMES more frames
+      // before accepting that the character is truly airborne.
+    }
   }
 
   /**
@@ -1200,6 +1288,7 @@ export class PhysicsWorld {
     this._kinematicContacts.clear();
     this._kinematicEventContacts.clear();
     this._dynamicContacts.clear();
+    this._ungroundedFrames.clear();
     for (const body of this._tilemapBodies.values()) {
       this.rapierWorld.removeRigidBody(body);
     }
