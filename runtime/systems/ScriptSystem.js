@@ -91,17 +91,55 @@ export class ScriptSystem {
    * message. Falls back to the error's own message for plain script
    * bugs (null deref, bad logic, etc.) that have no special kind.
    */
-  _formatError(err) {
+  _formatError(err, methodName) {
     const raw = err && err.message ? err.message : String(err);
     const kind = (err && err.kind) || "script-error";
     // The *API.js files already write a complete, specific sentence for
     // missing-component / unsupported-body-type / unknown-api — they
     // know exactly which object, which member, and why. Nothing to add.
+    if (kind === "script-error" && methodName === "init") {
+      const hint = this._topLevelThisHint(raw);
+      if (hint) return { kind, message: raw + " " + hint };
+    }
     return { kind, message: raw };
   }
 
+  /**
+   * Detects the most common beginner mistake that surfaces as an
+   * "init" error: reading `this.<prop>` (this.x, this.sprite, etc.)
+   * in top-level script code instead of inside a lifecycle function
+   * like onStart/onUpdate.
+   *
+   * Top-level code runs once, immediately, when the script factory is
+   * compiled and invoked to collect the lifecycle handlers — BEFORE
+   * any handler is ever called with `.call(entityContext, ...)`. At
+   * that point there is no entity `this` yet, so `this` is undefined
+   * (scripts run in strict mode), and `this.x` throws exactly the
+   * "Cannot read properties of undefined (reading 'x')" message this
+   * matches on. Reported with method "init" by _initScripts() below,
+   * since it happens outside any lifecycle call.
+   *
+   * Returns a one-line actionable hint, or null if the message doesn't
+   * match this pattern (callers fall back to the raw message alone).
+   */
+  _topLevelThisHint(message) {
+    const m = message.match(/Cannot read propert(?:y|ies) of undefined \(reading '([^']+)'\)/);
+    if (!m) return null;
+    const prop = m[1];
+    const capProp = prop.charAt(0).toUpperCase() + prop.slice(1);
+    return (
+      "Hint: it looks like you're using \"this." + prop + "\" outside a " +
+      "lifecycle function. \"this\" only refers to the entity INSIDE " +
+      "functions like onStart() or onUpdate(dt) — not in code that runs " +
+      "at the top of the script. Move \"this." + prop + "\" into onStart() " +
+      "(runs once, before the first onUpdate) or onUpdate(), e.g.: " +
+      "var start" + capProp + "; function onStart() { start" + capProp +
+      " = this." + prop + "; }"
+    );
+  }
+
   _reportError(scriptName, err, methodName) {
-    const { kind, message } = this._formatError(err);
+    const { kind, message } = this._formatError(err, methodName);
 
     // Try to extract a line number from the error stack (only
     // meaningful for plain script-error bugs thrown from the user's
@@ -160,7 +198,7 @@ export class ScriptSystem {
   _compile(scriptName, source) {
     try {
       const factory = new Function(
-        "find", "scene", "physics", "input", "time", "random", "global", "console", "Math",
+        "find", "scene", "physics", "input", "time", "random", "global", "debug", "console", "Math",
         '"use strict";\n' + source + '\n' +
         "return {\n" +
         "  onStart: typeof onStart !== 'undefined' ? onStart : null,\n" +
@@ -193,7 +231,7 @@ export class ScriptSystem {
       try {
         const g = this.scriptApi.getGlobals();
         const handlers = factory(
-          g.find, g.scene, g.physics, g.input, g.time, g.random, g.global,
+          g.find, g.scene, g.physics, g.input, g.time, g.random, g.global, g.debug,
           console, Math
         );
         const context = this.scriptApi.createEntityContext(entity);

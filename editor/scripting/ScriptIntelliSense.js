@@ -191,6 +191,7 @@ const GLOBAL_APIS = [
   { label: "time", detail: "Frame timing: time.deltaTime, time.elapsed", insert: "time." },
   { label: "random", detail: "Random numbers: random.int(min,max), random.float(min,max)", insert: "random." },
   { label: "global", detail: "Cross-script shared state: global.score = 0, global.lives, etc.", insert: "global." },
+  { label: "debug", detail: "On-screen debug HUD: debug.show(), debug.log(label, value)", insert: "debug." },
 ];
 
 const SCENE_API = [
@@ -212,6 +213,13 @@ const TIME_API = [
 const RANDOM_API = [
   { label: "int(min, max)", detail: "Random integer in [min, max] inclusive", insert: "int(" },
   { label: "float(min, max)", detail: "Random float in [min, max)", insert: "float(" },
+];
+const DEBUG_API = [
+  { label: "show(on)", detail: "Turn the on-screen debug HUD on (default) or off — debug.show(false) hides it", insert: "show(" },
+  { label: "showFps(on)", detail: "Show/hide just the FPS line while the HUD stays on", insert: "showFps(" },
+  { label: "log(label, value)", detail: "Add/update a custom line in the HUD, e.g. debug.log(\"Player HP\", this.hp)", insert: 'log("' },
+  { label: "clear(label)", detail: "Remove one custom HUD line by its label", insert: 'clear("' },
+  { label: "clearAll()", detail: "Remove every custom HUD line (FPS line stays if showFps is on)", insert: "clearAll()" },
 ];
 
 // Parses variable assignments from find() calls so autocomplete can
@@ -533,6 +541,7 @@ export function registerIntelliSense(monaco) {
         else if (subObj === "input") items = INPUT_API;
         else if (subObj === "time") items = TIME_API;
         else if (subObj === "random") items = RANDOM_API;
+        else if (subObj === "debug") items = DEBUG_API;
         if (items) {
           for (const item of items) {
             suggestions.push(_makeCompletion(monaco, item, range));

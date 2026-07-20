@@ -106,8 +106,14 @@ export class PhysicsWorld {
     this.rapierWorld = null;
     this.ready = false;
 
-    /** @type {Map<string, { body: object, collider: object|null, bodyType: string, colliderSig: string }>} entityId -> handles */
+    /** @type {Map<string, { body: object, collider: object|null, bodyType: string, _colliderRef: object|null }>} entityId -> handles. Also carries cached _sig* fields used by _syncCollider's cheap per-frame dirty-check (see that method). */
     this._handles = new Map();
+    // Running count of KINEMATIC bodies currently in _handles, kept in
+    // sync at every _handles.set()/delete()/clear() call site (see
+    // _hasKinematicBodies() below) — lets _dispatchKinematicCollisions
+    // skip its entire scan with an O(1) check on frames with no
+    // kinematic bodies, instead of walking _handles just to find out.
+    this._kinematicCount = 0;
 
     // Per-tilemap-cell static colliders: each Tilemap entity whose
     // cells map to solid ground gets a single STATIC Rapier body, and
@@ -281,6 +287,7 @@ export class PhysicsWorld {
       if (!seen.has(entityId)) {
         if (handle.collider) this._colliderHandleMap.delete(handle.collider.handle);
         this.rapierWorld.removeRigidBody(handle.body);
+        if (handle.bodyType === BodyType.KINEMATIC) this._kinematicCount--;
         this._handles.delete(entityId);
       }
     }
@@ -442,6 +449,17 @@ export class PhysicsWorld {
   }
 
   /**
+   * O(1) check backed by _kinematicCount (kept in sync at every
+   * _handles mutation site — see _syncEntity's needsNewBody/simulated
+   * branches, the stale-handle sweep in step(), and clear() above) so
+   * _dispatchKinematicCollisions can skip its whole scan on frames with
+   * no kinematic bodies without walking _handles just to find out.
+   */
+  _hasKinematicBodies() {
+    return this._kinematicCount > 0;
+  }
+
+  /**
    * Detects solid contacts for every KINEMATIC body via Rapier's
    * contactPair query (independent of movement), and fires onCollision
    * on the not-touching \u2192 touching transition. Catches stationary /
@@ -454,6 +472,19 @@ export class PhysicsWorld {
   _dispatchKinematicCollisions(world, scriptSystem) {
     if (!this.ready || !scriptSystem) return;
     const RAPIER = this.RAPIER;
+
+    // PERFORMANCE: this function used to unconditionally build the
+    // `others` flat list (walking every entity collider AND every
+    // tilemap cell collider) and then loop every tracked handle, EVERY
+    // physics step — even for scenes with zero KINEMATIC bodies (the
+    // common case: a scene with just Dynamic/Static physics, e.g. a
+    // single falling box). That's pure wasted work: this function's
+    // entire job is kinematic-vs-other contact probing, so with no
+    // kinematic bodies there is nothing for it to do at all. Checking
+    // first (a cheap flag flip, not a full scan — see
+    // _hasKinematicBodies below) skips the list-build and scan entirely
+    // on every frame that has no kinematic bodies.
+    if (!this._hasKinematicBodies()) return;
 
     // Flat list of every other collider to test against: entity colliders
     // (reverse-mapped from handle \u2192 entityId) + tilemap cell colliders
@@ -635,6 +666,7 @@ export class PhysicsWorld {
       if (handle) {
         if (handle.collider) this._colliderHandleMap.delete(handle.collider.handle);
         this.rapierWorld.removeRigidBody(handle.body);
+        if (handle.bodyType === BodyType.KINEMATIC) this._kinematicCount--;
         this._handles.delete(entity.id);
       }
       return;
@@ -646,6 +678,7 @@ export class PhysicsWorld {
       if (handle) {
         if (handle.collider) this._colliderHandleMap.delete(handle.collider.handle);
         this.rapierWorld.removeRigidBody(handle.body);
+        if (handle.bodyType === BodyType.KINEMATIC) this._kinematicCount--;
       }
 
       // Body type just changed (or is being created) — drop any
@@ -670,8 +703,9 @@ export class PhysicsWorld {
         .setRotation(transform.rotation * DEG2RAD);
 
       const body = this.rapierWorld.createRigidBody(desc);
-      handle = { body, collider: null, bodyType: effectiveBodyType, colliderSig: null, _entityId: entity.id };
+      handle = { body, collider: null, bodyType: effectiveBodyType, _colliderRef: null, _entityId: entity.id };
       this._handles.set(entity.id, handle);
+      if (effectiveBodyType === BodyType.KINEMATIC) this._kinematicCount++;
     } else {
       // Static bodies never move via simulation, but the editor may
       // still drag them around in edit mode — keep them synced to
@@ -1161,8 +1195,10 @@ export class PhysicsWorld {
    * don't auto-scale with non-uniform Transform scale the way a Pixi
    * sprite does, so the effective size must be baked in here).
    *
-   * A signature string lets us skip the (relatively expensive)
-   * recreate when nothing shape-affecting actually changed.
+   * A cheap per-frame dirty-check (primitive field comparisons, no
+   * allocation) lets us skip the relatively expensive rebuild — and the
+   * trig-heavy geometry computation that feeds it — when nothing
+   * shape-affecting actually changed since last frame.
    */
   _syncCollider(handle, collider, transform) {
     const RAPIER = this.RAPIER;
@@ -1171,32 +1207,50 @@ export class PhysicsWorld {
       if (handle.collider) {
         this.rapierWorld.removeCollider(handle.collider, true);
         handle.collider = null;
-        handle.colliderSig = null;
+        handle._colliderRef = null;
       }
       return;
     }
 
+    // PERFORMANCE: this used to call getColliderWorldGeometry() (trig:
+    // sin/cos + scale math) AND build a JSON.stringify signature array
+    // EVERY frame for EVERY physics entity, purely to detect "did
+    // anything shape-affecting change" — even though a collider's
+    // shape/offset/material almost never change after spawn (only
+    // transform.rotation moves every frame for a spinning/rotating
+    // body, and rotation doesn't even affect Box/Circle collider
+    // geometry the way this signature is built). JSON.stringify in
+    // particular allocates a fresh array + walks/escapes every field
+    // into a string every single call — with even one Rigidbody2D in a
+    // scene, that ran 60+ times a second for no reason, which is
+    // exactly the "one physics object tanks FPS" symptom.
+    //
+    // Fix: compare the handful of primitive fields that can actually
+    // change directly (a handful of === checks, no allocation at all),
+    // and only call getColliderWorldGeometry() + rebuild the Rapier
+    // collider on the rare frame something really did change.
+    if (
+      handle._colliderRef === collider &&
+      handle._sigShape === collider.shape &&
+      handle._sigOffsetX === collider.offsetX &&
+      handle._sigOffsetY === collider.offsetY &&
+      handle._sigWidth === collider.width &&
+      handle._sigHeight === collider.height &&
+      handle._sigRadius === collider.radius &&
+      handle._sigCapsuleRadius === collider.capsuleRadius &&
+      handle._sigCapsuleHalfHeight === collider.capsuleHalfHeight &&
+      handle._sigTrianglePoints === collider.trianglePoints &&
+      handle._sigIsTrigger === collider.isTrigger &&
+      handle._sigFriction === collider.friction &&
+      handle._sigRestitution === collider.restitution &&
+      handle._sigDensity === collider.density &&
+      handle._sigScaleX === transform.scaleX &&
+      handle._sigScaleY === transform.scaleY
+    ) {
+      return; // nothing shape-affecting changed since last frame — skip entirely
+    }
+
     const geo = getColliderWorldGeometry(collider, transform);
-
-    const sig = JSON.stringify([
-      geo.shape,
-      geo.halfWidth,
-      geo.halfHeight,
-      geo.radius,
-      collider.capsuleRadius,
-      collider.capsuleHalfHeight,
-      collider.trianglePoints,
-      collider.offsetX,
-      collider.offsetY,
-      collider.isTrigger,
-      collider.friction,
-      collider.restitution,
-      collider.density,
-      transform.scaleX,
-      transform.scaleY,
-    ]);
-
-    if (handle.colliderSig === sig) return; // unchanged, skip rebuild
 
     if (handle.collider) {
       this.rapierWorld.removeCollider(handle.collider, true);
@@ -1265,7 +1319,26 @@ export class PhysicsWorld {
       );
 
     handle.collider = this.rapierWorld.createCollider(desc, handle.body);
-    handle.colliderSig = sig;
+
+    // Cache the primitive fields the fast-path check above compares
+    // next frame — see the dirty-check block near the top of this
+    // method for why this replaced a JSON.stringify signature.
+    handle._colliderRef = collider;
+    handle._sigShape = collider.shape;
+    handle._sigOffsetX = collider.offsetX;
+    handle._sigOffsetY = collider.offsetY;
+    handle._sigWidth = collider.width;
+    handle._sigHeight = collider.height;
+    handle._sigRadius = collider.radius;
+    handle._sigCapsuleRadius = collider.capsuleRadius;
+    handle._sigCapsuleHalfHeight = collider.capsuleHalfHeight;
+    handle._sigTrianglePoints = collider.trianglePoints;
+    handle._sigIsTrigger = collider.isTrigger;
+    handle._sigFriction = collider.friction;
+    handle._sigRestitution = collider.restitution;
+    handle._sigDensity = collider.density;
+    handle._sigScaleX = transform.scaleX;
+    handle._sigScaleY = transform.scaleY;
 
     // Register the new collider in the reverse-lookup map so event
     // draining can find the owning entityId from Rapier's handle index.
@@ -1284,6 +1357,7 @@ export class PhysicsWorld {
       this.rapierWorld.removeRigidBody(handle.body);
     }
     this._handles.clear();
+    this._kinematicCount = 0;
     this._colliderHandleMap.clear();
     this._kinematicContacts.clear();
     this._kinematicEventContacts.clear();

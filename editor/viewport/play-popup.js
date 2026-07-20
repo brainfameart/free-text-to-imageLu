@@ -114,6 +114,71 @@ function _wireConsoleForwarding() {
   };
 }
 
+/**
+ * Creates the (initially hidden) debug HUD overlay element — a small
+ * fixed-position monospace panel in the top-left corner of the game
+ * window. Positioned as a sibling of #game-canvas inside #letterbox so
+ * it sits on top of the PIXI canvas regardless of AspectFit scaling
+ * (the canvas itself is scaled via CSS transform — see applyAspectFit
+ * below — but this overlay is NOT, so its text always stays crisp and
+ * readable at 1:1 size no matter how small/large the game view is).
+ */
+function createDebugOverlay() {
+  const el = document.createElement("div");
+  el.id = "zengine-debug-hud";
+  el.style.cssText =
+    "position:absolute; top:8px; left:8px; z-index:9999; " +
+    "font:12px/1.5 'Consolas','Menlo',monospace; color:#0f0; " +
+    "background:rgba(0,0,0,0.6); padding:6px 10px; border-radius:4px; " +
+    "white-space:pre; pointer-events:none; display:none;";
+  document.body.appendChild(el);
+  return el;
+}
+
+/**
+ * Tracks a rolling FPS estimate from raw frame delta-times. Uses a
+ * short rolling window (averaged over ~0.5s) rather than the
+ * instantaneous 1/dt so the HUD number doesn't flicker wildly frame to
+ * frame — a single slow frame (e.g. a GC pause) shouldn't make the
+ * counter jump from 60 to 12 and back on consecutive frames.
+ */
+function createFpsTracker() {
+  let acc = 0;
+  let frames = 0;
+  let lastFps = 0;
+  return function tick(dt) {
+    acc += dt;
+    frames++;
+    if (acc >= 0.5) {
+      lastFps = Math.round(frames / acc);
+      acc = 0;
+      frames = 0;
+    }
+    return lastFps;
+  };
+}
+
+/**
+ * Renders scriptApi.debugState into the HUD element. Called every
+ * frame from game.loop's onTick (wired in boot() below) — cheap no-op
+ * when debugState.enabled is false, so it costs nothing for games that
+ * never call debug.show().
+ */
+function updateDebugOverlay(el, scriptApi, fps) {
+  const state = scriptApi.debugState;
+  if (!state || !state.enabled) {
+    if (el.style.display !== "none") el.style.display = "none";
+    return;
+  }
+  el.style.display = "block";
+  const lines = [];
+  if (state.showFps) lines.push("FPS: " + fps);
+  for (const [label, value] of state.stats) {
+    lines.push(label + ": " + value);
+  }
+  el.textContent = lines.join("\n") || "(debug on — no stats yet)";
+}
+
 async function boot() {
   // Forward this popup's own console.log/warn/error to the editor's
   // Console panel FIRST, before anything else in boot() has a chance
@@ -249,6 +314,18 @@ async function boot() {
 
   game.loop.start();
   window.__zengineGame = game;
+
+  // Debug HUD (FPS + any custom debug.log() stats a script has set) —
+  // created hidden, shown only once a script calls debug.show(). Polls
+  // scriptApi.debugState (see runtime/scripting/ScriptAPI.js) once per
+  // rendered frame via GameLoop's onTick, same hook the loop already
+  // exposes for host-side per-frame work.
+  const debugOverlayEl = createDebugOverlay();
+  const fpsTick = createFpsTracker();
+  game.loop.onTick = function (dt) {
+    const fps = fpsTick(dt);
+    updateDebugOverlay(debugOverlayEl, game.scriptApi, fps);
+  };
 
   // When a script calls scene.load() / scene.restart() and the new
   // scene's Main Camera has a different orientation/dimension than the

@@ -211,6 +211,19 @@ export class ScriptAPI {
     /** Updated by ScriptSystem each frame */
     this.time = { deltaTime: 0, elapsed: 0 };
 
+    /**
+     * Debug overlay state, driven by the `debug` global exposed to
+     * scripts (see getGlobals() below). The play popup (play-popup.js)
+     * polls `scriptApi.debugState` every frame to render/hide the HUD —
+     * this class only tracks the data, it never touches the DOM itself
+     * (ScriptAPI is shared by the editor too, which has no game HUD).
+     */
+    this.debugState = {
+      enabled: false,
+      showFps: true,
+      stats: new Map(), // custom key -> value pairs from debug.log()
+    };
+
     /** Set by createGame to enable scene.restart() */
     this._restartFn = null;
     /** Set by createGame to enable scene.load() */
@@ -370,6 +383,36 @@ export class ScriptAPI {
         set: function (_, key, value) { self._globals.set(key, value); return true; },
         has: function (_, key) { return self._globals.has(key); },
       }),
+      /**
+       * On-screen debug HUD, shown in the actual Play popup window (not
+       * the editor Console panel). Call debug.show() from any script
+       * (onStart is the usual place) to turn it on for the whole game —
+       * it's global state, not per-entity, so any script can toggle it.
+       *   debug.show()            — turn the HUD on, FPS counter visible
+       *   debug.show(false)       — turn it off again
+       *   debug.showFps(false)    — keep the HUD on but hide just the FPS line
+       *   debug.log("label", val) — add/update a custom line in the HUD,
+       *                              e.g. debug.log("Player HP", this.hp)
+       *   debug.clear("label")    — remove a single custom line
+       *   debug.clearAll()        — remove every custom line (FPS stays)
+       */
+      debug: {
+        show: function (on) {
+          self.debugState.enabled = on === undefined ? true : !!on;
+        },
+        showFps: function (on) {
+          self.debugState.showFps = on === undefined ? true : !!on;
+        },
+        log: function (label, value) {
+          self.debugState.stats.set(String(label), value);
+        },
+        clear: function (label) {
+          self.debugState.stats.delete(String(label));
+        },
+        clearAll: function () {
+          self.debugState.stats.clear();
+        },
+      },
     };
   }
 
