@@ -91,9 +91,10 @@ export const editorState = {
     openTabs: [],
     /** @type {string|null} currently active tab */
     activeTab: null,
-    /** @type {string[]} component keys forced to appear in autocomplete
-     *  regardless of the selected entity's components (API Management panel). */
-    forcedApis: [],
+    /** @type {Object<string, string[]>} per-script component keys forced to
+     *  appear in autocomplete (API Management panel). Keyed by script name so
+     *  overrides for one script never bleed into another. */
+    forcedApis: {},
     /** @type {Object<string,{entityId:string|null,entityIds:string[]|null}>}
      *  Per-script IntelliSense context. Set when a script is opened
      *  via an object (entityId) or the Scripts folder (entityIds =

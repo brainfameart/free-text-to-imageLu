@@ -454,10 +454,9 @@ function _getContextEntities() {
 }
 
 // Union of component keys present across all context entities, merged
-// with any APIs the user forced on via the API Management panel. When a
-// script is shared by objects with different components, every
-// component from every owner is included — so each property is valid on
-// at least one object and nothing breaks.
+// with any APIs the user forced on via the API Management panel for
+// this specific script. forcedApis is now a per-script map keyed by
+// script name — so overrides for ScriptA never bleed into ScriptB.
 function _contextComponentKeys() {
   const entities = _getContextEntities();
   const set = new Set();
@@ -466,7 +465,8 @@ function _contextComponentKeys() {
       if (e.hasComponent(c.key)) set.add(c.key);
     }
   }
-  const forced = editorState.scriptEditor.forcedApis || [];
+  const se = editorState.scriptEditor;
+  const forced = (se.forcedApis && se.activeTab && se.forcedApis[se.activeTab]) || [];
   for (const f of forced) set.add(f);
   return set;
 }
@@ -537,25 +537,73 @@ export function registerIntelliSense(monaco) {
       if (subMatch && subMatch[1] !== "this") {
         const subObj = subMatch[1];
         let items = null;
-        if (subObj === "transform") items = TRANSFORM_API;
-        else if (subObj === "sprite") items = SPRITE_API;
-        else if (subObj === "rigidbody") items = _rigidbodyApiForEntities(_getContextEntities());
-        else if (subObj === "animator") items = ANIMATOR_API;
-        else if (subObj === "camera") items = CAMERA_API;
-        else if (subObj === "audio") items = AUDIO_API;
-        else if (subObj === "controller") items = _controllerApiForEntities(_getContextEntities());
-        else if (subObj === "scene") items = SCENE_API;
-        else if (subObj === "physics") items = PHYSICS_API;
-        else if (subObj === "input") items = INPUT_API;
-        else if (subObj === "time") items = TIME_API;
-        else if (subObj === "random") items = RANDOM_API;
-        else if (subObj === "debug") items = DEBUG_API;
+        // Track whether the sub-object name is a known engine API (component or
+        // global). When it IS known but the entity doesn't have that component,
+        // we return empty rather than falling through to _allCompletions (which
+        // would show every API in the engine — confusing and misleading).
+        let isKnownSubObj = false;
+
+        const contextEntities = _getContextEntities();
+        // keys is null when there is no context (untracked variable path below).
+        // When we DO have a context, component sub-objects are only shown if
+        // that component is actually on the entity.
+        const hasContext = contextEntities.length > 0;
+        const keys = hasContext ? _contextComponentKeys() : null;
+
+        // Component sub-objects — only show when entity has the component (or
+        // when there's no tracked context and we can't tell).
+        if (subObj === "transform") {
+          isKnownSubObj = true;
+          items = TRANSFORM_API; // Transform is always present on every entity.
+        } else if (subObj === "sprite") {
+          isKnownSubObj = true;
+          if (!keys || keys.has(SPRITE_RENDERER)) items = SPRITE_API;
+        } else if (subObj === "rigidbody") {
+          isKnownSubObj = true;
+          if (!keys || keys.has(RIGIDBODY_2D)) items = _rigidbodyApiForEntities(contextEntities);
+        } else if (subObj === "animator") {
+          isKnownSubObj = true;
+          if (!keys || keys.has(SPRITE_ANIMATION)) items = ANIMATOR_API;
+        } else if (subObj === "camera") {
+          isKnownSubObj = true;
+          if (!keys || keys.has(CAMERA)) items = CAMERA_API;
+        } else if (subObj === "audio") {
+          isKnownSubObj = true;
+          if (!keys || keys.has(AUDIO_SOURCE)) items = AUDIO_API;
+        } else if (subObj === "controller") {
+          isKnownSubObj = true;
+          if (!keys || keys.has(CHARACTER_CONTROLLER)) items = _controllerApiForEntities(contextEntities);
+        // Global sub-objects — always available.
+        } else if (subObj === "scene") {
+          isKnownSubObj = true;
+          items = SCENE_API;
+        } else if (subObj === "physics") {
+          isKnownSubObj = true;
+          items = PHYSICS_API;
+        } else if (subObj === "input") {
+          isKnownSubObj = true;
+          items = INPUT_API;
+        } else if (subObj === "time") {
+          isKnownSubObj = true;
+          items = TIME_API;
+        } else if (subObj === "random") {
+          isKnownSubObj = true;
+          items = RANDOM_API;
+        } else if (subObj === "debug") {
+          isKnownSubObj = true;
+          items = DEBUG_API;
+        }
+
         if (items) {
           for (const item of items) {
             suggestions.push(_makeCompletion(monaco, item, range));
           }
           return { suggestions: suggestions };
         }
+        // Known engine name but component not on this entity → return nothing.
+        // (Don't fall through to _allCompletions — that would show every API.)
+        if (isKnownSubObj) return { suggestions: [] };
+
         // Unknown sub-object — check if it's a tracked find() variable.
         // If assigned from find("EntityName"), show that entity's
         // component APIs (same as `this.` for that entity). If the

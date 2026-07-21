@@ -401,19 +401,26 @@ function _renderApiPanel() {
   // Use the ACTIVE SCRIPT's context entities (not the viewport selection)
   // so the checkboxes auto-adjust when switching between scripts that
   // belong to objects with different components.
+  var se = editorState.scriptEditor;
   var entities = _getActiveScriptContextEntities();
-  var forced = editorState.scriptEditor.forcedApis;
+  // forcedApis is a per-script map keyed by script name — overrides for
+  // one script never bleed into another.
+  var forced = (se.activeTab && se.forcedApis && se.forcedApis[se.activeTab]) || [];
 
+  // Modules that expose a scripting sub-object (this.sprite, this.rigidbody, etc.).
+  // Collider2D and Light affect physics/rendering but have no script sub-object,
+  // so they're listed for information only (always shown as "on entity" if present,
+  // cannot be force-enabled to unlock a sub-object that doesn't exist).
   var modules = [
-    { name: "Transform", key: "Transform" },
-    { name: "Sprite", key: "SpriteRenderer" },
-    { name: "Rigidbody", key: "Rigidbody2D" },
-    { name: "Movement", key: "CharacterController" },
-    { name: "Collider", key: "Collider2D" },
-    { name: "Camera", key: "Camera" },
-    { name: "Audio", key: "AudioSource" },
-    { name: "Animator", key: "SpriteAnimation" },
-    { name: "Light", key: "Light" },
+    { name: "Transform",  key: "Transform",           hasApi: true },
+    { name: "Sprite",     key: "SpriteRenderer",      hasApi: true },
+    { name: "Rigidbody",  key: "Rigidbody2D",         hasApi: true },
+    { name: "Movement",   key: "CharacterController",  hasApi: true },
+    { name: "Camera",     key: "Camera",               hasApi: true },
+    { name: "Audio",      key: "AudioSource",          hasApi: true },
+    { name: "Animator",   key: "SpriteAnimation",      hasApi: true },
+    { name: "Collider",   key: "Collider2D",           hasApi: false },
+    { name: "Light",      key: "Light",                hasApi: false },
   ];
 
   var items = modules.map(function (m) {
@@ -421,11 +428,26 @@ function _renderApiPanel() {
     for (var i = 0; i < entities.length; i++) {
       if (entities[i].hasComponent(m.key)) { has = true; break; }
     }
+    if (!m.hasApi) {
+      // No script sub-object — show as informational only (no checkbox).
+      return (
+        '<span class="se-api-item" style="opacity:0.5;cursor:default;" title="' + m.name + ' has no scripting API — it affects physics/rendering only">' +
+        "<span>" + m.name + "</span>" +
+        (has ? ' <small style="color:#8a93a0;">(on entity)</small>' : ' <small style="color:#555;">(not on entity)</small>') +
+        "</span>"
+      );
+    }
     var isForced = forced.indexOf(m.key) >= 0;
     var checked = isForced || has;
+    // Entities' own components are auto-checked and cannot be unchecked —
+    // their APIs are always available. Only forced (user-added) ones are
+    // interactive checkboxes.
     var disabled = has ? "disabled" : "";
+    var title = has
+      ? m.name + " is on this entity — its API is always available"
+      : (isForced ? "Uncheck to remove this API from autocomplete for this script" : "Check to add this API to autocomplete for this script");
     return (
-      '<label class="se-api-item">' +
+      '<label class="se-api-item" title="' + title + '">' +
       '<input type="checkbox" data-action="script-api-toggle-module" data-module="' + m.key + '" ' +
       (checked ? "checked" : "") + " " + disabled + " />" +
       "<span>" + m.name + "</span>" +
@@ -434,9 +456,10 @@ function _renderApiPanel() {
     );
   }).join("");
 
+  var scriptLabel = se.activeTab ? (" for <em>" + se.activeTab + "</em>") : "";
   return (
     '<div style="padding:8px 12px;">' +
-    "<div style=\"font-size:11px;color:#8a93a0;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;\">Available APIs — checked modules appear in autocomplete even if the owning object doesn't have that component</div>" +
+    '<div style="font-size:11px;color:#8a93a0;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">API overrides' + scriptLabel + ' — force extra APIs into autocomplete when writing generic scripts</div>' +
     '<div style="display:flex;flex-wrap:wrap;gap:6px;">' + items + "</div>" +
     "</div>"
   );
@@ -580,11 +603,17 @@ export function handleScriptEditorAction(action, el) {
       break;
     case "script-api-toggle-module": {
       var mod = el.getAttribute("data-module");
-      var idx = editorState.scriptEditor.forcedApis.indexOf(mod);
+      var scriptName2 = editorState.scriptEditor.activeTab;
+      if (!scriptName2) break;
+      // forcedApis is a per-script map — read/write only the active script's entry.
+      var perScript = editorState.scriptEditor.forcedApis;
+      if (!perScript[scriptName2]) perScript[scriptName2] = [];
+      var arr = perScript[scriptName2];
+      var idx = arr.indexOf(mod);
       if (el.checked && idx < 0) {
-        editorState.scriptEditor.forcedApis.push(mod);
+        arr.push(mod);
       } else if (!el.checked && idx >= 0) {
-        editorState.scriptEditor.forcedApis.splice(idx, 1);
+        arr.splice(idx, 1);
       }
       break;
     }

@@ -47,6 +47,12 @@
 import { TRANSFORM } from "../components/Transform.js";
 import { SCRIPT } from "../components/Script.js";
 import { COLLIDER_2D, ColliderShape } from "../components/Collider2D.js";
+import { SPRITE_RENDERER } from "../components/SpriteRenderer.js";
+import { RIGIDBODY_2D } from "../components/Rigidbody2D.js";
+import { SPRITE_ANIMATION } from "../components/SpriteAnimation.js";
+import { CAMERA } from "../components/Camera.js";
+import { AUDIO_SOURCE } from "../components/AudioSource.js";
+import { CHARACTER_CONTROLLER } from "../components/CharacterController.js";
 import { createTransformAPI } from "./components/TransformAPI.js";
 import { createSpriteAPI } from "./components/SpriteAPI.js";
 import { createRigidbodyAPI } from "./components/RigidbodyAPI.js";
@@ -193,18 +199,23 @@ class EntityContext {
   _buildSubObjects() {
     var entity = this._entity;
 
+    // Transform is always present on every entity — always attach it.
     this.transform = createTransformAPI(entity);
-    this.sprite = createSpriteAPI(entity);
-    this.rigidbody = createRigidbodyAPI(entity);
-    this.animator = createAnimatorAPI(entity);
-    this.camera = createCameraAPI(entity);
-    this.audio = createAudioAPI(entity);
-    // Movement-type-aware — see scripting/components/ControllerAPI.js.
-    // Exposes isGrounded/simulateJump/jumpForce/etc. ONLY for Character
-    // Controller/Platformer, car tunables ONLY for Car, and so on,
-    // instead of a flat this.rigidbody.isOnGround duplicate that would
-    // mean the same thing two different ways.
-    this.controller = createControllerAPI(entity);
+
+    // Every other sub-object is attached ONLY when the entity actually has that
+    // component. Absent sub-objects are undefined, so scripts can safely branch:
+    //   if (this.rigidbody) { this.rigidbody.addForce(0, -500); }
+    // This also means autocomplete correctly reflects what the object can do:
+    // a Static-body entity won't offer addForce(), a sprite-less entity won't
+    // offer this.sprite.texture, and so on — matching the Inspector exactly.
+    this.sprite      = entity.hasComponent(SPRITE_RENDERER)     ? createSpriteAPI(entity)      : undefined;
+    this.rigidbody   = entity.hasComponent(RIGIDBODY_2D)        ? createRigidbodyAPI(entity)   : undefined;
+    this.animator    = entity.hasComponent(SPRITE_ANIMATION)    ? createAnimatorAPI(entity)    : undefined;
+    this.camera      = entity.hasComponent(CAMERA)              ? createCameraAPI(entity)      : undefined;
+    this.audio       = entity.hasComponent(AUDIO_SOURCE)        ? createAudioAPI(entity)       : undefined;
+    // Movement-type-aware — ControllerAPI.js exposes isGrounded/simulateJump
+    // ONLY for Character Controller/Platformer, car tunables ONLY for Car, etc.
+    this.controller  = entity.hasComponent(CHARACTER_CONTROLLER)? createControllerAPI(entity)  : undefined;
   }
 }
 
