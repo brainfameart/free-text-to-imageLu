@@ -288,11 +288,6 @@ export class ScriptSystem {
       this._fixedAccumulator -= FIXED_TIMESTEP;
     }
 
-    // Clear per-frame input state (keyPressed only lasts one frame)
-    if (this.scriptApi && this.scriptApi._clearFrameKeys) {
-      this.scriptApi._clearFrameKeys();
-    }
-
     // Regular update
     for (const [entityId, instances] of this.instances) {
       const entity = world.getEntity(entityId);
@@ -308,6 +303,26 @@ export class ScriptSystem {
           this._reportError(inst.scriptName, err, "onUpdate");
         }
       }
+    }
+
+    // Clear per-frame input state (keyPressed only lasts one frame).
+    //
+    // BUG FIX — ORDERING: this used to run BEFORE the onUpdate loop
+    // above (right after the fixed-update accumulator), which meant
+    // input.keyPressed(key) was already wiped back to false by the time
+    // ANY script's onUpdate() ran — the single most commonly used
+    // per-frame callback. A script doing
+    //   if (input.keyPressed("Space")) this.controller.simulateJump();
+    // inside onUpdate would never see a true, because this line had
+    // already cleared it moments earlier in the very same frame; only
+    // onFixedUpdate (which runs BEFORE this point) ever had a chance to
+    // observe a one-shot key press. Moved to the end of the frame — after
+    // onUpdate — so BOTH onFixedUpdate and onUpdate observe the same
+    // keyPressed state for the entire frame the key was actually pressed
+    // on, and it's cleared only once every lifecycle callback has had
+    // its turn.
+    if (this.scriptApi && this.scriptApi._clearFrameKeys) {
+      this.scriptApi._clearFrameKeys();
     }
 
     // Actually remove every entity queued this frame via this.destroy()

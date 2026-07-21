@@ -1137,12 +1137,38 @@ export class PhysicsWorld {
   /**
    * Pushes every DYNAMIC body the kinematic mover collided with during
    * the last character-controller sweep, in the direction the kinematic
-   * is moving. Each hit body is brought up to the kinematic's own travel
-   * speed along that direction, so the push is always "based on where
-   * the kinematic is moving" — not just along the contact normal. A
-   * kinematic body is effectively infinitely strong (forces never move
-   * it), so the transfer is full regardless of the body's mass. STATIC
-   * and KINEMATIC obstacles are skipped (impulses can't move them).
+   * is moving — a bulldozer-style shove based on where the kinematic is
+   * actually traveling, not just the contact normal.
+   *
+   * MASS-RATIO BUG FIX: this used to compute an impulse that forced the
+   * hit body to EXACTLY the kinematic's own travel speed in a single
+   * step, using only the target body's mass (impulse = otherMass *
+   * deltaV) — the kinematic's OWN mass (rb.mass, the same field already
+   * fed into setCharacterMass elsewhere in this file) never entered the
+   * formula at all. The practical symptom: a 1-mass crate and a
+   * 1000-mass boulder both got shoved to identical velocity by the same
+   * kinematic push, because "how strong is the pusher" was never part
+   * of the math — only "how much impulse does it take to move THIS
+   * body to THAT speed", which is mass-independent from the pusher's
+   * point of view (impulse = mass * deltaV is correct for reaching an
+   * exact target speed, but using deltaV = full kinematic speed for
+   * every body regardless of its own mass is what erased any sense of
+   * "pushing something heavy is harder").
+   *
+   * Fix: scale how much of the kinematic's speed is actually transferred
+   * per step by the pusher-to-pushed MASS RATIO
+   * (rb.mass / (rb.mass + otherMass)), the same weighted-average shape
+   * a real inelastic collision/contact resolves to. A pusher many times
+   * heavier than the obstacle (ratio → 1) still shoves it up to full
+   * speed almost immediately, matching the old "kinematic is
+   * effectively unstoppable" feel for light obstacles. A pusher lighter
+   * than or comparable to the obstacle (ratio → 0.5 or lower) now only
+   * transfers a fraction of its speed per step, so heavier bodies
+   * visibly lag behind / resist more, and continue easing toward full
+   * speed over several steps rather than snapping to it in one. STATIC
+   * and KINEMATIC obstacles are skipped entirely (impulses can't move
+   * them, and a kinematic obstacle has no meaningful "mass" of its own
+   * in Rapier's eyes to weigh against).
    */
   _pushDynamicBodies(rb, desiredX, desiredY, dt) {
     const RAPIER = this.RAPIER;
@@ -1160,6 +1186,14 @@ export class PhysicsWorld {
     const dirY = desiredY / desiredLen;
     const speed = dt > 0 ? desiredLen / dt : 0; // kinematic speed along the travel dir
 
+    // The pusher's own configured mass — this is what was missing
+    // before. Rigidbody2D.mass on a Kinematic body has no effect on its
+    // OWN motion (Rapier never integrates forces into a kinematic
+    // body), but it's exactly the right knob for "how strong is this
+    // pusher when it shoves something", so it's reused here instead of
+    // adding a separate "push strength" field.
+    const pusherMass = Math.max(0.0001, rb.mass);
+
     for (let i = 0; i < n; i++) {
       const col = controller.computedCollision(i);
       if (!col || !col.collider) continue;
@@ -1173,12 +1207,26 @@ export class PhysicsWorld {
       // shoving, letting Rapier's solver/gravity/friction own the rest.
       const v = otherBody.linvel();
       const vAlong = v.x * dirX + v.y * dirY;
-      const deltaV = speed - vAlong;
-      if (deltaV <= 1e-4) continue;
+      const remainingGap = speed - vAlong;
+      if (remainingGap <= 1e-4) continue;
 
       const otherMass = Math.max(0.0001, otherBody.mass());
-      // Impulse that brings the body exactly up to the kinematic's speed
-      // along the travel direction (impulse = mass * delta-velocity).
+
+      // Mass-ratio transfer fraction: how much of the remaining gap to
+      // this kinematic's speed gets closed THIS step. A much-heavier
+      // pusher (pusherMass >> otherMass) closes nearly all of it every
+      // step (ratio → 1), same feel as the old code for light obstacles.
+      // A pusher that's lighter than or comparable to what it's hitting
+      // closes only a fraction per step, so a heavy body visibly takes
+      // longer (several steps) to spin up to the kinematic's speed —
+      // and a MUCH heavier obstacle barely moves at all per step, since
+      // the ratio approaches 0 as otherMass grows relative to pusherMass.
+      const transferFraction = pusherMass / (pusherMass + otherMass);
+      const deltaV = remainingGap * transferFraction;
+      if (deltaV <= 1e-4) continue;
+
+      // Impulse that closes exactly `deltaV` of the gap along the
+      // travel direction (impulse = mass * delta-velocity).
       const impulseMag = otherMass * deltaV;
       otherBody.applyImpulse({ x: dirX * impulseMag, y: dirY * impulseMag }, true);
       otherBody.wakeUp();

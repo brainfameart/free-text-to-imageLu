@@ -74,11 +74,37 @@ const GRAVITY_Y = 980; // px/s^2 — matches PhysicsWorld.js's GRAVITY_Y. Only
 // reliably nonzero every single grounded frame.
 const GROUND_STICK_VY = 40; // px/s downward bias applied only while grounded
 
+// Keys this engine's default input binds to game actions (see isDown()
+// calls throughout this file: ArrowLeft/Right/Up/Down, WASD, Space).
+// Their default browser behavior (arrow keys and Space scroll the
+// page; Space also "clicks" whatever element currently has focus) is
+// suppressed ONLY for these specific codes — not blanket-blocked for
+// every key — so normal browser/editor shortcuts and any text inputs
+// elsewhere on the page keep working normally.
+const GAME_KEY_CODES = new Set([
+  "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown",
+  "KeyW", "KeyA", "KeyS", "KeyD",
+  "Space",
+]);
+
 /** Tracks currently-held keys. One instance per ControllerSystem (per game). */
 class InputState {
   constructor() {
     this.keys = new Set();
-    this._onKeyDown = (e) => this.keys.add(e.code);
+    this._onKeyDown = (e) => {
+      // BUG FIX: without this, holding an arrow key or Space scrolled
+      // the whole page (taking the game canvas out of view), and
+      // Space could "click" a focused button/link on the page. Either
+      // one can shift keyboard focus away from the game, which
+      // sometimes drops the matching keyup event entirely — leaving
+      // that key stuck "down" in this Set forever, i.e. a character
+      // that keeps walking/jumping on its own after the key was
+      // actually released. preventDefault() only for the specific
+      // codes this engine binds to game actions (see GAME_KEY_CODES
+      // above), so nothing else on the page is affected.
+      if (GAME_KEY_CODES.has(e.code)) e.preventDefault();
+      this.keys.add(e.code);
+    };
     this._onKeyUp = (e) => this.keys.delete(e.code);
     window.addEventListener("keydown", this._onKeyDown);
     window.addEventListener("keyup", this._onKeyUp);
@@ -176,8 +202,23 @@ export class ControllerSystem extends System {
 
     const targetX = moveX * controller.moveSpeed;
 
+    // AIR CONTROL FIX: same gap as the Kinematic path below — airControl
+    // (0-1 multiplier on acceleration while airborne) was previously
+    // never read here, so a Dynamic Character Controller/Platformer
+    // always accelerated at full ground acceleration in mid-air. Uses
+    // the "near-zero vertical speed" grounded epsilon (defined below,
+    // moved up here so both the lerp and the later grounded/jump logic
+    // can share the same value) rather than rigidbody.grounded's
+    // previous-frame value, so this reacts the same frame gravity
+    // starts pulling the body down. Top-Down has no gravity/air concept
+    // at all, so it always uses full acceleration.
+    const grounded = controller.controllerType === ControllerType.TOP_DOWN
+      ? true
+      : Math.abs(rigidbody.velocityY) < 20; // small epsilon: resting/near-zero vertical speed
+    const airborneMultiplier = grounded ? 1 : controller.airControl;
+
     // Smoothly approach the target horizontal speed rather than snapping.
-    const lerpT = Math.min(1, controller.acceleration * dt);
+    const lerpT = Math.min(1, controller.acceleration * airborneMultiplier * dt);
     const currentX = rigidbody.velocityX; // last value PhysicsWorld read back from Rapier
     rigidbody.driveVelocityX = currentX + (targetX - currentX) * lerpT;
 
@@ -194,7 +235,7 @@ export class ControllerSystem extends System {
     // own gravityScale integrate falling. We only ever touch Y to apply
     // a jump impulse (a velocity kick), never to simulate gravity
     // ourselves — that would double up with Rapier's.
-    const grounded = Math.abs(rigidbody.velocityY) < 20; // small epsilon: resting/near-zero vertical speed
+    // (grounded was already computed above, before the air-control lerp.)
     // Store back onto the component (same field the Kinematic sweep in
     // PhysicsWorld.js already populates) so this.controller.isGrounded
     // (see scripting/components/ControllerAPI.js) reads real state on a
@@ -246,7 +287,18 @@ export class ControllerSystem extends System {
 
     const targetX = moveX * controller.moveSpeed;
 
-    const lerpT = Math.min(1, controller.acceleration * dt);
+    // AIR CONTROL FIX: controller.airControl (0-1 multiplier on
+    // acceleration while airborne — see CharacterController.js's doc
+    // comment, the Inspector's "Air Control" slider, and
+    // ControllerAPI.js's this.controller.airControl) was previously
+    // defined and fully wired everywhere EXCEPT here — this system
+    // never actually read it, so every controller accelerated at full
+    // ground acceleration in mid-air regardless of the slider's value.
+    // Applied only for Character Controller/Platformer (their gravity
+    // path, resolved a few lines below) — Top-Down has no airborne
+    // concept and already returns above.
+    const airborneMultiplier = rigidbody.grounded ? 1 : controller.airControl;
+    const lerpT = Math.min(1, controller.acceleration * airborneMultiplier * dt);
     rigidbody.velocityX += (targetX - rigidbody.velocityX) * lerpT;
 
     const usesGravity =
@@ -277,6 +329,25 @@ export class ControllerSystem extends System {
     // GROUND_STICK_VY above) the instant it's true breaks that feedback
     // loop while keeping the sweep's ground contact resolution stable.
     const grounded = rigidbody.grounded;
+
+    // CEILING-STICKING FIX: rigidbody.isOnCeiling is written every step
+    // by PhysicsWorld._syncKinematicMovement from the character
+    // controller's real collision normals (a contact whose normal has a
+    // downward component — see that method). Before this fix, nothing
+    // ever looked at it here: a jumping character kept accumulating a
+    // large negative (upward) vy from the jump impulse every frame, and
+    // even though the sweep correctly BLOCKED the actual movement at
+    // the ceiling (so the character visually stopped there), vy itself
+    // was never cleared — so the desired movement handed to the sweep
+    // next frame was still "move up fast", the sweep blocked it again,
+    // and the character just sat there pressed flush against the
+    // ceiling instead of immediately falling back down. Zeroing vy the
+    // instant a ceiling contact is detected (mirrors the ground-contact
+    // reset just below) lets gravity retake over immediately, exactly
+    // like Unity/Rapier's own kinematic character controllers do.
+    if (rigidbody.isOnCeiling && vy < 0) {
+      vy = 0;
+    }
 
     if (grounded) {
       // PERFORMANCE/CORRECTNESS: this used to hard-zero vy here, which

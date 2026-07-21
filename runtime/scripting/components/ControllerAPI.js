@@ -109,6 +109,33 @@ function _isGrounded(entity) {
   return r ? !!r.grounded : false;
 }
 
+/** Shared contact-state reads (isOnCeiling/isOnWall/isOnSlope/
+ * groundAngle) — mirror the same fields already exposed via
+ * this.rigidbody (see RigidbodyAPI.js), added here too so a script
+ * driving movement through this.controller doesn't also need to reach
+ * into this.rigidbody just to check what surface it's touching. Real
+ * per-frame values on Kinematic bodies (from PhysicsWorld.js's
+ * character-controller sweep); always false/0 on Dynamic bodies, which
+ * have no per-axis contact tracking (see ControllerSystem.js's
+ * _applyDynamic doc comment) — Rapier's own solver handles those
+ * contacts directly instead. */
+function _isOnCeiling(entity) {
+  var r = _rb(entity);
+  return r ? !!r.isOnCeiling : false;
+}
+function _isOnWall(entity) {
+  var r = _rb(entity);
+  return r ? !!r.isOnWall : false;
+}
+function _isOnSlope(entity) {
+  var r = _rb(entity);
+  return r ? !!r.isOnSlope : false;
+}
+function _groundAngle(entity) {
+  var r = _rb(entity);
+  return r ? r.groundAngle : 0;
+}
+
 /** Shared simulateJump() — sets the one-shot request flag
  * ControllerSystem.js consumes on its next update, exactly like a
  * literal Space keypress would. No-ops (does not throw) if canJump is
@@ -174,6 +201,29 @@ function _createWalkAPI(entity, canJump) {
     // for the full one-shot-per-frame contract.
     simulateMove: function (x, y) { _simulateMove(entity, x, y); },
   };
+  // Contact-state readers: available on ALL walk types (not gated
+  // behind canJump like isGrounded/simulateJump below) since touching a
+  // wall, ceiling, or slope is meaningful even for a controller that
+  // can't jump — e.g. a Top-Down controller bumping a wall, or a
+  // gravity-off floating Character Controller grazing a ceiling.
+  Object.defineProperties(api, {
+    isOnCeiling: {
+      get: function () { return _isOnCeiling(entity); },
+      enumerable: true,
+    },
+    isOnWall: {
+      get: function () { return _isOnWall(entity); },
+      enumerable: true,
+    },
+    isOnSlope: {
+      get: function () { return _isOnSlope(entity); },
+      enumerable: true,
+    },
+    groundAngle: {
+      get: function () { return _groundAngle(entity); },
+      enumerable: true,
+    },
+  });
   if (canJump) {
     Object.defineProperties(api, {
       canJump: {
@@ -259,6 +309,7 @@ function _createFreeAPI(entity) {
 const ALL_KNOWN_MEMBERS = new Set([
   "controllerType",
   "moveSpeed", "acceleration", "airControl", "useGravity", "useDefaultInput", "simulateMove",
+  "isOnCeiling", "isOnWall", "isOnSlope", "groundAngle",
   "canJump", "jumpForce", "maxJumps", "isGrounded", "simulateJump",
   "maxSpeed", "brakeForce", "turnSpeed", "driftFactor",
   "targetName", "followSpeed", "followDistance",
@@ -271,7 +322,8 @@ function _whyFor(member) {
       member === "isGrounded" || member === "simulateJump") return JUMP_WHY;
   if (member === "maxSpeed" || member === "brakeForce" || member === "turnSpeed" || member === "driftFactor") return CAR_ONLY_WHY;
   if (member === "targetName" || member === "followSpeed" || member === "followDistance") return FOLLOW_ONLY_WHY;
-  if (member === "moveSpeed" || member === "airControl" || member === "useGravity" || member === "simulateMove") return WALK_ONLY_WHY;
+  if (member === "moveSpeed" || member === "airControl" || member === "useGravity" || member === "simulateMove" ||
+      member === "isOnCeiling" || member === "isOnWall" || member === "isOnSlope" || member === "groundAngle") return WALK_ONLY_WHY;
   return "This tunable does not apply to the current Movement Type.";
 }
 

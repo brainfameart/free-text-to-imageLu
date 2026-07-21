@@ -78,6 +78,7 @@ const RIGIDBODY_API_KINEMATIC = RIGIDBODY_API_COMMON.concat([
   { label: "isOnCeiling", detail: "True when touching a ceiling surface above (read-only)", insert: "isOnCeiling" },
   { label: "isOnWall", detail: "True when touching a wall — only fires for surfaces steeper than wallAngleLimit (read-only)", insert: "isOnWall" },
   { label: "isOnSlope", detail: "True when grounded on a slope steeper than slopeMinAngle (read-only)", insert: "isOnSlope" },
+  { label: "groundAngle", detail: "Live angle (deg) of the steepest walkable ground/slope contact this step — 0 = flat floor, up to groundAngleLimit. 0 when not touching a walkable surface (read-only)", insert: "groundAngle" },
   { label: "resolvedVelocity", detail: "{ x, y } — actual movement this step after collisions (read-only)", insert: "resolvedVelocity" },
   { label: "groundAngleLimit", detail: "Max angle from horizontal (deg) that counts as walkable ground — default 45. Steeper contacts are unclimbable or walls.", insert: "groundAngleLimit = " },
   { label: "wallAngleLimit", detail: "Min angle (deg) before a surface counts as a wall — default 70. Contacts between groundAngleLimit and this are steep-but-not-wall.", insert: "wallAngleLimit = " },
@@ -98,10 +99,14 @@ const CONTROLLER_API_WALK_COMMON = [
   { label: "controllerType", detail: "'Character Controller' | 'Platformer' | 'Top-Down' (read-only)", insert: "controllerType" },
   { label: "moveSpeed", detail: "Horizontal move speed in px/s", insert: "moveSpeed = " },
   { label: "acceleration", detail: "How fast velocity approaches target speed (higher = snappier)", insert: "acceleration = " },
-  { label: "airControl", detail: "0-1 multiplier on acceleration while airborne (Platformer only, ignored elsewhere)", insert: "airControl = " },
+  { label: "airControl", detail: "0-1 multiplier on acceleration while airborne (Character Controller and Platformer only — no effect on Top-Down, which has no gravity/airborne concept)", insert: "airControl = " },
   { label: "useGravity", detail: "Whether gravity applies (always true for Platformer, always false for Top-Down)", insert: "useGravity = " },
   { label: "useDefaultInput", detail: "Whether WASD/Arrows are wired automatically — turn off to drive movement entirely from script", insert: "useDefaultInput = " },
   { label: "simulateMove(x, y)", detail: "Move left/right (and up/down for Top-Down) from script, same as holding Arrows/WASD — x/y are -1 to 1, y optional. Call every frame you want movement to continue.", insert: "simulateMove(" },
+  { label: "isOnCeiling", detail: "True when touching a ceiling surface above (read-only). Real per-frame value on Kinematic bodies; always false on Dynamic (no per-axis contact tracking — Rapier's own solver handles it).", insert: "isOnCeiling" },
+  { label: "isOnWall", detail: "True when touching a wall surface steeper than wallAngleLimit (read-only). Real per-frame value on Kinematic bodies; always false on Dynamic.", insert: "isOnWall" },
+  { label: "isOnSlope", detail: "True when grounded on a slope steeper than slopeMinAngle (read-only). Real per-frame value on Kinematic bodies; always false on Dynamic.", insert: "isOnSlope" },
+  { label: "groundAngle", detail: "Live angle (deg) of the steepest walkable ground/slope contact this step — 0 = flat, up to groundAngleLimit (read-only). Real per-frame value on Kinematic bodies; always 0 on Dynamic.", insert: "groundAngle" },
 ];
 const CONTROLLER_API_JUMPABLE = CONTROLLER_API_WALK_COMMON.concat([
   { label: "canJump", detail: "Whether jump is enabled", insert: "canJump = " },
@@ -166,6 +171,8 @@ const THIS_SHORTCUTS_BASE = [
   { label: "translate(dx, dy)", detail: "Move by a delta amount this frame", insert: "translate(" },
   { label: "visible", detail: "Show/hide the entity", insert: "visible = " },
   { label: "enabled", detail: "Enable/disable this script", insert: "enabled = " },
+  { label: "name", detail: "The entity's name, set in the Hierarchy panel (read-only). Use to identify what you collided with, e.g. other.name === \"Obstacle\"", insert: "name" },
+  { label: "tag", detail: "The entity's tag, set in the Inspector's Tag dropdown (read/write). Use to categorize entities, e.g. other.tag === \"Enemy\"", insert: "tag" },
   { label: "destroy()", detail: "Destroy this entity — removed at the end of this frame, onDestroy() fires just before removal", insert: "destroy()" },
   { label: "destroyed", detail: "True once destroy() has been called on this entity but before it's actually removed (read-only)", insert: "destroyed" },
 ];

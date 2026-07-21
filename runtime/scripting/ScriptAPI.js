@@ -120,6 +120,20 @@ class EntityContext {
   get enabled() { const s = this._entity.getComponent(SCRIPT); return s ? s.enabled : true; }
   set enabled(v) { const s = this._entity.getComponent(SCRIPT); if (s) s.enabled = !!v; }
 
+  // Identity shortcuts — read the underlying Entity's name/tag (set in
+  // the Hierarchy/Inspector, or via new Entity(name, tag)). Added so
+  // onCollisionEnter(other)/onTriggerEnter(other) handlers can tell
+  // WHAT they just touched ("if (other.tag === 'Obstacle') ...") —
+  // previously EntityContext exposed no way at all to read an entity's
+  // name or tag, even though Entity itself has always carried both.
+  // name is read-only (an entity's identity isn't meant to be
+  // rewritten at runtime); tag is read/write since re-tagging at
+  // runtime is a normal gameplay pattern (e.g. marking a picked-up
+  // item's tag as "Collected" so it's skipped by later checks).
+  get name() { return this._entity.name; }
+  get tag() { return this._entity.tag; }
+  set tag(v) { this._entity.tag = v; }
+
   /**
    * Destroys this entity — removes it from the scene, exactly like
    * Unity's Destroy(gameObject). Safe to call from ANY lifecycle

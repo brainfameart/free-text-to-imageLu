@@ -205,6 +205,18 @@ function _createKinematicAPI(entity) {
     get isOnWall() { var r = _rb(entity); return r ? r.isOnWall : false; },
     /** True when the body is grounded on a sloped surface (groundAngle >= slopeMinAngle). */
     get isOnSlope() { var r = _rb(entity); return r ? r.isOnSlope : false; },
+    /**
+     * The ACTUAL angle (degrees) of the steepest walkable ground/slope
+     * contact this step, measured from flat horizontal (0 = flat floor,
+     * up to groundAngleLimit = the steepest surface still classified as
+     * ground rather than a wall). 0 when not touching any walkable
+     * surface. This is the live, per-frame computed value — NOT a
+     * setting; use groundAngleLimit/wallAngleLimit/slopeMinAngle below
+     * to configure the thresholds that decide how this value gets
+     * classified into isOnSlope/isOnWall.
+     * Example: if (this.rigidbody.groundAngle > 20) { ...on a ramp... }
+     */
+    get groundAngle() { var r = _rb(entity); return r ? r.groundAngle : 0; },
     /** The ACTUAL (possibly blocked/slid) movement achieved last step — use this instead of velocity to check "did I really move?". */
     get resolvedVelocity() {
       var r = _rb(entity);
@@ -264,7 +276,7 @@ const ALL_KNOWN_MEMBERS = new Set([
   "type", "velocity", "velocityX", "velocityY", "mass", "gravityScale",
   "linearDamping", "angularDamping", "addForce", "addImpulse",
   "addTorque", "addAngularImpulse", "move", "grounded", "isGrounded",
-  "isOnCeiling", "isOnWall", "isOnSlope",
+  "isOnCeiling", "isOnWall", "isOnSlope", "groundAngle",
   "resolvedVelocity",
   "groundAngleLimit", "wallAngleLimit", "slopeMinAngle",
 ]);
