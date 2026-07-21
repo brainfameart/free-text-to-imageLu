@@ -15,7 +15,7 @@
  *   - Character Controller / Platformer / Top-Down (all share the
  *     "walk + optional gravity + optional jump" tunables):
  *       moveSpeed, acceleration, airControl, useGravity,
- *       useDefaultInput
+ *       useDefaultInput, simulateMove(x, y)
  *     Character Controller + Platformer only (both can jump):
  *       canJump, jumpForce, maxJumps, isGrounded, simulateJump()
  *   - Car:
@@ -120,6 +120,37 @@ function _simulateJump(entity) {
   if (c) c.requestJump = true;
 }
 
+/** Shared simulateMove(x, y) — sets the one-shot requestMoveX/Y axis
+ * request ControllerSystem.js consumes on its very next update and
+ * then clears back to null, exactly like a literal held arrow key
+ * would for that one frame. x and y are each clamped to -1..1 (same
+ * range the keyboard's own (right?1:0)-(left?1:0) read produces) so
+ * this.controller.simulateMove(-1, 0) means "move left at full speed"
+ * regardless of what value is passed in.
+ *
+ * ONE-SHOT, NOT A TOGGLE: because it is consumed and reset every
+ * frame, call it from onUpdate() every frame you want movement to
+ * continue (this.controller.simulateMove(-1, 0)) — calling it once
+ * from onStart() only moves the character for a single physics step,
+ * same as tapping a key for one frame instead of holding it down.
+ *
+ * y defaults to 0 (no vertical request) so this.controller.
+ * simulateMove(-1) alone reads as "move left, don't touch vertical" —
+ * matching the common "simulate left/right" use case without forcing
+ * every caller to also think about the Y axis. Pass y explicitly for
+ * Top-Down movement or a gravity-off Character Controller's vertical
+ * axis.
+ */
+function _simulateMove(entity, x, y) {
+  var c = _cc(entity);
+  if (!c) return;
+  var clampedX = Math.max(-1, Math.min(1, x));
+  c.requestMoveX = clampedX;
+  if (y !== undefined) {
+    c.requestMoveY = Math.max(-1, Math.min(1, y));
+  }
+}
+
 /** WALK family: Character Controller, Platformer, Top-Down. All three
  * share moveSpeed/acceleration/airControl/useGravity/useDefaultInput;
  * jump-specific members are added only for Character/Platformer below. */
@@ -137,6 +168,11 @@ function _createWalkAPI(entity, canJump) {
     set useGravity(v) { var c = _cc(entity); if (c) c.useGravity = !!v; },
     get useDefaultInput() { var c = _cc(entity); return c ? c.useDefaultInput : false; },
     set useDefaultInput(v) { var c = _cc(entity); if (c) c.useDefaultInput = !!v; },
+
+    // Available on all three walk types (Character Controller,
+    // Platformer, Top-Down) — see _simulateMove()'s doc comment above
+    // for the full one-shot-per-frame contract.
+    simulateMove: function (x, y) { _simulateMove(entity, x, y); },
   };
   if (canJump) {
     Object.defineProperties(api, {
@@ -222,7 +258,7 @@ function _createFreeAPI(entity) {
 // since it's the same concept — "wrong variant of this component").
 const ALL_KNOWN_MEMBERS = new Set([
   "controllerType",
-  "moveSpeed", "acceleration", "airControl", "useGravity", "useDefaultInput",
+  "moveSpeed", "acceleration", "airControl", "useGravity", "useDefaultInput", "simulateMove",
   "canJump", "jumpForce", "maxJumps", "isGrounded", "simulateJump",
   "maxSpeed", "brakeForce", "turnSpeed", "driftFactor",
   "targetName", "followSpeed", "followDistance",
@@ -235,7 +271,7 @@ function _whyFor(member) {
       member === "isGrounded" || member === "simulateJump") return JUMP_WHY;
   if (member === "maxSpeed" || member === "brakeForce" || member === "turnSpeed" || member === "driftFactor") return CAR_ONLY_WHY;
   if (member === "targetName" || member === "followSpeed" || member === "followDistance") return FOLLOW_ONLY_WHY;
-  if (member === "moveSpeed" || member === "airControl" || member === "useGravity") return WALK_ONLY_WHY;
+  if (member === "moveSpeed" || member === "airControl" || member === "useGravity" || member === "simulateMove") return WALK_ONLY_WHY;
   return "This tunable does not apply to the current Movement Type.";
 }
 

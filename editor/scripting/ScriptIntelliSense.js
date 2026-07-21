@@ -101,6 +101,7 @@ const CONTROLLER_API_WALK_COMMON = [
   { label: "airControl", detail: "0-1 multiplier on acceleration while airborne (Platformer only, ignored elsewhere)", insert: "airControl = " },
   { label: "useGravity", detail: "Whether gravity applies (always true for Platformer, always false for Top-Down)", insert: "useGravity = " },
   { label: "useDefaultInput", detail: "Whether WASD/Arrows are wired automatically — turn off to drive movement entirely from script", insert: "useDefaultInput = " },
+  { label: "simulateMove(x, y)", detail: "Move left/right (and up/down for Top-Down) from script, same as holding Arrows/WASD — x/y are -1 to 1, y optional. Call every frame you want movement to continue.", insert: "simulateMove(" },
 ];
 const CONTROLLER_API_JUMPABLE = CONTROLLER_API_WALK_COMMON.concat([
   { label: "canJump", detail: "Whether jump is enabled", insert: "canJump = " },

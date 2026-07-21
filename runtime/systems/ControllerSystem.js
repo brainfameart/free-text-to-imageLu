@@ -52,6 +52,28 @@ const GRAVITY_Y = 980; // px/s^2 — matches PhysicsWorld.js's GRAVITY_Y. Only
 // falls at a visually consistent rate. Dynamic bodies never use this —
 // they get real gravity straight from Rapier via gravityScale.
 
+// A grounded KINEMATIC body used to get vy hard-zeroed every frame,
+// which fed Rapier's character-controller sweep (PhysicsWorld.js's
+// computeColliderMovement) a desired movement with EXACTLY zero
+// vertical component whenever the character walked on flat ground.
+// Rapier's own character controller has a documented gotcha for
+// exactly that case — a fully zero desired-movement vector produces
+// degenerate/unreliable contact resolution against the very floor
+// the character is resting on (see Rapier issue #485: a zeroed
+// vertical axis makes the sweep treat contacts inconsistently versus
+// even a tiny nonzero one) — which is what made horizontal movement
+// feel sticky/blocked specifically while standing on the ground.
+// Rapier's own docs/community guidance for kinematic character
+// controllers is to keep a small constant downward "stick to ground"
+// bias rather than ever passing a literal zero — snap-to-ground
+// (already enabled in PhysicsWorld.js) then absorbs this small
+// per-frame push and keeps the character glued to the floor instead of
+// visibly sinking. 40 px/s is far below the 2px snap-to-ground
+// distance's per-frame travel at normal frame rates, so it's
+// imperceptible as "falling" but keeps the sweep's vertical component
+// reliably nonzero every single grounded frame.
+const GROUND_STICK_VY = 40; // px/s downward bias applied only while grounded
+
 /** Tracks currently-held keys. One instance per ControllerSystem (per game). */
 class InputState {
   constructor() {
@@ -139,7 +161,19 @@ export class ControllerSystem extends System {
     const jumpPressed = (useKeys && this.input.isDown("Space")) || controller.requestJump;
     controller.requestJump = false;
 
-    const moveX = (right ? 1 : 0) - (left ? 1 : 0);
+    // A script can request movement via this.controller.simulateMove(x, y)
+    // (ControllerAPI.js) — consumed here as a one-shot per-frame axis
+    // request, same lifecycle as requestJump above. When present it
+    // OVERRIDES the keyboard's own -1/0/1 read for that axis rather than
+    // adding to it, so simulateMove(-1, 0) reliably means "move left"
+    // regardless of what keys happen to be held at the same time.
+    const keyMoveX = (right ? 1 : 0) - (left ? 1 : 0);
+    const keyMoveY = (down ? 1 : 0) - (up ? 1 : 0);
+    const moveX = controller.requestMoveX !== null ? controller.requestMoveX : keyMoveX;
+    const moveY = controller.requestMoveY !== null ? controller.requestMoveY : keyMoveY;
+    controller.requestMoveX = null;
+    controller.requestMoveY = null;
+
     const targetX = moveX * controller.moveSpeed;
 
     // Smoothly approach the target horizontal speed rather than snapping.
@@ -150,7 +184,6 @@ export class ControllerSystem extends System {
     if (controller.controllerType === ControllerType.TOP_DOWN) {
       // Top-Down has no gravity concept even on a Dynamic body — drive Y
       // directly too via the same transient channel, bypassing gravity.
-      const moveY = (down ? 1 : 0) - (up ? 1 : 0);
       const targetY = moveY * controller.moveSpeed;
       const currentY = rigidbody.velocityY;
       rigidbody.driveVelocityY = currentY + (targetY - currentY) * lerpT;
@@ -199,7 +232,18 @@ export class ControllerSystem extends System {
     const jumpPressed = (useKeys && this.input.isDown("Space")) || controller.requestJump;
     controller.requestJump = false;
 
-    const moveX = (right ? 1 : 0) - (left ? 1 : 0);
+    // A script can request movement via this.controller.simulateMove(x, y)
+    // (ControllerAPI.js) — same one-shot lifecycle as requestJump, and
+    // same override-not-add semantics as the Dynamic path above: when
+    // set, it replaces the keyboard's -1/0/1 read for that axis rather
+    // than combining with it.
+    const keyMoveX = (right ? 1 : 0) - (left ? 1 : 0);
+    const keyMoveY = (down ? 1 : 0) - (up ? 1 : 0);
+    const moveX = controller.requestMoveX !== null ? controller.requestMoveX : keyMoveX;
+    const moveY = controller.requestMoveY !== null ? controller.requestMoveY : keyMoveY;
+    controller.requestMoveX = null;
+    controller.requestMoveY = null;
+
     const targetX = moveX * controller.moveSpeed;
 
     const lerpT = Math.min(1, controller.acceleration * dt);
@@ -213,7 +257,6 @@ export class ControllerSystem extends System {
         : controller.useGravity;
 
     if (controller.controllerType === ControllerType.TOP_DOWN) {
-      const moveY = (down ? 1 : 0) - (up ? 1 : 0);
       const targetY = moveY * controller.moveSpeed;
       rigidbody.velocityY += (targetY - rigidbody.velocityY) * lerpT;
       return;
@@ -230,11 +273,34 @@ export class ControllerSystem extends System {
     // gravity keeps piling up, and the next sweep has to correct a
     // bigger and bigger penetration each frame: exactly the standing
     // jitter/slipping symptom. Using the real grounded flag and
-    // zeroing vy the instant it's true breaks that feedback loop.
+    // resetting vy to a small constant (not a literal zero — see
+    // GROUND_STICK_VY above) the instant it's true breaks that feedback
+    // loop while keeping the sweep's ground contact resolution stable.
     const grounded = rigidbody.grounded;
 
     if (grounded) {
-      vy = 0;
+      // PERFORMANCE/CORRECTNESS: this used to hard-zero vy here, which
+      // fed PhysicsWorld.js's character-controller sweep a desired
+      // movement with EXACTLY zero vertical component every frame the
+      // character stood on flat ground. Rapier's own kinematic
+      // character controller has a well-documented gotcha for that
+      // exact case (see GROUND_STICK_VY's comment above) where a fully
+      // zero desired-movement vector produces inconsistent contact
+      // resolution — in practice this showed up as horizontal movement
+      // feeling sticky/blocked specifically while grounded, since the
+      // sweep's floor contact never had a stable nonzero reference to
+      // resolve sliding against. Using a small constant downward bias
+      // instead keeps the sweep's vertical component reliably nonzero;
+      // snap-to-ground (PhysicsWorld.js) absorbs the tiny resulting
+      // per-frame dip so the character still visually stays flush with
+      // the floor, exactly like before, but the sweep itself now has
+      // consistent ground contact info to resolve horizontal sliding
+      // against. Only applied when this controller actually wants
+      // gravity/ground contact — a gravity-off floating Character
+      // Controller has no floor concept to stick to, so it keeps its
+      // old vy=0 (its vertical is fully overridden by direct move input
+      // in the branch below anyway).
+      vy = usesGravity ? GROUND_STICK_VY : 0;
       const jumpsUsed = this._jumpsUsed.get(entityId) || 0;
       if (jumpsUsed > 0) this._jumpsUsed.set(entityId, 0);
     }
@@ -246,8 +312,10 @@ export class ControllerSystem extends System {
       vy += GRAVITY_Y * dt;
     } else if (controller.controllerType === ControllerType.CHARACTER) {
       // Character Controller with gravity off: vertical is direct move
-      // input too (e.g. a floating/flying controller).
-      const moveY = (down ? 1 : 0) - (up ? 1 : 0);
+      // input too (e.g. a floating/flying controller). Reuses the same
+      // moveY resolved above (keyboard OR a script's simulateMove(x,y))
+      // instead of re-reading up/down directly, so a scripted vertical
+      // move request works here exactly like it does for horizontal.
       vy = moveY * controller.moveSpeed;
     }
 

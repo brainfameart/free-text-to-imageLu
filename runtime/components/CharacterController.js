@@ -80,6 +80,21 @@ export class CharacterController {
     // the same one-shot request pattern Rigidbody2D's pendingForceX/Y
     // uses. Plain data (RULES.txt section 4), not a function/callback.
     requestJump = false,
+
+    // Set (transiently, for one ControllerSystem update) by
+    // this.controller.simulateMove(x, y) (see scripting/components/
+    // ControllerAPI.js) to drive movement from script logic instead of
+    // the keyboard — e.g. an on-screen button, an AI patrol routine,
+    // or a cutscene forcing the character to walk. -1..1 per axis, same
+    // convention as the keyboard's own (right?1:0)-(left?1:0) read.
+    // Consumed and reset to null by ControllerSystem.js right after
+    // reading it each update — a one-shot per-frame request, same
+    // pattern as requestJump above, NOT a standing value a script must
+    // remember to clear (see simulateMove()'s own doc comment in
+    // ControllerAPI.js for why it must be called every frame the
+    // script wants movement to continue, exactly like a held key).
+    requestMoveX = null,
+    requestMoveY = null,
   } = {}) {
     this.controllerType = controllerType;
 
@@ -106,5 +121,7 @@ export class CharacterController {
     this.followDistance = followDistance;
 
     this.requestJump = requestJump;
+    this.requestMoveX = requestMoveX;
+    this.requestMoveY = requestMoveY;
   }
 }
