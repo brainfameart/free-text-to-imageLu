@@ -50,8 +50,13 @@ export function getLayerNames() {
         return names;
       }
     }
-  } catch (_) { /* ignore corrupt data */ }
-  return _defaults();
+  } catch (_) {
+    // localStorage is unavailable/blocked (common in sandboxed preview
+    // iframes). Fall back to whatever was set in-memory this session
+    // so renaming layers still works even though it won't survive reload.
+    if (_sessionCache) return _sessionCache;
+  }
+  return _sessionCache || _defaults();
 }
 
 /**
@@ -66,8 +71,22 @@ export function setLayerName(index, name) {
   const trimmed = name.trim();
   if (index === 0 && !trimmed) return; // slot 0 can't be cleared
   names[index] = trimmed;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(names));
+  // In sandboxed preview iframes (Codespaces/Replit webviews are the
+  // common case) localStorage access can throw a SecurityError instead
+  // of just failing quietly. Never let that escape and break the whole
+  // editor render loop — worst case, the name just won't persist across
+  // a reload, but the in-memory _sessionCache below keeps it working
+  // for the rest of the current session.
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(names));
+  } catch (_) { /* ignore: storage unavailable in this environment */ }
+  _sessionCache = names;
 }
+
+// In-memory fallback used whenever localStorage is unavailable/throws,
+// so layer names still work for the duration of the current tab even
+// if they can't be persisted across reloads.
+let _sessionCache = null;
 
 /**
  * Returns only the named (non-empty) layers as { index, name } objects,

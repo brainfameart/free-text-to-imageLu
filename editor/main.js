@@ -37,23 +37,37 @@ function render() {
     editorState.isPlaying = false;
   }
 
+  // Each overlay/panel is rendered defensively: if one throws (e.g. a
+  // storage access error in a sandboxed preview iframe), it must not
+  // blank out the entire editor. We fall back to an empty string plus
+  // a console log so the rest of the UI keeps working and the failure
+  // is still visible for debugging.
+  function safeRender(fn, label) {
+    try {
+      return fn();
+    } catch (err) {
+      console.error("[render] " + label + " failed:", err);
+      return "";
+    }
+  }
+
   const html =
     '<div class="unity-window">' +
-    renderToolbar() +
+    safeRender(renderToolbar, "Toolbar") +
     '<div class="main-layout">' +
-    '<div class="col-hierarchy">' + renderHierarchy() + "</div>" +
+    '<div class="col-hierarchy">' + safeRender(renderHierarchy, "Hierarchy") + "</div>" +
     '<div class="col-center">' +
-    renderViewport() +
-    '<div class="col-bottom-wrap">' + renderBottom() + "</div>" +
+    safeRender(renderViewport, "Viewport") +
+    '<div class="col-bottom-wrap">' + safeRender(renderBottom, "BottomPanel") + "</div>" +
     "</div>" +
-    '<div class="col-inspector">' + renderInspector() + "</div>" +
+    '<div class="col-inspector">' + safeRender(renderInspector, "Inspector") + "</div>" +
     "</div>" +
-    renderStatusBar() +
+    safeRender(renderStatusBar, "StatusBar") +
     "</div>" +
-    renderAnimEditor() +
-    renderTilesetEditor() +
-    renderScriptEditor() +
-    renderPhysicsLayersWindow();
+    safeRender(renderAnimEditor, "AnimationWindow") +
+    safeRender(renderTilesetEditor, "TilesetPanel") +
+    safeRender(renderScriptEditor, "ScriptEditorWindow") +
+    safeRender(renderPhysicsLayersWindow, "PhysicsLayersWindow");
 
   const app = document.getElementById("app");
 
