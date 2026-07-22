@@ -18,6 +18,7 @@ import { renderBottom } from "./panels/BottomPanel.js";
 import { renderAnimEditor } from "./panels/AnimationWindow.js";
 import { renderTilesetEditor } from "./panels/TilesetPanel.js";
 import { renderScriptEditor, mountScriptEditor } from "./panels/ScriptEditorWindow.js";
+import { renderPhysicsLayersWindow } from "./panels/PhysicsLayersWindow.js";
 import { renderStatusBar, startLiveStats } from "./panels/StatusBar.js";
 import { mountOrUpdateSceneViewport, getGame, detachViewportCanvas } from "./viewport/SceneViewport.js";
 import { openPlayWindow, closePlayWindow, isPlayWindowOpen } from "./viewport/PlayWindow.js";
@@ -51,7 +52,8 @@ function render() {
     "</div>" +
     renderAnimEditor() +
     renderTilesetEditor() +
-    renderScriptEditor();
+    renderScriptEditor() +
+    renderPhysicsLayersWindow();
 
   const app = document.getElementById("app");
 

@@ -17,6 +17,32 @@
 
 export const COLLIDER_2D = "Collider2D";
 
+// Named physics layers — same slot-based design as Unity's Layer system.
+// Layer 0 (Default) is the everything-collides-with-everything baseline.
+// Assign objects to named layers and configure per-collider masks in the
+// Inspector to control which pairs physically interact and receive script
+// callbacks (onCollisionEnter / onTriggerEnter).
+export const LAYER_COUNT = 16;
+
+/**
+ * Encodes a layer + mask pair into Rapier's 32-bit collision groups word.
+ *   bits  0-15 = membership  (which layer this collider IS on)
+ *   bits 16-31 = filter      (which layers it CAN interact with)
+ *
+ * Two colliders A and B interact only when BOTH of these hold:
+ *   (A.membership & B.filter) !== 0
+ *   (B.membership & A.filter) !== 0
+ *
+ * @param {number} layer  0–15: which layer this collider belongs to
+ * @param {number} mask   16-bit mask: which layers it can collide with
+ * @returns {number} 32-bit groups word for Rapier
+ */
+export function makeCollisionGroups(layer, mask) {
+  const membership = (1 << (layer & 0xF)) & 0xFFFF;
+  const filter     = mask & 0xFFFF;
+  return membership | (filter << 16);
+}
+
 export const ColliderShape = Object.freeze({
   BOX: "Box",
   CIRCLE: "Circle",
@@ -52,6 +78,13 @@ export class Collider2D {
     friction = 0.5,
     restitution = 0,
     density = 1,
+    // Collision layer/mask — inspired by Unity's physics layer matrix.
+    // layer: which of the 16 named layers this collider belongs to.
+    // mask:  16-bit bitmask of layers this collider CAN physically interact
+    //        with. Two colliders interact only when EACH is in the other's mask.
+    // Default: layer 0 (Default), mask 0xFFFF (collides with all layers).
+    layer = 0,
+    mask  = 0xFFFF,
   } = {}) {
     this.shape = shape;
     // Box
@@ -72,5 +105,7 @@ export class Collider2D {
     this.friction = friction;
     this.restitution = restitution;
     this.density = density;
+    this.layer = layer;
+    this.mask  = mask;
   }
 }

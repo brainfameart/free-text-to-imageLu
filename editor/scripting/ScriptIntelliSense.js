@@ -200,6 +200,8 @@ const GLOBAL_APIS = [
   { label: "random", detail: "Random numbers: random.int(min,max), random.float(min,max)", insert: "random." },
   { label: "global", detail: "Cross-script shared state: global.score = 0, global.lives, etc.", insert: "global." },
   { label: "debug", detail: "On-screen debug HUD: debug.show(), debug.log(label, value)", insert: "debug." },
+  { label: 'sendMessage(tag, message, data)', detail: 'Send a named message to all entities with the given tag. Their scripts receive it via onMessage(message, sender, data). E.g. sendMessage("Enemy", "takeDamage", { amount: 10 })', insert: 'sendMessage("' },
+  { label: 'broadcastMessage(message, data)', detail: 'Send a named message to ALL entities in the scene. Their scripts receive it via onMessage(message, sender, data). E.g. broadcastMessage("gameOver")', insert: 'broadcastMessage("' },
 ];
 
 const SCENE_API = [
@@ -650,6 +652,7 @@ export function registerIntelliSense(monaco) {
       suggestions.push(_makeCompletion(monaco, { label: "function onCollisionExit(other)", detail: "Called when collision ends. 'other' has .x, .y, .name, etc. Works for all body types.", insert: "onCollisionExit(other) {\n  \n}" }, range));
       suggestions.push(_makeCompletion(monaco, { label: "function onTriggerEnter(other)", detail: "Called when entering a trigger collider (Is Trigger = on)", insert: "onTriggerEnter(other) {\n  \n}" }, range));
       suggestions.push(_makeCompletion(monaco, { label: "function onTriggerExit(other)", detail: "Called when leaving a trigger collider", insert: "onTriggerExit(other) {\n  \n}" }, range));
+      suggestions.push(_makeCompletion(monaco, { label: "function onMessage(message, sender, data)", detail: "Called when this entity receives a message from sendMessage() or broadcastMessage(). message = string name, sender = sending entity context (or null for broadcast), data = optional payload", insert: "onMessage(message, sender, data) {\n  \n}" }, range));
       suggestions.push(_makeCompletion(monaco, { label: "function onDestroy()", detail: "Called once when this entity is destroyed or the scene ends", insert: "onDestroy() {\n  \n}" }, range));
       return { suggestions: suggestions };
     },

@@ -100,7 +100,24 @@ function renderMenu(name) {
     name +
     "</button>" +
     (isOpen && name === "GameObject" ? renderGameObjectMenu() : "") +
+    (isOpen && name === "Edit" ? renderEditMenu() : "") +
     "</div>"
+  );
+}
+
+function renderEditMenu() {
+  return (
+    '<div class="dropdown-menu" style="position:absolute;top:100%;left:0;background:#2a2a2a;border:1px solid #444;' +
+    'border-radius:4px;min-width:180px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,.4);padding:4px 0;">' +
+    '<button class="dropdown-menu-item" data-action="open-physics-layers" style="' +
+    DROPDOWN_ITEM_STYLE + '">' +
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;">' +
+    '<rect x="2" y="2" width="8" height="8" rx="1"/><rect x="14" y="2" width="8" height="8" rx="1"/>' +
+    '<rect x="2" y="14" width="8" height="8" rx="1"/><rect x="14" y="14" width="8" height="8" rx="1"/>' +
+    '</svg>' +
+    '<span>Physics Layers\u2026</span>' +
+    '</button>' +
+    '</div>'
   );
 }
 

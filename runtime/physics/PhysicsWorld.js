@@ -24,7 +24,7 @@
 
 import { TRANSFORM } from "../components/Transform.js";
 import { RIGIDBODY_2D, BodyType } from "../components/Rigidbody2D.js";
-import { COLLIDER_2D, ColliderShape } from "../components/Collider2D.js";
+import { COLLIDER_2D, ColliderShape, makeCollisionGroups } from "../components/Collider2D.js";
 import { TILEMAP } from "../components/Tilemap.js";
 import { TILESET } from "../components/Tileset.js";
 import { getColliderWorldGeometry } from "./ColliderGeometry.js";
@@ -616,7 +616,12 @@ export class PhysicsWorld {
             RAPIER.ActiveCollisionTypes.ALL |
               RAPIER.ActiveCollisionTypes.KINEMATIC_KINEMATIC |
               RAPIER.ActiveCollisionTypes.KINEMATIC_STATIC
-          );
+          )
+          // Tilemap cells live on Default layer (0) with all-groups filter
+          // so entities that exclude Default from their mask can pass through
+          // tiles — e.g. a ghost or background object with mask=0 will not
+          // be physically blocked by tilemap walls.
+          .setCollisionGroups(makeCollisionGroups(0, 0xFFFF));
         const collider = this.rapierWorld.createCollider(desc, body);
         cellColliders.set(key, collider);
       }
@@ -1132,6 +1137,17 @@ export class PhysicsWorld {
       // keep grounded=true for up to GROUNDED_GRACE_FRAMES more frames
       // before accepting that the character is truly airborne.
     }
+
+    // isGrounded and isOnSlope are mutually exclusive. A surface steep
+    // enough to be classified as a slope is NOT flat/walkable ground.
+    // Clearing rb.grounded immediately (rather than waiting for the
+    // grace-period streak) lets platformer scripts branch cleanly:
+    //   if (this.rigidbody.isGrounded) → flat or gentle-slope ground
+    //   if (this.rigidbody.isOnSlope)  → standing on a steeper slope
+    // Only applied when isOnSlope is TRUE; isOnSlope=false leaves
+    // the computed grounded value unchanged (user request: "if false,
+    // just leave it as is").
+    if (rb.isOnSlope) rb.grounded = false;
   }
 
   /**
@@ -1293,7 +1309,9 @@ export class PhysicsWorld {
       handle._sigRestitution === collider.restitution &&
       handle._sigDensity === collider.density &&
       handle._sigScaleX === transform.scaleX &&
-      handle._sigScaleY === transform.scaleY
+      handle._sigScaleY === transform.scaleY &&
+      handle._sigLayer === collider.layer &&
+      handle._sigMask  === collider.mask
     ) {
       return; // nothing shape-affecting changed since last frame — skip entirely
     }
@@ -1364,7 +1382,12 @@ export class PhysicsWorld {
         RAPIER.ActiveCollisionTypes.ALL |
           RAPIER.ActiveCollisionTypes.KINEMATIC_KINEMATIC |
           RAPIER.ActiveCollisionTypes.KINEMATIC_STATIC
-      );
+      )
+      // Collision layer / mask filter — Rapier's InteractionGroups encode
+      // membership (which layer this IS) in the lower 16 bits and filter
+      // (which layers it CAN interact with) in the upper 16 bits.
+      // Two colliders can only interact when each is in the other's mask.
+      .setCollisionGroups(makeCollisionGroups(collider.layer, collider.mask));
 
     handle.collider = this.rapierWorld.createCollider(desc, handle.body);
 
@@ -1387,6 +1410,8 @@ export class PhysicsWorld {
     handle._sigDensity = collider.density;
     handle._sigScaleX = transform.scaleX;
     handle._sigScaleY = transform.scaleY;
+    handle._sigLayer  = collider.layer;
+    handle._sigMask   = collider.mask;
 
     // Register the new collider in the reverse-lookup map so event
     // draining can find the owning entityId from Rapier's handle index.

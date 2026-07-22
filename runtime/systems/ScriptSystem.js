@@ -75,6 +75,27 @@ export class ScriptSystem {
     this._errorCallback = null;
     /** @type {Map<string, {count:number, lastReportedAt:number}>} throttle state, keyed by "scriptName|method|message" */
     this._errorThrottle = new Map();
+    /** @type {import('../core/World.js').World|null} current world, stashed at the top of update() */
+    this._world = null;
+
+    // Wire sendMessage / broadcastMessage into ScriptAPI's globals so
+    // user scripts can call sendMessage(tag, msg, data) and
+    // broadcastMessage(msg, data) without needing a direct reference to
+    // ScriptSystem. The callbacks are set here (constructor) so they're
+    // available the first time getGlobals() is called from _initScripts.
+    const self = this;
+    scriptApi._sendMessageFn = function(tag, message, data) {
+      if (!self._world) return;
+      const entities = self._world.findByTag ? self._world.findByTag(tag) : [];
+      if (!entities) return;
+      for (const e of entities) self.fireMessage(e.id, message, null, data);
+    };
+    scriptApi._broadcastMessageFn = function(message, data) {
+      if (!self._world) return;
+      const entities = self._world.getAllEntities ? self._world.getAllEntities() :
+        (self._world.entities ? [...self._world.entities.values()] : []);
+      for (const e of entities) self.fireMessage(e.id, message, null, data);
+    };
   }
 
   /**
@@ -209,6 +230,7 @@ export class ScriptSystem {
         "  onCollisionExit: typeof onCollisionExit !== 'undefined' ? onCollisionExit : null,\n" +
         "  onTriggerEnter: typeof onTriggerEnter !== 'undefined' ? onTriggerEnter : null,\n" +
         "  onTriggerExit: typeof onTriggerExit !== 'undefined' ? onTriggerExit : null,\n" +
+        "  onMessage: typeof onMessage !== 'undefined' ? onMessage : null,\n" +
         "  onDestroy: typeof onDestroy !== 'undefined' ? onDestroy : null,\n" +
         "};\n"
       );
@@ -272,6 +294,10 @@ export class ScriptSystem {
   }
 
   update(world, dt) {
+    // Stash world reference so sendMessage / broadcastMessage callbacks
+    // (wired up in the constructor) can reach the entity list at call time.
+    this._world = world;
+
     if (!this._started) {
       this._started = true;
       this._initScripts(world);
@@ -429,6 +455,28 @@ export class ScriptSystem {
         inst.handlers.onCollisionExit.call(inst.context, otherContext);
       } catch (err) {
         this._reportError(inst.scriptName, err, "onCollisionExit");
+      }
+    }
+  }
+
+  /**
+   * Delivers a message to all script instances on a single entity.
+   * Called by sendMessage() / broadcastMessage() (wired via ScriptAPI).
+   *
+   * @param {string}      entityId      target entity
+   * @param {string}      message       arbitrary message name
+   * @param {object|null} senderContext EntityContext of the sending entity (or null for broadcast)
+   * @param {*}           data          optional payload
+   */
+  fireMessage(entityId, message, senderContext, data) {
+    const instances = this.instances.get(entityId);
+    if (!instances) return;
+    for (const inst of instances) {
+      if (!inst.enabled || !inst.handlers.onMessage) continue;
+      try {
+        inst.handlers.onMessage.call(inst.context, message, senderContext, data);
+      } catch (err) {
+        this._reportError(inst.scriptName, err, "onMessage");
       }
     }
   }

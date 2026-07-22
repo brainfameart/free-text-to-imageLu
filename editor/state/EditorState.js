@@ -24,6 +24,7 @@ export const editorState = {
    *  Duplicate act on every id in here. */
   selectedIds: [],
   animOpen: false,
+  physicsLayersOpen: false,
   isPlaying: false,
   isPaused: false,
   hierarchyFilter: "",

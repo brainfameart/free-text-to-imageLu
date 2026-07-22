@@ -35,6 +35,7 @@ import { serializeEntity, instantiateEntity } from "../../runtime/scene/SceneSer
 import { SCRIPT, Script } from "../../runtime/components/Script.js";
 import { createScript, getScriptSource } from "../scripting/ScriptStorage.js";
 import { openScriptEditor, handleScriptEditorAction } from "../panels/ScriptEditorWindow.js";
+import { setLayerName } from "./PhysicsLayers.js";
 
 const COMPONENT_TYPE_MAP = {
   Transform: TRANSFORM,
@@ -146,7 +147,7 @@ let _lastSceneClick = { id: null, time: 0 };
     // e.g. clicking a tool button while GameObject menu happens to be
     // open. Handled here rather than per-case so it's automatic for
     // every current and future action.
-    if (editorState.openMenu && action !== "toggle-menu" && action !== "toggle-submenu" && action !== "create-light" && action !== "add-entity") {
+    if (editorState.openMenu && action !== "toggle-menu" && action !== "toggle-submenu" && action !== "create-light" && action !== "add-entity" && action !== "open-physics-layers") {
       editorState.openMenu = null;
       editorState.openSubmenu = null;
     }
@@ -260,6 +261,16 @@ let _lastSceneClick = { id: null, time: 0 };
       case "close-anim":
         editorState.animOpen = false;
         editorState.anim.previewPlaying = false;
+        render();
+        break;
+      case "open-physics-layers":
+        editorState.physicsLayersOpen = true;
+        editorState.openMenu = null;
+        editorState.openSubmenu = null;
+        render();
+        break;
+      case "close-physics-layers":
+        editorState.physicsLayersOpen = false;
         render();
         break;
       case "open-tileset-editor":
@@ -931,6 +942,17 @@ case "select-scene-file": {
       return;
     }
 
+    // Physics layer rename — committed live on each keystroke so changes
+    // are persisted immediately (no blur/Enter required, mirrors Unity's
+    // inline rename UX). Does NOT trigger a full render() to avoid
+    // destroying the focused input mid-typing; the next click or panel
+    // switch will naturally pick up the new names from localStorage.
+    if (e.target.dataset.action === "pl-rename") {
+      const idx = parseInt(e.target.dataset.layerIndex, 10);
+      if (!isNaN(idx)) setLayerName(idx, e.target.value);
+      return;
+    }
+
     const field = e.target.dataset.field;
     if (field) {
       applyFieldChange(field, e.target);
@@ -1328,6 +1350,32 @@ function applyFieldChange(field, inputEl) {
         }
       }
       return;
+    }
+    return;
+  }
+
+  // Collision layer — stored as an integer 0-15, but dropdownInput emits
+  // a string value; parse it explicitly before the generic path can
+  // mishandle it (parseFloat("0") works, but parseFloat("Default (0)") = NaN).
+  if (field === "Collider2D.layer") {
+    const collider = entity.getComponent(COLLIDER_2D);
+    if (collider) collider.layer = Math.max(0, Math.min(15, parseInt(inputEl.value, 10) || 0));
+    return;
+  }
+
+  // Collision mask — each layer is a checkbox that toggles one bit of
+  // the 16-bit mask rather than replacing the whole value.
+  if (field === "Collider2D.mask") {
+    const collider = entity.getComponent(COLLIDER_2D);
+    if (collider) {
+      const bit = parseInt(inputEl.dataset.bit, 10);
+      if (!isNaN(bit)) {
+        if (inputEl.checked) {
+          collider.mask = (collider.mask | (1 << bit)) & 0xFFFF;
+        } else {
+          collider.mask = (collider.mask & ~(1 << bit)) & 0xFFFF;
+        }
+      }
     }
     return;
   }

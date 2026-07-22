@@ -15,6 +15,7 @@ import { CAMERA, CameraAspectMode } from "../../runtime/components/Camera.js";
 import { SPRITE_RENDERER } from "../../runtime/components/SpriteRenderer.js";
 import { RIGIDBODY_2D, BodyType } from "../../runtime/components/Rigidbody2D.js";
 import { COLLIDER_2D, ColliderShape } from "../../runtime/components/Collider2D.js";
+import { getNamedLayers } from "../state/PhysicsLayers.js";
 import { CHARACTER_CONTROLLER, ControllerType } from "../../runtime/components/CharacterController.js";
 import { LIGHT, LightType } from "../../runtime/components/Light.js";
 import { SHADOW_CASTER } from "../../runtime/components/ShadowCaster.js";
@@ -671,6 +672,51 @@ export function renderInspector() {
         row("Friction", numInput("", collider.friction, "Collider2D.friction")) +
         row("Restitution", numInput("", collider.restitution, "Collider2D.restitution")) +
         row("Density", numInput("", collider.density, "Collider2D.density")) +
+        // Collision layer/mask — controls which physics layers this collider
+        // physically interacts with (both collision response and script events).
+        // Layer names are defined by the user in Edit > Physics Layers.
+        (function() {
+          const namedLayers = getNamedLayers();
+          // Show the current layer even if its slot has no name (edge case: user
+          // cleared a layer's name while a collider was still assigned to it).
+          const layerOptions = namedLayers.length
+            ? namedLayers
+            : [{ index: 0, name: "Default" }];
+          const currentLayerNamed = layerOptions.some(l => l.index === collider.layer);
+          const selectOptions = [
+            ...(currentLayerNamed ? [] : [{ index: collider.layer, name: "Layer " + collider.layer + " (unnamed)" }]),
+            ...layerOptions,
+          ];
+
+          return (
+            row(
+              "Layer",
+              '<select data-field="Collider2D.layer" style="flex:1;background:#1a2030;color:#c8d0de;border:1px solid #2e3a50;border-radius:4px;padding:2px 4px;font-size:11px;">' +
+                selectOptions.map(({ index, name }) =>
+                  '<option value="' + index + '"' + (collider.layer === index ? ' selected' : '') + '>' +
+                    name + ' (' + index + ')' +
+                  '</option>'
+                ).join('') +
+              '</select>'
+            ) +
+            '<div style="padding:2px 0 4px 0;">' +
+              '<div style="font-size:10px;color:#8a93a0;padding:2px 0 4px 0;letter-spacing:0.03em;">COLLIDES WITH</div>' +
+              (namedLayers.length === 0
+                ? '<div style="font-size:10px;color:#5a6480;padding:2px 0;">No layers defined. Use Edit &gt; Physics Layers\u2026 to add some.</div>'
+                : '<div style="display:grid;grid-template-columns:1fr 1fr;gap:3px;">' +
+                    namedLayers.map(({ index, name }) =>
+                      '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:#c8d0de;cursor:pointer;padding:1px 0;">' +
+                        '<input type="checkbox" data-field="Collider2D.mask" data-bit="' + index + '"' +
+                          ((collider.mask & (1 << index)) ? ' checked' : '') +
+                          ' style="accent-color:#2C5D87;margin:0;cursor:pointer;">' +
+                        name +
+                      '</label>'
+                    ).join('') +
+                  '</div>'
+              ) +
+            '</div>'
+          );
+        })() +
         '<button class="removecomp-btn" data-action="remove-component" data-component="Collider2D" style="margin-top:6px;">Remove Component</button>'
     );
   }

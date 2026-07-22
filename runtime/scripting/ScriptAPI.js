@@ -253,6 +253,10 @@ export class ScriptAPI {
     this._restartFn = null;
     /** Set by createGame to enable scene.load() */
     this._loadSceneFn = null;
+    /** Set by ScriptSystem constructor to enable sendMessage(tag, msg, data) */
+    this._sendMessageFn = null;
+    /** Set by ScriptSystem constructor to enable broadcastMessage(msg, data) */
+    this._broadcastMessageFn = null;
 
     this._setupInput();
   }
@@ -391,6 +395,24 @@ export class ScriptAPI {
         raycast: function (x1, y1, x2, y2) {
           return self._raycast(x1, y1, x2, y2);
         },
+      },
+      /**
+       * Send a message to all script instances on every entity that has
+       * the given tag. Scripts that define `onMessage(message, sender, data)`
+       * will be called immediately.
+       *   sendMessage("Enemy", "takeDamage", { amount: 10 })
+       */
+      sendMessage: function(tag, message, data) {
+        if (self._sendMessageFn) self._sendMessageFn(tag, message, data);
+      },
+      /**
+       * Broadcast a message to ALL entities in the scene. Every script
+       * instance that defines `onMessage(message, sender, data)` will be
+       * called.
+       *   broadcastMessage("gameOver", { winner: "Player" })
+       */
+      broadcastMessage: function(message, data) {
+        if (self._broadcastMessageFn) self._broadcastMessageFn(message, data);
       },
       input: {
         keyDown: function (key) { return self._keysDown.has(key); },
