@@ -741,8 +741,12 @@ case "select-scene-file": {
     // Selection keyboard shortcuts — Delete/Backspace, Copy (Ctrl/Cmd+C),
     // Paste (Ctrl/Cmd+V), Duplicate (Ctrl/Cmd+D). Skipped while typing in a
     // field so Backspace and Ctrl+C keep their normal text-editing meaning.
+    // Also skipped when the script editor overlay is open: Monaco captures
+    // its own keyboard events (WASD, Space, etc.) internally, but the global
+    // listener fires too and re-interprets those keys as editor shortcuts
+    // (W→translate tool, Space→play), making it impossible to type them.
     const _typing = /^(input|textarea)$/i.test(e.target.tagName) || e.target.isContentEditable;
-    if (_typing || !editorState.world) return;
+    if (_typing || editorState.scriptEditor.open || !editorState.world) return;
     if (e.key === "Delete" || e.key === "Backspace") {
       e.preventDefault(); // stop Backspace navigating back / Delete scrolling
       if (_liveSelectionIds().length === 0) return;

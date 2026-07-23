@@ -9,6 +9,19 @@
  * components is offered so every property stays valid no matter which
  * object runs it.
  *
+ * Smart string-argument completions:
+ *   find("           → all entity names in the scene
+ *   scene.load("     → all scene names
+ *   scene.find("     → all entity names
+ *   input.keyDown("  → full keyboard key-code list
+ *   input.keyPressed(" → same
+ *   .texture = "     → all sprite/texture asset names
+ *   animator.play("  → animation clip names on the context entity
+ *   sendMessage("    → all unique entity tags in the scene
+ *   .name === "      → all entity names
+ *   .tag === "       → all entity tags
+ *   .name == "       → all entity names
+ *
  * Typing a global name shows only safe engine APIs (never document,
  * window, localStorage, etc.).
  *
@@ -23,217 +36,336 @@ import { CAMERA } from "../../runtime/components/Camera.js";
 import { AUDIO_SOURCE } from "../../runtime/components/AudioSource.js";
 import { SPRITE_ANIMATION } from "../../runtime/components/SpriteAnimation.js";
 import { CHARACTER_CONTROLLER, ControllerType } from "../../runtime/components/CharacterController.js";
+import { getAllSpriteAssets, getAllAudioAssets } from "../../runtime/assets/AssetRegistry.js";
+import { getSceneList } from "../../runtime/scene/SceneManager.js";
 
 let _registered = false;
 
-// API definitions for each component sub-object.
-// These lists are the single source of truth for what shows up in
-// autocomplete — if an API exists in the runtime scripting files but
-// not here, add it here. If something listed here does NOT exist in the
-// runtime, remove it. One entry per feature: no duplicates.
+// ─── Keyboard key codes ─────────────────────────────────────────────────────
+// Full list of browser KeyboardEvent.code values the engine's input system
+// accepts. Shown when the user types input.keyDown(" or input.keyPressed(".
+const ALL_KEY_CODES = [
+  // Letters
+  "KeyA","KeyB","KeyC","KeyD","KeyE","KeyF","KeyG","KeyH","KeyI","KeyJ",
+  "KeyK","KeyL","KeyM","KeyN","KeyO","KeyP","KeyQ","KeyR","KeyS","KeyT",
+  "KeyU","KeyV","KeyW","KeyX","KeyY","KeyZ",
+  // Digits
+  "Digit0","Digit1","Digit2","Digit3","Digit4",
+  "Digit5","Digit6","Digit7","Digit8","Digit9",
+  // Numpad
+  "Numpad0","Numpad1","Numpad2","Numpad3","Numpad4",
+  "Numpad5","Numpad6","Numpad7","Numpad8","Numpad9",
+  "NumpadAdd","NumpadSubtract","NumpadMultiply","NumpadDivide",
+  "NumpadDecimal","NumpadEnter","NumLock",
+  // Arrows
+  "ArrowLeft","ArrowRight","ArrowUp","ArrowDown",
+  // Modifiers
+  "ShiftLeft","ShiftRight","ControlLeft","ControlRight",
+  "AltLeft","AltRight","MetaLeft","MetaRight","CapsLock",
+  // Common specials
+  "Space","Enter","Escape","Backspace","Tab","Delete","Insert",
+  "Home","End","PageUp","PageDown","ContextMenu",
+  // Function keys
+  "F1","F2","F3","F4","F5","F6","F7","F8","F9","F10","F11","F12",
+  // Punctuation / symbols
+  "Comma","Period","Slash","Backslash","Semicolon","Quote",
+  "BracketLeft","BracketRight","Backquote","Minus","Equal",
+  // Short-letter aliases (also valid key codes)
+  "a","b","c","d","e","f","g","h","i","j","k","l","m",
+  "n","o","p","q","r","s","t","u","v","w","x","y","z",
+  " ",  // Space as a character
+];
+
+// Human-readable descriptions for the most common keys shown as detail.
+const KEY_DETAIL = {
+  Space: "Spacebar", Enter: "Enter / Return", Escape: "Escape",
+  Backspace: "Backspace", Tab: "Tab", Delete: "Delete",
+  ArrowLeft: "← Left arrow", ArrowRight: "→ Right arrow",
+  ArrowUp: "↑ Up arrow", ArrowDown: "↓ Down arrow",
+  ShiftLeft: "Left Shift", ShiftRight: "Right Shift",
+  ControlLeft: "Left Ctrl", ControlRight: "Right Ctrl",
+  AltLeft: "Left Alt", AltRight: "Right Alt",
+};
+
+// ─── API definitions ─────────────────────────────────────────────────────────
 
 const TRANSFORM_API = [
-  { label: "position", detail: "{ x, y } — get/set position as an object", insert: "position" },
-  { label: "rotation", detail: "Rotation in degrees (read/write)", insert: "rotation" },
-  { label: "scale", detail: "{ x, y } — get/set scale as an object", insert: "scale" },
-  { label: "translate(dx, dy)", detail: "Move by a delta amount this frame", insert: "translate(" },
-  { label: "lookAt(x, y)", detail: "Rotate to face a world-space point", insert: "lookAt(" },
+  { label: "position", detail: "{ x, y } — get/set position as an object", insert: "position", kind: "Property" },
+  { label: "rotation", detail: "Rotation in degrees (read/write)", insert: "rotation", kind: "Property" },
+  { label: "scale", detail: "{ x, y } — get/set scale as an object", insert: "scale", kind: "Property" },
+  { label: "translate(dx, dy)", detail: "Move by a delta amount this frame", insert: "translate(", kind: "Method" },
+  { label: "lookAt(x, y)", detail: "Rotate to face a world-space point", insert: "lookAt(", kind: "Method" },
 ];
 
 const SPRITE_API = [
-  { label: "texture", detail: "Sprite texture key (string) — the asset key shown in the Inspector", insert: "texture" },
-  { label: "color", detail: "Tint color as hex string, e.g. \"#ff0000\" for red", insert: 'color = "#' },
-  { label: "flipX", detail: "Flip sprite horizontally (boolean)", insert: "flipX = " },
-  { label: "flipY", detail: "Flip sprite vertically (boolean)", insert: "flipY = " },
-  { label: "opacity", detail: "Transparency: 0.0 (invisible) to 1.0 (fully visible)", insert: "opacity = " },
+  { label: "texture", detail: "Sprite texture key (string) — the asset name shown in the Inspector", insert: "texture", kind: "Property" },
+  { label: "color", detail: 'Tint color as hex string, e.g. "#ff0000" for red', insert: 'color = "#', kind: "Property" },
+  { label: "flipX", detail: "Flip sprite horizontally (boolean)", insert: "flipX = ", kind: "Property" },
+  { label: "flipY", detail: "Flip sprite vertically (boolean)", insert: "flipY = ", kind: "Property" },
+  { label: "opacity", detail: "Transparency: 0.0 (invisible) to 1.0 (fully visible)", insert: "opacity = ", kind: "Property" },
 ];
 
-// Rigidbody scripting API is SPLIT PER BODY TYPE, matching
-// runtime/scripting/components/RigidbodyAPI.js exactly.
-// A Dynamic body gets forces/impulses (Rapier's solver owns it);
-// a Kinematic body gets velocity-drive + move() + contact-state flags
-// (Rapier applies no forces to it); a Static body is read-only.
-// Autocomplete only shows the API valid for the actual body type of
-// the entity whose script is open — so a Kinematic entity never sees
-// addForce() in autocomplete, and it won't exist at runtime either.
 const RIGIDBODY_API_COMMON = [
-  { label: "velocity", detail: "{ x, y } — velocity vector", insert: "velocity" },
-  { label: "velocityX", detail: "Horizontal velocity (px/s)", insert: "velocityX = " },
-  { label: "velocityY", detail: "Vertical velocity (px/s, positive = down)", insert: "velocityY = " },
-  { label: "type", detail: "'Dynamic' | 'Kinematic' | 'Static' (read-only)", insert: "type" },
+  { label: "velocity", detail: "{ x, y } — velocity vector", insert: "velocity", kind: "Property" },
+  { label: "velocityX", detail: "Horizontal velocity (px/s)", insert: "velocityX = ", kind: "Property" },
+  { label: "velocityY", detail: "Vertical velocity (px/s, positive = down)", insert: "velocityY = ", kind: "Property" },
+  { label: "type", detail: "'Dynamic' | 'Kinematic' | 'Static' (read-only)", insert: "type", kind: "Property" },
 ];
 const RIGIDBODY_API_DYNAMIC = RIGIDBODY_API_COMMON.concat([
-  { label: "mass", detail: "Body mass (affects force/impulse results)", insert: "mass = " },
-  { label: "gravityScale", detail: "Gravity multiplier (1 = normal, 0 = no gravity)", insert: "gravityScale = " },
-  { label: "linearDamping", detail: "Linear drag — slows the body over time", insert: "linearDamping = " },
-  { label: "angularDamping", detail: "Rotational drag", insert: "angularDamping = " },
-  { label: "addForce(x, y)", detail: "Continuous force — call every frame in onUpdate to sustain a push", insert: "addForce(" },
-  { label: "addImpulse(x, y)", detail: "One-shot velocity kick — call once (e.g. in onCollision or a jump)", insert: "addImpulse(" },
-  { label: "addTorque(t)", detail: "Continuous spin force — call every frame to sustain rotation", insert: "addTorque(" },
-  { label: "addAngularImpulse(t)", detail: "One-shot angular velocity kick", insert: "addAngularImpulse(" },
+  { label: "mass", detail: "Body mass (affects force/impulse results)", insert: "mass = ", kind: "Property" },
+  { label: "gravityScale", detail: "Gravity multiplier (1 = normal, 0 = no gravity)", insert: "gravityScale = ", kind: "Property" },
+  { label: "linearDamping", detail: "Linear drag — slows the body over time", insert: "linearDamping = ", kind: "Property" },
+  { label: "angularDamping", detail: "Rotational drag", insert: "angularDamping = ", kind: "Property" },
+  { label: "addForce(x, y)", detail: "Continuous force — call every frame in onUpdate to sustain a push", insert: "addForce(", kind: "Method" },
+  { label: "addImpulse(x, y)", detail: "One-shot velocity kick — call once (e.g. in onCollision or a jump)", insert: "addImpulse(", kind: "Method" },
+  { label: "addTorque(t)", detail: "Continuous spin force — call every frame to sustain rotation", insert: "addTorque(", kind: "Method" },
+  { label: "addAngularImpulse(t)", detail: "One-shot angular velocity kick", insert: "addAngularImpulse(", kind: "Method" },
 ]);
 const RIGIDBODY_API_KINEMATIC = RIGIDBODY_API_COMMON.concat([
-  { label: "move(dx, dy)", detail: "One-shot swept move this frame — blocked/slid by obstacles just like velocity", insert: "move(" },
-  { label: "isGrounded", detail: "True when the character controller is touching the ground (read-only)", insert: "isGrounded" },
-  { label: "isOnCeiling", detail: "True when touching a ceiling surface above (read-only)", insert: "isOnCeiling" },
-  { label: "isOnWall", detail: "True when touching a wall — only fires for surfaces steeper than wallAngleLimit (read-only)", insert: "isOnWall" },
-  { label: "isOnSlope", detail: "True when grounded on a slope steeper than slopeMinAngle (read-only)", insert: "isOnSlope" },
-  { label: "groundAngle", detail: "Live angle (deg) of the steepest walkable ground/slope contact this step — 0 = flat floor, up to groundAngleLimit. 0 when not touching a walkable surface (read-only)", insert: "groundAngle" },
-  { label: "resolvedVelocity", detail: "{ x, y } — actual movement this step after collisions (read-only)", insert: "resolvedVelocity" },
-  { label: "groundAngleLimit", detail: "Max angle from horizontal (deg) that counts as walkable ground — default 45. Steeper contacts are unclimbable or walls.", insert: "groundAngleLimit = " },
-  { label: "wallAngleLimit", detail: "Min angle (deg) before a surface counts as a wall — default 70. Contacts between groundAngleLimit and this are steep-but-not-wall.", insert: "wallAngleLimit = " },
-  { label: "slopeMinAngle", detail: "Min angle (deg) before isOnSlope fires — default 10. Raise to ignore minor floor tilt noise.", insert: "slopeMinAngle = " },
+  { label: "move(dx, dy)", detail: "One-shot swept move this frame — blocked/slid by obstacles just like velocity", insert: "move(", kind: "Method" },
+  { label: "isGrounded", detail: "True when the character controller is touching the ground (read-only)", insert: "isGrounded", kind: "Property" },
+  { label: "isOnCeiling", detail: "True when touching a ceiling surface above (read-only)", insert: "isOnCeiling", kind: "Property" },
+  { label: "isOnWall", detail: "True when touching a wall — only fires for surfaces steeper than wallAngleLimit (read-only)", insert: "isOnWall", kind: "Property" },
+  { label: "isOnSlope", detail: "True when grounded on a slope steeper than slopeMinAngle (read-only)", insert: "isOnSlope", kind: "Property" },
+  { label: "groundAngle", detail: "Live angle (deg) of the steepest walkable ground contact this step — 0 = flat floor (read-only)", insert: "groundAngle", kind: "Property" },
+  { label: "resolvedVelocity", detail: "{ x, y } — actual movement this step after collisions (read-only)", insert: "resolvedVelocity", kind: "Property" },
+  { label: "groundAngleLimit", detail: "Max angle from horizontal (deg) that counts as walkable ground — default 45", insert: "groundAngleLimit = ", kind: "Property" },
+  { label: "wallAngleLimit", detail: "Min angle (deg) before a surface counts as a wall — default 70", insert: "wallAngleLimit = ", kind: "Property" },
+  { label: "slopeMinAngle", detail: "Min angle (deg) before isOnSlope fires — default 10", insert: "slopeMinAngle = ", kind: "Property" },
 ]);
 const RIGIDBODY_API_STATIC = [
-  { label: "type", detail: "'Static' — body never moves. Change Body Type in the Inspector to Dynamic or Kinematic.", insert: "type" },
-  { label: "velocity", detail: "Always { x:0, y:0 } — static bodies never move", insert: "velocity" },
+  { label: "type", detail: "'Static' — body never moves. Change Body Type in the Inspector to Dynamic or Kinematic.", insert: "type", kind: "Property" },
+  { label: "velocity", detail: "Always { x:0, y:0 } — static bodies never move", insert: "velocity", kind: "Property" },
 ];
 
-// Controller scripting API is SPLIT PER MOVEMENT TYPE, matching
-// runtime/scripting/components/ControllerAPI.js exactly — mirrors the
-// same body-type-split convention RigidbodyAPI.js uses. Autocomplete
-// only shows the members valid for the entity's ACTUAL Movement Type
-// (Inspector's CharacterController.controllerType), so a Car never
-// sees isGrounded/simulateJump and a Follow never sees moveSpeed.
 const CONTROLLER_API_WALK_COMMON = [
-  { label: "controllerType", detail: "'Character Controller' | 'Platformer' | 'Top-Down' (read-only)", insert: "controllerType" },
-  { label: "moveSpeed", detail: "Horizontal move speed in px/s", insert: "moveSpeed = " },
-  { label: "acceleration", detail: "How fast velocity approaches target speed (higher = snappier)", insert: "acceleration = " },
-  { label: "airControl", detail: "0-1 multiplier on acceleration while airborne (Character Controller and Platformer only — no effect on Top-Down, which has no gravity/airborne concept)", insert: "airControl = " },
-  { label: "useGravity", detail: "Whether gravity applies (always true for Platformer, always false for Top-Down)", insert: "useGravity = " },
-  { label: "useDefaultInput", detail: "Whether WASD/Arrows are wired automatically — turn off to drive movement entirely from script", insert: "useDefaultInput = " },
-  { label: "simulateMove(x, y)", detail: "Move left/right (and up/down for Top-Down) from script, same as holding Arrows/WASD — x/y are -1 to 1, y optional. Call every frame you want movement to continue.", insert: "simulateMove(" },
-  { label: "isOnCeiling", detail: "True when touching a ceiling surface above (read-only). Real per-frame value on Kinematic bodies; always false on Dynamic (no per-axis contact tracking — Rapier's own solver handles it).", insert: "isOnCeiling" },
-  { label: "isOnWall", detail: "True when touching a wall surface steeper than wallAngleLimit (read-only). Real per-frame value on Kinematic bodies; always false on Dynamic.", insert: "isOnWall" },
-  { label: "isOnSlope", detail: "True when grounded on a slope steeper than slopeMinAngle (read-only). Real per-frame value on Kinematic bodies; always false on Dynamic.", insert: "isOnSlope" },
-  { label: "groundAngle", detail: "Live angle (deg) of the steepest walkable ground/slope contact this step — 0 = flat, up to groundAngleLimit (read-only). Real per-frame value on Kinematic bodies; always 0 on Dynamic.", insert: "groundAngle" },
+  { label: "controllerType", detail: "'Character Controller' | 'Platformer' | 'Top-Down' (read-only)", insert: "controllerType", kind: "Property" },
+  { label: "moveSpeed", detail: "Horizontal move speed in px/s", insert: "moveSpeed = ", kind: "Property" },
+  { label: "acceleration", detail: "How fast velocity approaches target speed (higher = snappier)", insert: "acceleration = ", kind: "Property" },
+  { label: "airControl", detail: "0-1 multiplier on acceleration while airborne", insert: "airControl = ", kind: "Property" },
+  { label: "useGravity", detail: "Whether gravity applies (always true for Platformer, always false for Top-Down)", insert: "useGravity = ", kind: "Property" },
+  { label: "useDefaultInput", detail: "Whether WASD/Arrows are wired automatically — turn off to drive movement entirely from script", insert: "useDefaultInput = ", kind: "Property" },
+  { label: "simulateMove(x, y)", detail: "Move left/right (and up/down for Top-Down) from script — x/y are -1 to 1", insert: "simulateMove(", kind: "Method" },
+  { label: "isOnCeiling", detail: "True when touching a ceiling surface above (read-only)", insert: "isOnCeiling", kind: "Property" },
+  { label: "isOnWall", detail: "True when touching a wall surface steeper than wallAngleLimit (read-only)", insert: "isOnWall", kind: "Property" },
+  { label: "isOnSlope", detail: "True when grounded on a slope steeper than slopeMinAngle (read-only)", insert: "isOnSlope", kind: "Property" },
+  { label: "groundAngle", detail: "Live angle (deg) of the steepest walkable ground contact this step (read-only)", insert: "groundAngle", kind: "Property" },
 ];
 const CONTROLLER_API_JUMPABLE = CONTROLLER_API_WALK_COMMON.concat([
-  { label: "canJump", detail: "Whether jump is enabled", insert: "canJump = " },
-  { label: "jumpForce", detail: "Upward velocity applied on jump (px/s)", insert: "jumpForce = " },
-  { label: "maxJumps", detail: "1 = no double jump, 2 = double jump, etc.", insert: "maxJumps = " },
-  { label: "isGrounded", detail: "True when touching the ground (read-only)", insert: "isGrounded" },
-  { label: "simulateJump()", detail: "Trigger a jump from script, same as pressing Space — respects canJump/maxJumps", insert: "simulateJump()" },
+  { label: "canJump", detail: "Whether jump is enabled", insert: "canJump = ", kind: "Property" },
+  { label: "jumpForce", detail: "Upward velocity applied on jump (px/s)", insert: "jumpForce = ", kind: "Property" },
+  { label: "maxJumps", detail: "1 = no double jump, 2 = double jump, etc.", insert: "maxJumps = ", kind: "Property" },
+  { label: "isGrounded", detail: "True when touching the ground (read-only)", insert: "isGrounded", kind: "Property" },
+  { label: "simulateJump()", detail: "Trigger a jump from script, same as pressing Space — respects canJump/maxJumps", insert: "simulateJump()", kind: "Method" },
 ]);
 const CONTROLLER_API_CHARACTER = CONTROLLER_API_JUMPABLE;
 const CONTROLLER_API_PLATFORMER = CONTROLLER_API_JUMPABLE;
 const CONTROLLER_API_TOP_DOWN = CONTROLLER_API_WALK_COMMON;
 const CONTROLLER_API_CAR = [
-  { label: "controllerType", detail: "'Car' (read-only)", insert: "controllerType" },
-  { label: "maxSpeed", detail: "Top forward speed in px/s (reverse caps at half this)", insert: "maxSpeed = " },
-  { label: "acceleration", detail: "How fast the car speeds up (px/s²) — maps to the Inspector's Acceleration field", insert: "acceleration = " },
-  { label: "brakeForce", detail: "How fast it brakes / goes into reverse (px/s²)", insert: "brakeForce = " },
-  { label: "turnSpeed", detail: "Max turn rate in deg/s at full speed (scales down at lower speeds)", insert: "turnSpeed = " },
-  { label: "driftFactor", detail: "0-1: how much lateral velocity is retained (higher = more slide)", insert: "driftFactor = " },
-  { label: "useDefaultInput", detail: "Whether WASD/Arrows (throttle/brake/steer) are wired automatically", insert: "useDefaultInput = " },
+  { label: "controllerType", detail: "'Car' (read-only)", insert: "controllerType", kind: "Property" },
+  { label: "maxSpeed", detail: "Top forward speed in px/s (reverse caps at half this)", insert: "maxSpeed = ", kind: "Property" },
+  { label: "acceleration", detail: "How fast the car speeds up (px/s²)", insert: "acceleration = ", kind: "Property" },
+  { label: "brakeForce", detail: "How fast it brakes / goes into reverse (px/s²)", insert: "brakeForce = ", kind: "Property" },
+  { label: "turnSpeed", detail: "Max turn rate in deg/s at full speed (scales down at lower speeds)", insert: "turnSpeed = ", kind: "Property" },
+  { label: "driftFactor", detail: "0-1: how much lateral velocity is retained (higher = more slide)", insert: "driftFactor = ", kind: "Property" },
+  { label: "useDefaultInput", detail: "Whether WASD/Arrows (throttle/brake/steer) are wired automatically", insert: "useDefaultInput = ", kind: "Property" },
 ];
 const CONTROLLER_API_FOLLOW = [
-  { label: "controllerType", detail: "'Follow' (read-only)", insert: "controllerType" },
-  { label: "targetName", detail: "Name of the entity to pursue", insert: 'targetName = "' },
-  { label: "followSpeed", detail: "Pursuit speed in px/s", insert: "followSpeed = " },
-  { label: "followDistance", detail: "Stop when within this many pixels of the target", insert: "followDistance = " },
+  { label: "controllerType", detail: "'Follow' (read-only)", insert: "controllerType", kind: "Property" },
+  { label: "targetName", detail: "Name of the entity to pursue", insert: 'targetName = "', kind: "Property" },
+  { label: "followSpeed", detail: "Pursuit speed in px/s", insert: "followSpeed = ", kind: "Property" },
+  { label: "followDistance", detail: "Stop when within this many pixels of the target", insert: "followDistance = ", kind: "Property" },
 ];
 const CONTROLLER_API_FREE = [
-  { label: "controllerType", detail: "'Free' — fully script-driven, ControllerSystem does nothing for this entity. Drive this.rigidbody directly.", insert: "controllerType" },
+  { label: "controllerType", detail: "'Free' — fully script-driven. Drive this.rigidbody directly.", insert: "controllerType", kind: "Property" },
 ];
 
 const ANIMATOR_API = [
-  { label: "play(clipName)", detail: "Play a named animation clip", insert: 'play("' },
-  { label: "stop()", detail: "Stop the current animation", insert: "stop()" },
-  { label: "playing", detail: "True while an animation is playing (read-only)", insert: "playing" },
-  { label: "currentClip", detail: "Name of the currently active clip (read-only)", insert: "currentClip" },
+  { label: "play(clipName)", detail: "Play a named animation clip", insert: 'play("', kind: "Method" },
+  { label: "stop()", detail: "Stop the current animation", insert: "stop()", kind: "Method" },
+  { label: "playing", detail: "True while an animation is playing (read-only)", insert: "playing", kind: "Property" },
+  { label: "currentClip", detail: "Name of the currently active clip (read-only)", insert: "currentClip", kind: "Property" },
 ];
 
 const CAMERA_API = [
-  { label: "zoom", detail: "Camera size/zoom. Default 5 = no zoom. Smaller = zoomed in, larger = zoomed out.", insert: "zoom = " },
-  { label: "shake(intensity, duration)", detail: "Shake the camera. intensity=pixels of shake, duration=seconds.", insert: "shake(" },
-  { label: "renderToSprite(spriteEntity)", detail: "Render this camera's view onto a sprite's texture every frame (minimap / security feed). Pass an entity from find(), e.g. renderToSprite(find('Minimap'))", insert: "renderToSprite(" },
+  { label: "zoom", detail: "Camera size/zoom. Default 5 = no zoom. Smaller = zoomed in, larger = zoomed out.", insert: "zoom = ", kind: "Property" },
+  { label: "shake(intensity, duration)", detail: "Shake the camera. intensity=pixels of shake, duration=seconds.", insert: "shake(", kind: "Method" },
+  { label: "renderToSprite(spriteEntity)", detail: "Render this camera's view onto a sprite's texture every frame (minimap / security feed).", insert: "renderToSprite(", kind: "Method" },
 ];
 
 const AUDIO_API = [
-  { label: "play()", detail: "Start audio playback", insert: "play()" },
-  { label: "stop()", detail: "Stop audio playback", insert: "stop()" },
-  { label: "volume", detail: "Volume: 0.0 (silent) to 1.0 (full)", insert: "volume = " },
-  { label: "playing", detail: "True while the source is set to play (read-only)", insert: "playing" },
+  { label: "play()", detail: "Start audio playback", insert: "play()", kind: "Method" },
+  { label: "stop()", detail: "Stop audio playback", insert: "stop()", kind: "Method" },
+  { label: "volume", detail: "Volume: 0.0 (silent) to 1.0 (full)", insert: "volume = ", kind: "Property" },
+  { label: "playing", detail: "True while the source is set to play (read-only)", insert: "playing", kind: "Property" },
 ];
 
-// this.* shortcut arrays — filtered per-entity in provideCompletionItems
-// so only shortcuts relevant to the entity's actual components appear.
-
-// Always shown (every entity has Transform, visible, enabled).
 const THIS_SHORTCUTS_BASE = [
-  { label: "x", detail: "Position X (number)", insert: "x" },
-  { label: "y", detail: "Position Y (number)", insert: "y" },
-  { label: "position", detail: "{ x, y } position object — read or assign {x,y}", insert: "position" },
-  { label: "rotation", detail: "Rotation in degrees", insert: "rotation = " },
-  { label: "scaleX", detail: "Scale X", insert: "scaleX = " },
-  { label: "scaleY", detail: "Scale Y", insert: "scaleY = " },
-  { label: "translate(dx, dy)", detail: "Move by a delta amount this frame", insert: "translate(" },
-  { label: "visible", detail: "Show/hide the entity", insert: "visible = " },
-  { label: "enabled", detail: "Enable/disable this script", insert: "enabled = " },
-  { label: "name", detail: "The entity's name, set in the Hierarchy panel (read-only). Use to identify what you collided with, e.g. other.name === \"Obstacle\"", insert: "name" },
-  { label: "tag", detail: "The entity's tag, set in the Inspector's Tag dropdown (read/write). Use to categorize entities, e.g. other.tag === \"Enemy\"", insert: "tag" },
-  { label: "destroy()", detail: "Destroy this entity — removed at the end of this frame, onDestroy() fires just before removal", insert: "destroy()" },
-  { label: "destroyed", detail: "True once destroy() has been called on this entity but before it's actually removed (read-only)", insert: "destroyed" },
+  { label: "x", detail: "Position X (number)", insert: "x", kind: "Property" },
+  { label: "y", detail: "Position Y (number)", insert: "y", kind: "Property" },
+  { label: "position", detail: "{ x, y } position object — read or assign {x,y}", insert: "position", kind: "Property" },
+  { label: "rotation", detail: "Rotation in degrees", insert: "rotation = ", kind: "Property" },
+  { label: "scaleX", detail: "Scale X", insert: "scaleX = ", kind: "Property" },
+  { label: "scaleY", detail: "Scale Y", insert: "scaleY = ", kind: "Property" },
+  { label: "translate(dx, dy)", detail: "Move by a delta amount this frame", insert: "translate(", kind: "Method" },
+  { label: "visible", detail: "Show/hide the entity", insert: "visible = ", kind: "Property" },
+  { label: "enabled", detail: "Enable/disable this script", insert: "enabled = ", kind: "Property" },
+  { label: "name", detail: "The entity's name, set in the Hierarchy panel (read-only)", insert: "name", kind: "Property" },
+  { label: "tag", detail: "The entity's tag, set in the Inspector's Tag dropdown (read/write)", insert: "tag", kind: "Property" },
+  { label: "destroy()", detail: "Destroy this entity — removed at end of frame, onDestroy() fires just before removal", insert: "destroy()", kind: "Method" },
+  { label: "destroyed", detail: "True once destroy() has been called (read-only)", insert: "destroyed", kind: "Property" },
 ];
-
-// NOTE: there is deliberately no THIS_SPRITE_SHORTCUTS, THIS_VELOCITY_
-// SHORTCUTS, THIS_KINEMATIC_SHORTCUTS, THIS_DYNAMIC_SHORTCUTS, or
-// THIS_CONTROLLER_SHORTCUTS array here. Sprite, rigidbody/physics, and
-// movement-type properties are reached ONLY through this.sprite.*,
-// this.rigidbody.*, and this.controller.* (see SPRITE_API and the
-// RIGIDBODY_API_*/CONTROLLER_API_* lists below, which mirror
-// runtime/scripting/components/SpriteAPI.js, RigidbodyAPI.js, and
-// ControllerAPI.js exactly) — one API per capability, so autocomplete
-// never offers two different-looking ways to do the same thing
-// (this.addForce() vs this.rigidbody.addForce(), or this.isOnGround vs
-// this.controller.isGrounded) that could behave differently, especially
-// since RigidbodyAPI's shape depends on the entity's actual body type
-// and ControllerAPI's shape depends on the entity's actual movement type.
 
 const GLOBAL_APIS = [
-  { label: "find(name)", detail: "Find entity by name → same as scene.find(name). Returns an object with .x, .y, .sprite, .rigidbody, etc.", insert: 'find("' },
-  { label: "scene", detail: "Scene utilities: scene.find(), scene.load(), scene.restart()", insert: "scene." },
-  { label: "physics", detail: "Physics utilities: physics.raycast(x1,y1,x2,y2)", insert: "physics." },
-  { label: "input", detail: "Input queries: input.keyDown(key), input.keyPressed(key)", insert: "input." },
-  { label: "time", detail: "Frame timing: time.deltaTime, time.elapsed", insert: "time." },
-  { label: "random", detail: "Random numbers: random.int(min,max), random.float(min,max)", insert: "random." },
-  { label: "global", detail: "Cross-script shared state: global.score = 0, global.lives, etc.", insert: "global." },
-  { label: "debug", detail: "On-screen debug HUD: debug.show(), debug.log(label, value)", insert: "debug." },
-  { label: 'sendMessage(tag, message, data)', detail: 'Send a named message to all entities with the given tag. Their scripts receive it via onMessage(message, sender, data). E.g. sendMessage("Enemy", "takeDamage", { amount: 10 })', insert: 'sendMessage("' },
-  { label: 'broadcastMessage(message, data)', detail: 'Send a named message to ALL entities in the scene. Their scripts receive it via onMessage(message, sender, data). E.g. broadcastMessage("gameOver")', insert: 'broadcastMessage("' },
+  { label: "find(name)", detail: 'Find entity by name. Returns an object with .x, .y, .sprite, .rigidbody, etc.', insert: 'find("', kind: "Function" },
+  { label: "scene", detail: "Scene utilities: scene.find(), scene.load(), scene.restart()", insert: "scene.", kind: "Module" },
+  { label: "physics", detail: "Physics utilities: physics.raycast(x1,y1,x2,y2)", insert: "physics.", kind: "Module" },
+  { label: "input", detail: "Input queries: input.keyDown(key), input.keyPressed(key)", insert: "input.", kind: "Module" },
+  { label: "time", detail: "Frame timing: time.deltaTime, time.elapsed", insert: "time.", kind: "Module" },
+  { label: "random", detail: "Random numbers: random.int(min,max), random.float(min,max)", insert: "random.", kind: "Module" },
+  { label: "global", detail: "Cross-script shared state: global.score = 0, global.lives, etc.", insert: "global.", kind: "Module" },
+  { label: "debug", detail: "On-screen debug HUD: debug.show(), debug.log(label, value)", insert: "debug.", kind: "Module" },
+  { label: "sendMessage(tag, message, data)", detail: 'Send a named message to all entities with the given tag. E.g. sendMessage("Enemy", "takeDamage", { amount: 10 })', insert: 'sendMessage("', kind: "Function" },
+  { label: "broadcastMessage(message, data)", detail: 'Send a named message to ALL entities in the scene. E.g. broadcastMessage("gameOver")', insert: 'broadcastMessage("', kind: "Function" },
 ];
 
 const SCENE_API = [
-  { label: "find(name)", detail: "Find entity by name (same as the top-level find() shortcut)", insert: 'find("' },
-  { label: "load(sceneName)", detail: "Load a different scene by name", insert: 'load("' },
-  { label: "restart()", detail: "Restart the current scene from the beginning", insert: "restart()" },
+  { label: "find(name)", detail: "Find entity by name (same as the top-level find() shortcut)", insert: 'find("', kind: "Method" },
+  { label: "load(sceneName)", detail: "Load a different scene by name", insert: 'load("', kind: "Method" },
+  { label: "restart()", detail: "Restart the current scene from the beginning", insert: "restart()", kind: "Method" },
 ];
 const PHYSICS_API = [
-  { label: "raycast(x1, y1, x2, y2)", detail: "Cast a ray from (x1,y1) to (x2,y2). Returns { entity, point, distance } or null.", insert: "raycast(" },
+  { label: "raycast(x1, y1, x2, y2)", detail: "Cast a ray from (x1,y1) to (x2,y2). Returns { entity, point, distance } or null.", insert: "raycast(", kind: "Method" },
 ];
 const INPUT_API = [
-  { label: "keyDown(key)", detail: "Is the key currently held? Use key codes like 'ArrowLeft', 'Space', 'KeyA'", insert: 'keyDown("' },
-  { label: "keyPressed(key)", detail: "Was the key pressed this frame only (not held)? Same key codes as keyDown.", insert: 'keyPressed("' },
+  { label: "keyDown(key)", detail: 'Is the key currently held? Use key codes like "ArrowLeft", "Space", "KeyA"', insert: 'keyDown("', kind: "Method" },
+  { label: "keyPressed(key)", detail: 'Was the key pressed this frame only (not held)? Same key codes as keyDown.', insert: 'keyPressed("', kind: "Method" },
 ];
 const TIME_API = [
-  { label: "deltaTime", detail: "Seconds since the last frame (use to keep movement frame-rate independent)", insert: "deltaTime" },
-  { label: "elapsed", detail: "Total seconds since the game started", insert: "elapsed" },
+  { label: "deltaTime", detail: "Seconds since the last frame (use to keep movement frame-rate independent)", insert: "deltaTime", kind: "Property" },
+  { label: "elapsed", detail: "Total seconds since the game started", insert: "elapsed", kind: "Property" },
 ];
 const RANDOM_API = [
-  { label: "int(min, max)", detail: "Random integer in [min, max] inclusive", insert: "int(" },
-  { label: "float(min, max)", detail: "Random float in [min, max)", insert: "float(" },
+  { label: "int(min, max)", detail: "Random integer in [min, max] inclusive", insert: "int(", kind: "Method" },
+  { label: "float(min, max)", detail: "Random float in [min, max)", insert: "float(", kind: "Method" },
 ];
 const DEBUG_API = [
-  { label: "show(on)", detail: "Turn the on-screen debug HUD on (default) or off — debug.show(false) hides it", insert: "show(" },
-  { label: "showFps(on)", detail: "Show/hide just the FPS line while the HUD stays on", insert: "showFps(" },
-  { label: "log(label, value)", detail: "Add/update a custom line in the HUD, e.g. debug.log(\"Player HP\", this.hp)", insert: 'log("' },
-  { label: "clear(label)", detail: "Remove one custom HUD line by its label", insert: 'clear("' },
-  { label: "clearAll()", detail: "Remove every custom HUD line (FPS line stays if showFps is on)", insert: "clearAll()" },
+  { label: "show(on)", detail: "Turn the on-screen debug HUD on (default) or off — debug.show(false) hides it", insert: "show(", kind: "Method" },
+  { label: "showFps(on)", detail: "Show/hide just the FPS line while the HUD stays on", insert: "showFps(", kind: "Method" },
+  { label: "log(label, value)", detail: 'Add/update a custom HUD line, e.g. debug.log("Player HP", this.hp)', insert: 'log("', kind: "Method" },
+  { label: "clear(label)", detail: "Remove one custom HUD line by its label", insert: 'clear("', kind: "Method" },
+  { label: "clearAll()", detail: "Remove every custom HUD line", insert: "clearAll()", kind: "Method" },
 ];
 
-// Parses variable assignments from find() calls so autocomplete can
-// resolve `var player = find("Player")` → player gets Player's APIs.
+// ─── Live scene data helpers ──────────────────────────────────────────────────
+
+/** All entity names in the current scene (deduped, sorted). */
+function _getEntityNames() {
+  if (!editorState.world) return [];
+  const entities = editorState.world.getAllEntities();
+  const names = new Set();
+  for (const e of entities) if (e.name) names.add(e.name);
+  return [...names].sort();
+}
+
+/** All unique entity tags in the current scene (deduped, sorted). */
+function _getEntityTags() {
+  if (!editorState.world) return [];
+  const entities = editorState.world.getAllEntities();
+  const tags = new Set();
+  for (const e of entities) if (e.tag) tags.add(e.tag);
+  return [...tags].sort();
+}
+
+/** All scene names from the scene list. */
+function _getSceneNames() {
+  try {
+    const list = getSceneList();
+    return list.map(s => s.name).filter(Boolean).sort();
+  } catch (_) { return []; }
+}
+
+/** All sprite/texture asset names in the project. */
+function _getTextureNames() {
+  try {
+    return getAllSpriteAssets().map(a => a.name || a.key).filter(Boolean).sort();
+  } catch (_) { return []; }
+}
+
+/** All audio asset names in the project. */
+function _getAudioNames() {
+  try {
+    return getAllAudioAssets().map(a => a.name || a.key).filter(Boolean).sort();
+  } catch (_) { return []; }
+}
+
+/** Animation clip names for the context entities (animator.play completions). */
+function _getAnimClipNames() {
+  const entities = _getContextEntities();
+  const names = new Set();
+  for (const e of entities) {
+    const anim = e.getComponent(SPRITE_ANIMATION);
+    if (anim && anim.clips) {
+      for (const clip of anim.clips) if (clip.name) names.add(clip.name);
+    }
+  }
+  // Also scan all scene entities in case script is unassigned
+  if (names.size === 0 && editorState.world) {
+    for (const e of editorState.world.getAllEntities()) {
+      const anim = e.getComponent(SPRITE_ANIMATION);
+      if (anim && anim.clips) {
+        for (const clip of anim.clips) if (clip.name) names.add(clip.name);
+      }
+    }
+  }
+  return [...names].sort();
+}
+
+// ─── String-argument context detection ───────────────────────────────────────
+// Returns a string tag describing what kind of completions to provide when
+// the cursor is inside a string argument (trigger character `"`).
+//
+// Patterns are ordered from most-specific to least-specific so the first
+// match wins.
+function _detectStringContext(lineUntil) {
+  // input.keyDown(" / input.keyPressed(" / input.keyUp(" etc.
+  if (/\binput\s*\.\s*key\w*\s*\(\s*["']$/.test(lineUntil)) return "keyCode";
+
+  // scene.load("
+  if (/\bscene\s*\.\s*load\s*\(\s*["']$/.test(lineUntil)) return "sceneName";
+
+  // scene.find("
+  if (/\bscene\s*\.\s*find\s*\(\s*["']$/.test(lineUntil)) return "entityName";
+
+  // find("  (top-level shortcut or this.find — any context)
+  if (/\bfind\s*\(\s*["']$/.test(lineUntil)) return "entityName";
+
+  // animator.play("
+  if (/\banimator\s*\.\s*play\s*\(\s*["']$/.test(lineUntil)) return "clipName";
+
+  // .texture = " or .texture = '  (any sub-object path, e.g. this.sprite.texture = ")
+  if (/\.texture\s*=\s*["']$/.test(lineUntil)) return "textureName";
+
+  // sendMessage(tag, ...) — first argument is a tag
+  if (/\bsendMessage\s*\(\s*["']$/.test(lineUntil)) return "entityTag";
+
+  // .tag === " / .tag == " / .tag === '  (comparison)
+  if (/\.tag\s*===?\s*["']$/.test(lineUntil)) return "entityTag";
+
+  // .name === " / .name == " / .name !== "
+  if (/\.name\s*!?==?\s*["']$/.test(lineUntil)) return "entityName";
+
+  // controller.targetName = " (Follow controller target)
+  if (/\.targetName\s*=\s*["']$/.test(lineUntil)) return "entityName";
+
+  // broadcastMessage("  — first arg is a message label; suggest existing ones
+  if (/\bbroadcastMessage\s*\(\s*["']$/.test(lineUntil)) return "messageLabel";
+
+  return null;
+}
+
+// ─── Existing helpers (unchanged from original) ───────────────────────────────
+
 function _parseFindVariables(text) {
   const map = {};
   const regex = /(?:\b(?:var|let|const)\s+)?(\w+)\s*=\s*find\s*\(\s*["']([^"']+)["']\s*\)/g;
@@ -244,8 +376,6 @@ function _parseFindVariables(text) {
   return map;
 }
 
-// Returns the set of component keys for an entity found by name, or
-// null if no entity with that name exists.
 function _entityComponentKeys(entityName) {
   if (!editorState.world) return null;
   const entity = editorState.world.findFirstByName(entityName);
@@ -257,27 +387,12 @@ function _entityComponentKeys(entityName) {
   return set;
 }
 
-// Picks the rigidbody scripting API list matching an entity's ACTUAL
-// Rigidbody2D.bodyType — mirrors runtime/scripting/components/
-// RigidbodyAPI.js exactly, so autocomplete never offers e.g.
-// addForce() on a Kinematic/Static object only for it to throw at
-// runtime. Falls back to the read-only Static shape if the component
-// is missing or the type is unrecognized (an entity with only a
-// Collider2D — no Rigidbody2D — behaves as an implicit static
-// collider in PhysicsWorld, so Static is the correct, safe default).
 function _rigidbodyApiForBodyType(bodyType) {
   if (bodyType === BodyType.DYNAMIC) return RIGIDBODY_API_DYNAMIC;
   if (bodyType === BodyType.KINEMATIC) return RIGIDBODY_API_KINEMATIC;
   return RIGIDBODY_API_STATIC;
 }
 
-// Same idea as _rigidbodyApiForBodyType, but for a SET of entities (the
-// "union across owners" case when a script is shared by several
-// objects — see COMPONENT_APIS' rigidbody entry below). If every owner
-// shares the same body type, only that type's API is offered; if body
-// types differ across owners, the union is offered so nothing valid on
-// any owner is missing — matching how _contextComponentKeys() already
-// unions plain component membership across owners.
 function _rigidbodyApiForEntities(entities) {
   const seen = new Set();
   const lists = [];
@@ -291,8 +406,6 @@ function _rigidbodyApiForEntities(entities) {
   }
   if (lists.length === 0) return RIGIDBODY_API_STATIC;
   if (lists.length === 1) return lists[0];
-  // Mixed body types across owners — union by label so nothing is
-  // duplicated and every owner's valid members are still offered.
   const merged = [];
   const labelsSeen = new Set();
   for (const list of lists) {
@@ -305,11 +418,6 @@ function _rigidbodyApiForEntities(entities) {
   return merged;
 }
 
-// Same idea as _rigidbodyApiForBodyType/_rigidbodyApiForEntities, but
-// for CharacterController.controllerType — mirrors
-// runtime/scripting/components/ControllerAPI.js exactly, so
-// autocomplete never offers e.g. simulateJump() on a Car/Follow/Free
-// entity only for it to throw at runtime.
 function _controllerApiForType(controllerType) {
   if (controllerType === ControllerType.CHARACTER) return CONTROLLER_API_CHARACTER;
   if (controllerType === ControllerType.PLATFORMER) return CONTROLLER_API_PLATFORMER;
@@ -332,8 +440,6 @@ function _controllerApiForEntities(entities) {
   }
   if (lists.length === 0) return CONTROLLER_API_FREE;
   if (lists.length === 1) return lists[0];
-  // Mixed movement types across owners — union by label, same approach
-  // _rigidbodyApiForEntities uses for mixed body types.
   const merged = [];
   const labelsSeen = new Set();
   for (const list of lists) {
@@ -346,102 +452,6 @@ function _controllerApiForEntities(entities) {
   return merged;
 }
 
-// Full list of every shortcut + component API + global.
-// Used when the engine can't track a variable's type (untracked variable,
-// generic find() result). Shows everything so nothing valid is hidden.
-function _allCompletions(monaco, range) {
-  const suggestions = [];
-  // Flat Transform/entity shortcuts (the only flat this.<x> shortcuts —
-  // see the note above GLOBAL_APIS for why sprite/rigidbody aren't here)
-  for (const item of THIS_SHORTCUTS_BASE) {
-    suggestions.push(_makeCompletion(monaco, item, range));
-  }
-  // Sub-object completions
-  for (const c of COMPONENT_APIS) {
-    for (const item of c.api) {
-      suggestions.push(Object.assign(_makeCompletion(monaco, item, range), { label: c.name + "." + item.label }));
-    }
-    suggestions.push(_makeCompletion(monaco, { label: c.name, detail: c.name + " component", insert: c.name + "." }, range));
-  }
-  for (const item of GLOBAL_APIS) {
-    suggestions.push(_makeCompletion(monaco, item, range));
-  }
-  return suggestions;
-}
-
-// Pushes the flat `this.` shortcut completions (Transform/entity only —
-// see the note above GLOBAL_APIS) into `suggestions`. Sprite and
-// rigidbody/physics properties are offered exclusively via their
-// sub-object completions (this.sprite., this.rigidbody.) below in
-// provideCompletionItems, so `keys`/`entities` aren't needed here
-// anymore, but are kept as parameters for call-site compatibility.
-function _pushShortcutCompletions(monaco, range, suggestions, keys, entities) {
-  for (const item of THIS_SHORTCUTS_BASE) {
-    suggestions.push(_makeCompletion(monaco, item, range));
-  }
-}
-
-// Union of every rigidbody API across all three body types — used ONLY
-// by the generic/untracked paths below (_allCompletions, and an
-// untracked find() variable) where there is no real entity to check
-// the actual bodyType against, so showing everything is the safer
-// fallback than guessing wrong. The entity-aware paths (`this.` and a
-// find()-tracked variable — see _rigidbodyApiForEntities /
-// _rigidbodyApiForBodyType above) always resolve the PRECISE list for
-// the real body type instead of this union.
-const RIGIDBODY_API_ALL = (function () {
-  const merged = [];
-  const seen = new Set();
-  for (const list of [RIGIDBODY_API_DYNAMIC, RIGIDBODY_API_KINEMATIC, RIGIDBODY_API_STATIC]) {
-    for (const item of list) {
-      if (seen.has(item.label)) continue;
-      seen.add(item.label);
-      merged.push(item);
-    }
-  }
-  return merged;
-})();
-
-// Union of every controller API across all movement types — same
-// untracked-fallback purpose as RIGIDBODY_API_ALL above.
-const CONTROLLER_API_ALL = (function () {
-  const merged = [];
-  const seen = new Set();
-  for (const list of [CONTROLLER_API_CHARACTER, CONTROLLER_API_TOP_DOWN, CONTROLLER_API_CAR, CONTROLLER_API_FOLLOW, CONTROLLER_API_FREE]) {
-    for (const item of list) {
-      if (seen.has(item.label)) continue;
-      seen.add(item.label);
-      merged.push(item);
-    }
-  }
-  return merged;
-})();
-
-// Maps a component key to its sub-object name + API list.
-const COMPONENT_APIS = [
-  { key: TRANSFORM, name: "transform", api: TRANSFORM_API },
-  { key: SPRITE_RENDERER, name: "sprite", api: SPRITE_API },
-  { key: RIGIDBODY_2D, name: "rigidbody", api: RIGIDBODY_API_ALL },
-  { key: SPRITE_ANIMATION, name: "animator", api: ANIMATOR_API },
-  { key: CAMERA, name: "camera", api: CAMERA_API },
-  { key: AUDIO_SOURCE, name: "audio", api: AUDIO_API },
-  { key: CHARACTER_CONTROLLER, name: "controller", api: CONTROLLER_API_ALL },
-];
-
-function _makeCompletion(monaco, item, range) {
-  return {
-    label: item.label,
-    kind: monaco.languages.CompletionItemKind.Function,
-    detail: item.detail,
-    insertText: item.insert,
-    range: range,
-  };
-}
-
-// The entities whose components drive `this.` completions for the
-// currently active script tab. Set when a script is opened via an
-// object (single entity) or the Scripts folder (one entity, or the
-// union of every object that shares the script).
 function _getContextEntities() {
   const se = editorState.scriptEditor;
   const ctx = se.contextByScript ? se.contextByScript[se.activeTab] : null;
@@ -455,10 +465,6 @@ function _getContextEntities() {
   return out;
 }
 
-// Union of component keys present across all context entities, merged
-// with any APIs the user forced on via the API Management panel for
-// this specific script. forcedApis is now a per-script map keyed by
-// script name — so overrides for ScriptA never bleed into ScriptB.
 function _contextComponentKeys() {
   const entities = _getContextEntities();
   const set = new Set();
@@ -473,12 +479,112 @@ function _contextComponentKeys() {
   return set;
 }
 
+// Union of every rigidbody API across all body types — for untracked paths.
+const RIGIDBODY_API_ALL = (function () {
+  const merged = [];
+  const seen = new Set();
+  for (const list of [RIGIDBODY_API_DYNAMIC, RIGIDBODY_API_KINEMATIC, RIGIDBODY_API_STATIC]) {
+    for (const item of list) {
+      if (seen.has(item.label)) continue;
+      seen.add(item.label);
+      merged.push(item);
+    }
+  }
+  return merged;
+})();
+
+const CONTROLLER_API_ALL = (function () {
+  const merged = [];
+  const seen = new Set();
+  for (const list of [CONTROLLER_API_CHARACTER, CONTROLLER_API_TOP_DOWN, CONTROLLER_API_CAR, CONTROLLER_API_FOLLOW, CONTROLLER_API_FREE]) {
+    for (const item of list) {
+      if (seen.has(item.label)) continue;
+      seen.add(item.label);
+      merged.push(item);
+    }
+  }
+  return merged;
+})();
+
+const COMPONENT_APIS = [
+  { key: TRANSFORM, name: "transform", api: TRANSFORM_API },
+  { key: SPRITE_RENDERER, name: "sprite", api: SPRITE_API },
+  { key: RIGIDBODY_2D, name: "rigidbody", api: RIGIDBODY_API_ALL },
+  { key: SPRITE_ANIMATION, name: "animator", api: ANIMATOR_API },
+  { key: CAMERA, name: "camera", api: CAMERA_API },
+  { key: AUDIO_SOURCE, name: "audio", api: AUDIO_API },
+  { key: CHARACTER_CONTROLLER, name: "controller", api: CONTROLLER_API_ALL },
+];
+
+// ─── Completion item builder ──────────────────────────────────────────────────
+
+function _kindConstant(monaco, kindName) {
+  const K = monaco.languages.CompletionItemKind;
+  switch (kindName) {
+    case "Property":  return K.Property;
+    case "Method":    return K.Method;
+    case "Function":  return K.Function;
+    case "Module":    return K.Module;
+    case "Snippet":   return K.Snippet;
+    case "Value":     return K.Value;
+    case "Variable":  return K.Variable;
+    case "Field":     return K.Field;
+    default:          return K.Function;
+  }
+}
+
+function _makeCompletion(monaco, item, range) {
+  return {
+    label: item.label,
+    kind: _kindConstant(monaco, item.kind || "Function"),
+    detail: item.detail || "",
+    insertText: item.insert,
+    range: range,
+  };
+}
+
+/** Make a string-value completion item (entity name, key code, etc.). */
+function _makeValueCompletion(monaco, label, detail, insertText, range) {
+  return {
+    label: label,
+    kind: monaco.languages.CompletionItemKind.Value,
+    detail: detail || "",
+    insertText: insertText,
+    range: range,
+  };
+}
+
+function _allCompletions(monaco, range) {
+  const suggestions = [];
+  for (const item of THIS_SHORTCUTS_BASE) {
+    suggestions.push(_makeCompletion(monaco, item, range));
+  }
+  for (const c of COMPONENT_APIS) {
+    for (const item of c.api) {
+      suggestions.push(Object.assign(_makeCompletion(monaco, item, range), { label: c.name + "." + item.label }));
+    }
+    suggestions.push(_makeCompletion(monaco, { label: c.name, detail: c.name + " component", insert: c.name + ".", kind: "Module" }, range));
+  }
+  for (const item of GLOBAL_APIS) {
+    suggestions.push(_makeCompletion(monaco, item, range));
+  }
+  return suggestions;
+}
+
+function _pushShortcutCompletions(monaco, range, suggestions, keys, entities) {
+  for (const item of THIS_SHORTCUTS_BASE) {
+    suggestions.push(_makeCompletion(monaco, item, range));
+  }
+}
+
+// ─── Provider registration ────────────────────────────────────────────────────
+
 export function registerIntelliSense(monaco) {
   if (_registered) return;
   _registered = true;
 
   monaco.languages.registerCompletionItemProvider("javascript", {
-    triggerCharacters: [".", "(", '"'],
+    triggerCharacters: [".", "(", '"', "'"],
 
     provideCompletionItems: function (model, position) {
       const textUntilPosition = model.getValueInRange({
@@ -488,8 +594,6 @@ export function registerIntelliSense(monaco) {
         endColumn: position.column,
       });
 
-      // Only consider the current line up to the cursor — the chain
-      // that decides the suggestion set is whatever was just typed.
       const lineUntil = textUntilPosition.slice(textUntilPosition.lastIndexOf("\n") + 1);
 
       const word = model.getWordUntilPosition(position);
@@ -502,61 +606,131 @@ export function registerIntelliSense(monaco) {
 
       const suggestions = [];
 
-      // this.<optional partial word> → entity-aware completions.
+      // ── String-argument context ──────────────────────────────────────────
+      // Detect patterns like find("  scene.load("  input.keyDown("  .texture="
+      // and return scene-aware / project-aware completions instead of code.
+      const stringCtx = _detectStringContext(lineUntil);
+      if (stringCtx) {
+        if (stringCtx === "entityName") {
+          const names = _getEntityNames();
+          for (const name of names) {
+            suggestions.push(_makeValueCompletion(
+              monaco, name, "Scene object", name + '"', range
+            ));
+          }
+          return { suggestions };
+        }
+
+        if (stringCtx === "sceneName") {
+          const scenes = _getSceneNames();
+          for (const name of scenes) {
+            suggestions.push(_makeValueCompletion(
+              monaco, name, "Scene", name + '"', range
+            ));
+          }
+          return { suggestions };
+        }
+
+        if (stringCtx === "keyCode") {
+          for (const key of ALL_KEY_CODES) {
+            suggestions.push(_makeValueCompletion(
+              monaco, key,
+              KEY_DETAIL[key] || "Keyboard key code",
+              key + '"',
+              range
+            ));
+          }
+          return { suggestions };
+        }
+
+        if (stringCtx === "textureName") {
+          const textures = _getTextureNames();
+          for (const name of textures) {
+            suggestions.push(_makeValueCompletion(
+              monaco, name, "Sprite / texture asset", name + '"', range
+            ));
+          }
+          // If no textures yet, still return empty (don't fall through)
+          return { suggestions };
+        }
+
+        if (stringCtx === "clipName") {
+          const clips = _getAnimClipNames();
+          for (const name of clips) {
+            suggestions.push(_makeValueCompletion(
+              monaco, name, "Animation clip", name + '"', range
+            ));
+          }
+          return { suggestions };
+        }
+
+        if (stringCtx === "entityTag") {
+          const tags = _getEntityTags();
+          for (const tag of tags) {
+            suggestions.push(_makeValueCompletion(
+              monaco, tag, "Entity tag", tag + '"', range
+            ));
+          }
+          return { suggestions };
+        }
+
+        if (stringCtx === "messageLabel") {
+          // Scan the full script text for onMessage handlers to suggest
+          // existing message labels (broadcastMessage("xxx") → "xxx").
+          const fullText = model.getValue();
+          const msgRegex = /broadcastMessage\s*\(\s*["']([^"']+)["']/g;
+          const sendRegex = /sendMessage\s*\(\s*["'][^"']*["']\s*,\s*["']([^"']+)["']/g;
+          const labels = new Set();
+          let m;
+          while ((m = msgRegex.exec(fullText)) !== null) labels.add(m[1]);
+          while ((m = sendRegex.exec(fullText)) !== null) labels.add(m[1]);
+          for (const lbl of [...labels].sort()) {
+            suggestions.push(_makeValueCompletion(
+              monaco, lbl, "Message label (used in this script)", lbl + '"', range
+            ));
+          }
+          return { suggestions };
+        }
+
+        return { suggestions: [] };
+      }
+
+      // ── this.<partial> → entity-aware completions ────────────────────────
       if (lineUntil.match(/\bthis\.\w*$/)) {
         const contextEntities = _getContextEntities();
         const keys = _contextComponentKeys();
-        // Flat shortcuts filtered by component presence + body type
         _pushShortcutCompletions(monaco, range, suggestions, keys, contextEntities);
-        // Sub-object completions (this.sprite, this.rigidbody, etc.)
         for (const c of COMPONENT_APIS) {
           if (keys.has(c.key)) {
-            // Rigidbody is body-type-aware and Controller is movement-
-            // type-aware, so a Kinematic entity's this. never sees
-            // addForce()/addImpulse(), and a Car/Follow/Free entity's
-            // this. never sees isGrounded()/simulateJump() in
-            // autocomplete.
             const api = c.key === RIGIDBODY_2D ? _rigidbodyApiForEntities(contextEntities)
               : c.key === CHARACTER_CONTROLLER ? _controllerApiForEntities(contextEntities)
               : c.api;
             for (const item of api) {
-              // insertText must be the FULL sub-object path (e.g. "camera.zoom")
-              // so that clicking "camera.zoom" in the list after typing "this."
-              // inserts the full token, not just "zoom".
               suggestions.push(Object.assign(
                 _makeCompletion(monaco, item, range),
                 { label: c.name + "." + item.label, insertText: c.name + "." + item.insert }
               ));
             }
-            suggestions.push(_makeCompletion(monaco, { label: c.name, detail: c.name + " component", insert: c.name + "." }, range));
+            suggestions.push(_makeCompletion(monaco, { label: c.name, detail: c.name + " component", insert: c.name + ".", kind: "Module" }, range));
           }
         }
-        return { suggestions: suggestions };
+        return { suggestions };
       }
 
-      // <subobj>.<optional partial word> → that sub-object's API.
+      // ── <subobj>.<partial> → that sub-object's API ───────────────────────
       const subMatch = lineUntil.match(/(\w+)\.\w*$/);
       if (subMatch && subMatch[1] !== "this") {
         const subObj = subMatch[1];
         let items = null;
-        // Track whether the sub-object name is a known engine API (component or
-        // global). When it IS known but the entity doesn't have that component,
-        // we return empty rather than falling through to _allCompletions (which
-        // would show every API in the engine — confusing and misleading).
         let isKnownSubObj = false;
 
         const contextEntities = _getContextEntities();
-        // keys is null when there is no context (untracked variable path below).
-        // When we DO have a context, component sub-objects are only shown if
-        // that component is actually on the entity.
         const hasContext = contextEntities.length > 0;
         const keys = hasContext ? _contextComponentKeys() : null;
 
-        // Component sub-objects — only show when entity has the component (or
-        // when there's no tracked context and we can't tell).
         if (subObj === "transform") {
           isKnownSubObj = true;
-          items = TRANSFORM_API; // Transform is always present on every entity.
+          items = TRANSFORM_API;
         } else if (subObj === "sprite") {
           isKnownSubObj = true;
           if (!keys || keys.has(SPRITE_RENDERER)) items = SPRITE_API;
@@ -575,7 +749,6 @@ export function registerIntelliSense(monaco) {
         } else if (subObj === "controller") {
           isKnownSubObj = true;
           if (!keys || keys.has(CHARACTER_CONTROLLER)) items = _controllerApiForEntities(contextEntities);
-        // Global sub-objects — always available.
         } else if (subObj === "scene") {
           isKnownSubObj = true;
           items = SCENE_API;
@@ -600,26 +773,18 @@ export function registerIntelliSense(monaco) {
           for (const item of items) {
             suggestions.push(_makeCompletion(monaco, item, range));
           }
-          return { suggestions: suggestions };
+          return { suggestions };
         }
-        // Known engine name but component not on this entity → return nothing.
-        // (Don't fall through to _allCompletions — that would show every API.)
         if (isKnownSubObj) return { suggestions: [] };
 
         // Unknown sub-object — check if it's a tracked find() variable.
-        // If assigned from find("EntityName"), show that entity's
-        // component APIs (same as `this.` for that entity). If the
-        // engine can't track the variable (e.g. random.int()), show
-        // the full API list so the user still gets suggestions.
         const findVars = _parseFindVariables(textUntilPosition);
         if (findVars[subObj]) {
           const entityKeys = _entityComponentKeys(findVars[subObj]);
           if (entityKeys) {
             const foundEntity = editorState.world ? editorState.world.findFirstByName(findVars[subObj]) : null;
             const foundEntities = foundEntity ? [foundEntity] : [];
-            // Flat shortcuts filtered by the found entity's components
             _pushShortcutCompletions(monaco, range, suggestions, entityKeys, foundEntities);
-            // Sub-object completions
             for (const c of COMPONENT_APIS) {
               if (entityKeys.has(c.key)) {
                 const api = c.key === RIGIDBODY_2D
@@ -630,31 +795,46 @@ export function registerIntelliSense(monaco) {
                 for (const item of api) {
                   suggestions.push(Object.assign(_makeCompletion(monaco, item, range), { label: c.name + "." + item.label }));
                 }
-                suggestions.push(_makeCompletion(monaco, { label: c.name, detail: c.name + " component", insert: c.name + "." }, range));
+                suggestions.push(_makeCompletion(monaco, { label: c.name, detail: c.name + " component", insert: c.name + ".", kind: "Module" }, range));
               }
             }
-            return { suggestions: suggestions };
+            return { suggestions };
           }
         }
         // Untracked variable — show the full API list.
         return { suggestions: _allCompletions(monaco, range) };
       }
 
-      // Global APIs (when not after a dot)
+      // ── Global / top-level ────────────────────────────────────────────────
       for (const item of GLOBAL_APIS) {
         suggestions.push(_makeCompletion(monaco, item, range));
       }
-      suggestions.push(_makeCompletion(monaco, { label: "function onStart()", detail: "Called once before the first onUpdate — use for initialization", insert: "onStart() {\n  \n}" }, range));
-      suggestions.push(_makeCompletion(monaco, { label: "function onUpdate(dt)", detail: "Called every frame. dt = seconds since last frame (use for movement)", insert: "onUpdate(dt) {\n  \n}" }, range));
-      suggestions.push(_makeCompletion(monaco, { label: "function onFixedUpdate(dt)", detail: "Called at a fixed 60 Hz rate — use for physics/rigidbody changes", insert: "onFixedUpdate(dt) {\n  \n}" }, range));
-      suggestions.push(_makeCompletion(monaco, { label: "function onCollision(other)", detail: "Called when this entity's collider touches another (alias for onCollisionEnter). 'other' has .x, .y, etc.", insert: "onCollision(other) {\n  \n}" }, range));
-      suggestions.push(_makeCompletion(monaco, { label: "function onCollisionEnter(other)", detail: "Called when collision begins. 'other' has .x, .y, .name, etc. Works for all body types.", insert: "onCollisionEnter(other) {\n  \n}" }, range));
-      suggestions.push(_makeCompletion(monaco, { label: "function onCollisionExit(other)", detail: "Called when collision ends. 'other' has .x, .y, .name, etc. Works for all body types.", insert: "onCollisionExit(other) {\n  \n}" }, range));
-      suggestions.push(_makeCompletion(monaco, { label: "function onTriggerEnter(other)", detail: "Called when entering a trigger collider (Is Trigger = on)", insert: "onTriggerEnter(other) {\n  \n}" }, range));
-      suggestions.push(_makeCompletion(monaco, { label: "function onTriggerExit(other)", detail: "Called when leaving a trigger collider", insert: "onTriggerExit(other) {\n  \n}" }, range));
-      suggestions.push(_makeCompletion(monaco, { label: "function onMessage(message, sender, data)", detail: "Called when this entity receives a message from sendMessage() or broadcastMessage(). message = string name, sender = sending entity context (or null for broadcast), data = optional payload", insert: "onMessage(message, sender, data) {\n  \n}" }, range));
-      suggestions.push(_makeCompletion(monaco, { label: "function onDestroy()", detail: "Called once when this entity is destroyed or the scene ends", insert: "onDestroy() {\n  \n}" }, range));
-      return { suggestions: suggestions };
+
+      // Lifecycle method snippets
+      const snippets = [
+        { label: "function onStart()", detail: "Called once before the first onUpdate — use for initialization", insert: "onStart() {\n  $1\n}" },
+        { label: "function onUpdate(dt)", detail: "Called every frame. dt = seconds since last frame (use for movement)", insert: "onUpdate(dt) {\n  $1\n}" },
+        { label: "function onFixedUpdate(dt)", detail: "Called at a fixed 60 Hz rate — use for physics/rigidbody changes", insert: "onFixedUpdate(dt) {\n  $1\n}" },
+        { label: "function onCollision(other)", detail: "Called when this entity's collider touches another. 'other' has .x, .y, .name, .tag, etc.", insert: "onCollision(other) {\n  $1\n}" },
+        { label: "function onCollisionEnter(other)", detail: "Called when collision begins. 'other' has .x, .y, .name, etc.", insert: "onCollisionEnter(other) {\n  $1\n}" },
+        { label: "function onCollisionExit(other)", detail: "Called when collision ends.", insert: "onCollisionExit(other) {\n  $1\n}" },
+        { label: "function onTriggerEnter(other)", detail: "Called when entering a trigger collider (Is Trigger = on)", insert: "onTriggerEnter(other) {\n  $1\n}" },
+        { label: "function onTriggerExit(other)", detail: "Called when leaving a trigger collider", insert: "onTriggerExit(other) {\n  $1\n}" },
+        { label: "function onMessage(message, sender, data)", detail: "Called when this entity receives a message via sendMessage() or broadcastMessage()", insert: "onMessage(message, sender, data) {\n  $1\n}" },
+        { label: "function onDestroy()", detail: "Called once when this entity is destroyed or the scene ends", insert: "onDestroy() {\n  $1\n}" },
+      ];
+      for (const s of snippets) {
+        suggestions.push({
+          label: s.label,
+          kind: monaco.languages.CompletionItemKind.Snippet,
+          detail: s.detail,
+          insertText: s.insert,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          range: range,
+        });
+      }
+
+      return { suggestions };
     },
   });
 }

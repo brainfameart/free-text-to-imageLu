@@ -21,7 +21,7 @@ export function renderStatusBar() {
     '<span>Objects: <b id="sb-objects">0</b></span>' +
     '<span>FPS: <b id="sb-fps">—</b></span>' +
     '<span>Memory: <b id="sb-memory">—</b></span>' +
-    '<span class="mono">version: 1.0</span>' +
+    '<span class="mono">version: 1.1</span>' +
     "</div>" +
     "</div>"
   );

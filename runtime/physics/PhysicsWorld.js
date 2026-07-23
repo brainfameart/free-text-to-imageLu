@@ -77,6 +77,20 @@ const WALL_ANGLE_DEG = 70;
 // step edges, or when the character briefly loses the snap-to-ground
 // contact while still visually standing on the surface.
 const GROUNDED_GRACE_FRAMES = 3;
+// Small downward bias applied to the character-controller sweep whenever
+// a kinematic body is grounded and has zero or positive desired-Y (i.e.
+// standing still or drifting down, but NOT jumping). Mirrors the
+// GROUND_STICK_VY used by ControllerSystem for its own Character
+// Controller bodies: Rapier's character controller needs at least a tiny
+// downward component in the sweep to reliably generate floor-contact
+// normals. With a strict zero desired-Y (e.g. a script that zeros
+// velocityY every frame while standing) the sweep has no downward delta,
+// no collision normals are produced, hasGroundContact → false, and
+// isGrounded flickers off after GROUNDED_GRACE_FRAMES. The bias keeps
+// the sweep's Y reliably nonzero; snap-to-ground (2 px, enabled above)
+// absorbs the resulting sub-pixel per-frame dip so the body stays
+// visually flush with the floor.
+const GROUND_STICK_VY_PROBE = 40; // px/s — same value as ControllerSystem's GROUND_STICK_VY
 
 function rapierBodyType(RAPIER, bodyType) {
   switch (bodyType) {
@@ -902,9 +916,23 @@ export class PhysicsWorld {
     const desiredX = rb.velocityX * dt + extraMoveX;
     const desiredY = rb.velocityY * dt + extraMoveY;
 
+    // Ground-stick probe: when the body is currently grounded and has no
+    // upward intent (desiredY >= 0), ensure the sweep's Y component is at
+    // least GROUND_STICK_VY_PROBE * dt downward. Without this, a script that
+    // writes velocityY = 0 every grounded frame produces a zero-delta sweep,
+    // Rapier generates no floor-contact normals, hasGroundContact flips
+    // false, and isGrounded oscillates off/on every few frames.
+    // snap-to-ground (2 px, enabled in init) absorbs the resulting tiny
+    // per-frame dip so the body stays visually flush with the floor.
+    // When desiredY < 0 (jumping / moving upward) we pass the real delta
+    // unmodified so the jump sweep goes upward as intended.
+    const sweepY = (rb.grounded && desiredY >= 0)
+      ? Math.max(desiredY, GROUND_STICK_VY_PROBE * dt)
+      : desiredY;
+
     this._characterController.computeColliderMovement(handle.collider, {
       x: desiredX,
-      y: desiredY,
+      y: sweepY,
     });
 
     // Push every DYNAMIC body this kinematic mover ran into, along the
@@ -1148,6 +1176,20 @@ export class PhysicsWorld {
     // the computed grounded value unchanged (user request: "if false,
     // just leave it as is").
     if (rb.isOnSlope) rb.grounded = false;
+
+    // Jump / upward-launch override: if the sweep had a net upward intent
+    // (desiredY < 0) and no floor contact was detected, immediately clear
+    // grounded instead of waiting for GROUNDED_GRACE_FRAMES. The grace
+    // period exists to smooth over 1-frame contact gaps while standing on
+    // uneven terrain — it should NOT keep isGrounded=true for 3 frames
+    // after a deliberate jump. Scripts that zero velocityY whenever
+    // isGrounded is true would otherwise cancel the jump impulse during
+    // those grace frames, producing the "jump only works sometimes" bug
+    // where low jumps are silently eaten by the grace window.
+    if (desiredY < 0 && !groundedFromContacts) {
+      this._ungroundedFrames.set(myId, GROUNDED_GRACE_FRAMES);
+      rb.grounded = false;
+    }
   }
 
   /**
