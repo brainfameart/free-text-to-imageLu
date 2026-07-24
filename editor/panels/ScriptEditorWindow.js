@@ -26,6 +26,7 @@
 import { editorState } from "../state/EditorState.js";
 import { getScriptSource, saveScript, getAllScripts, renameScript } from "../scripting/ScriptStorage.js";
 import { registerIntelliSense, refreshScriptDiagnostics, clearScriptDiagnostics } from "../scripting/ScriptIntelliSense.js";
+import { defineZenTheme, applyZenDecorations, clearZenDecorations } from "../scripting/ScriptHighlighting.js";
 
 // Inject CSS once
 (function () {
@@ -131,6 +132,7 @@ function _ensureMonaco(callback) {
           noSyntaxValidation: true,
         });
         registerIntelliSense(_monaco);
+        defineZenTheme(_monaco);
         _monacoLoadCallbacks.forEach(function (cb) { cb(_monaco); });
         _monacoLoadCallbacks = [];
       },
@@ -214,6 +216,9 @@ function _switchTab(scriptName) {
   // changed since this tab was last open (renamed object, deleted
   // texture, etc.), and there's no keystroke here to debounce against.
   refreshScriptDiagnostics(_monaco, model);
+  // Immediate (not debounced) so switching tabs shows correct colors
+  // right away instead of plain text until the user's next keystroke.
+  applyZenDecorations(_monaco, _editor, model, scriptName);
   // Explicitly focus Monaco. Every call path into this function follows
   // a DOM operation that silently drops focus — the initial
   // monaco.editor.create(), and (via mountScriptEditor -> _mountEditor)
@@ -237,6 +242,7 @@ function _closeTab(scriptName) {
     clearScriptDiagnostics(_monaco, _models[scriptName]);
     _models[scriptName].dispose();
     delete _models[scriptName];
+    clearZenDecorations(scriptName);
   }
   if (editorState.scriptEditor.activeTab === scriptName) {
     editorState.scriptEditor.activeTab = editorState.scriptEditor.openTabs[0] || null;
@@ -268,6 +274,23 @@ function _scheduleDiagnostics(scriptName) {
     if (!model || !_monaco) return;
     refreshScriptDiagnostics(_monaco, model);
   }, 300);
+}
+
+let _highlightTimer = null;
+
+// Re-scans the model for ZenEngine API identifiers (input, this.sprite,
+// .addForce, etc.) and re-applies the colored decorations from
+// ScriptHighlighting.js. Debounced independently from save/diagnostics
+// so a fast typist doesn't pay for three separate full-text scans per
+// keystroke — this one only needs to be visually "soon", not saved or
+// validated, so it can run on its own slightly longer cadence.
+function _scheduleHighlighting(scriptName) {
+  clearTimeout(_highlightTimer);
+  _highlightTimer = setTimeout(function () {
+    var model = _models[scriptName];
+    if (!model || !_monaco || !_editor) return;
+    applyZenDecorations(_monaco, _editor, model, scriptName);
+  }, 150);
 }
 
 function _syncSourceToEntities(scriptName, source) {
@@ -445,7 +468,7 @@ function _mountEditor(container) {
     _editor = monaco.editor.create(container, {
       value: "",
       language: "javascript",
-      theme: "vs-dark",
+      theme: "zenengine-dark",
       automaticLayout: true,
       fontSize: 14,
       minimap: { enabled: true },
@@ -474,6 +497,7 @@ function _mountEditor(container) {
       if (active) {
         _scheduleSave(active);
         _scheduleDiagnostics(active);
+        _scheduleHighlighting(active);
       }
     });
 

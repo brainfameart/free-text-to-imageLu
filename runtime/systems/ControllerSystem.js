@@ -541,4 +541,14 @@ export class ControllerSystem extends System {
   destroy() {
     this.input.destroy();
   }
+
+  /**
+   * Clears controller state that belongs to the current scene while keeping
+   * the shared keyboard listeners alive for the next scene.
+   */
+  resetScene() {
+    this._verticalVelocity.clear();
+    this._jumpsUsed.clear();
+    this._carSpeed.clear();
+  }
 }

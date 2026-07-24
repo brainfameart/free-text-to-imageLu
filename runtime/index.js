@@ -157,6 +157,12 @@ export function createGame({ pixiApp, followMainCamera = false }) {
   // (component properties updated during play, etc.) never corrupt the
   // restart snapshot — deserializeScene reads the clone unchanged each time.
   let _initialSceneData = null;
+  // Scene APIs can be called from collision callbacks while Rapier is
+  // draining its event queue. Never mutate World or Rapier from that call
+  // stack: retain the first requested transition and apply it after the
+  // current GameLoop update has completely finished.
+  let _pendingSceneChange = null;
+  let _applyingSceneChange = false;
 
   /**
    * Full teardown before swapping in new scene data — matches Unity's
@@ -182,12 +188,77 @@ export function createGame({ pixiApp, followMainCamera = false }) {
     //    fresh scene must start with a physically empty Rapier world,
     //    not one still full of the previous scene's now-orphaned bodies.
     physicsSystem.clear();
+    controllerSystem.resetScene();
+    renderSystem.destroy();
+    tilemapSystem.destroy();
+    lightingSystem.resetScene();
+    audioSystem.destroy();
     // 3. Drop every cached EntityContext — entity ids are about to be
     //    reused by World.clear() (see core/World.js), and without this
     //    a stale context from a destroyed entity would get handed back
     //    to the new scene's scripts (see ScriptAPI.clearContexts()'s
     //    own doc comment for the full reasoning).
     scriptApi.clearContexts();
+  }
+
+  function _queueSceneChange(change) {
+    if (_applyingSceneChange || _pendingSceneChange) return;
+    _pendingSceneChange = change;
+  }
+
+  function _applyPendingSceneChange() {
+    const change = _pendingSceneChange;
+    if (!change) return;
+    _pendingSceneChange = null;
+    _applyingSceneChange = true;
+    try {
+      if (change.kind === "restart") {
+        if (_initialSceneData) {
+          _teardownForSceneChange();
+          cameraRenderSystem.clear();
+          deserializeScene(world, JSON.parse(JSON.stringify(_initialSceneData)));
+          scriptSystem._started = false;
+          _applySceneCamera();
+        }
+      } else {
+        let found = getAllScenesData().find(function (s) {
+          return s.name === change.sceneName;
+        });
+        if (found) {
+          // SceneManager represents the active scene with data=null. Capture
+          // that scene before teardown, because teardown clears the World and
+          // saving afterward would overwrite the active scene with an empty
+          // payload. Loading the active scene is also a valid request: like
+          // Unity, it should reload the scene rather than become a no-op.
+          if (!found.data) {
+            saveActiveScene(world);
+            // getAllScenesData() returns fresh list entries, so re-read the
+            // saved active entry instead of mutating the temporary `found`
+            // object whose data was null.
+            found = getAllScenesData().find(function (s) {
+              return s.name === change.sceneName;
+            });
+          }
+          if (!found || !found.data) return;
+          const targetSceneData = JSON.parse(JSON.stringify(found.data));
+          // Restart always means "restart the scene that is currently
+          // loaded", not "return to the scene Play mode originally opened".
+          // Advance the immutable restart snapshot with every successful
+          // scene.load() transition.
+          _initialSceneData = JSON.parse(JSON.stringify(targetSceneData));
+          _teardownForSceneChange();
+          cameraRenderSystem.clear();
+          deserializeScene(world, targetSceneData);
+          scriptSystem._started = false;
+          _applySceneCamera();
+        } else if (typeof console !== "undefined") {
+          console.log("[ScriptAPI] scene.load('" + change.sceneName + "') — no scene found with that name. Available scenes: " +
+            (getAllScenesData().map(function(s){ return s.name; }).join(", ") || "(none)"));
+        }
+      }
+    } finally {
+      _applyingSceneChange = false;
+    }
   }
 
   // Host hook (play popup) notified when a scene load/restart changes the
@@ -222,45 +293,13 @@ export function createGame({ pixiApp, followMainCamera = false }) {
 
   // Wire up scene management callbacks on the ScriptAPI.
   scriptApi._restartFn = function () {
-    if (_initialSceneData) {
-      _teardownForSceneChange();
-      // Release RenderTextures from the previous scene's minimap cameras
-      // so they don't leak across scene reloads.
-      cameraRenderSystem.clear();
-      // Deep-clone so deserializeScene can freely mutate the object it
-      // receives without corrupting the snapshot stored here — otherwise
-      // a second restart would see already-modified data.
-      deserializeScene(world, JSON.parse(JSON.stringify(_initialSceneData)));
-      scriptSystem._started = false;
-      _applySceneCamera();
-    }
+    _queueSceneChange({ kind: "restart" });
   };
   scriptApi._loadSceneFn = function (sceneName) {
-    // Search SceneManager's full list (includes data payloads loaded via
-    // loadAllScenesData in the play popup — see play-popup.js).
-    var allScenes = getAllScenesData();
-    var found = allScenes.find(function (s) { return s.name === sceneName; });
-    if (found) {
-      _teardownForSceneChange();
-      // Release RenderTextures from the previous scene's minimap cameras.
-      cameraRenderSystem.clear();
-      if (found.data) {
-        // Play popup path: load directly from the stored data payload.
-        deserializeScene(world, JSON.parse(JSON.stringify(found.data)));
-        scriptSystem._started = false;
-        _applySceneCamera();
-      } else {
-        // Editor path: scene is currently live (data=null means it's
-        // the active one in SceneManager) — use switchToScene().
-        switchToScene(world, found.id);
-        scriptSystem._started = false;
-        _applySceneCamera();
-      }
-    } else if (typeof console !== "undefined") {
-      console.log("[ScriptAPI] scene.load('" + sceneName + "') — no scene found with that name. Available scenes: " +
-        (getAllScenesData().map(function(s){ return s.name; }).join(", ") || "(none)"));
-    }
+    _queueSceneChange({ kind: "load", sceneName: sceneName });
   };
+
+  loop.onAfterUpdate = _applyPendingSceneChange;
 
   return {
     world,

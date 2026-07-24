@@ -507,6 +507,14 @@ export class LightingSystem extends System {
   }
 
   /**
+   * Clears display objects from the previous scene without destroying the
+   * shared lighting shaders and render textures owned by this game instance.
+   */
+  resetScene() {
+    this._teardownAllSpriteFilters();
+  }
+
+  /**
    * Reads the scene's LightingSettings component, if any — identical
    * semantics to the previous version.
    */

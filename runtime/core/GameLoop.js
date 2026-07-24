@@ -13,6 +13,9 @@ export class GameLoop {
    * @param {import('./World.js').World} world
    * @param {object} [opts]
    * @param {() => void} [opts.onTick] called after world.update each frame
+   * @param {() => void} [opts.onAfterUpdate] called after world.update and
+   *   before the host's onTick callback; scene transitions use this point
+   *   so they never mutate the physics world during a Rapier step.
    */
   constructor(world, opts) {
     this.world = world;
@@ -22,6 +25,7 @@ export class GameLoop {
     this._lastTime = 0;
     this._rafHandle = null;
     this._tickFn = this._tick.bind(this);
+    this.onAfterUpdate = (opts && opts.onAfterUpdate) || null;
   }
 
   start() {
@@ -50,6 +54,7 @@ export class GameLoop {
     this._lastTime = now;
 
     this.world.update(dt);
+    if (this.onAfterUpdate) this.onAfterUpdate();
     if (this.onTick) this.onTick(dt);
 
     this._rafHandle = requestAnimationFrame(this._tickFn);
