@@ -85,7 +85,12 @@ function _ensureMonaco(callback) {
 
   const existing = document.querySelector('script[src="' + MONACO_LOADER_URL + '"]');
   if (existing) {
-    // Already loading — wait for it
+    // Already loading — wait for it. Capped at 15s: if the first
+    // attempt's script tag failed (network error, blocked domain) our
+    // onerror handler doesn't remove the tag, so a retry would
+    // otherwise land here and poll window.monaco forever with nothing
+    // ever telling the user why the editor is still empty.
+    var _waited = 0;
     const check = setInterval(() => {
       if (window.monaco) {
         clearInterval(check);
@@ -93,6 +98,13 @@ function _ensureMonaco(callback) {
         _monacoLoading = false;
         _monacoLoadCallbacks.forEach(function (cb) { cb(_monaco); });
         _monacoLoadCallbacks = [];
+        return;
+      }
+      _waited += 100;
+      if (_waited >= 15000) {
+        clearInterval(check);
+        _monacoLoading = false;
+        _reportMonacoLoadFailure(new Error("Timed out waiting for Monaco to load"));
       }
     }, 100);
     return;
@@ -102,26 +114,80 @@ function _ensureMonaco(callback) {
   script.src = MONACO_LOADER_URL;
   script.onload = function () {
     window.require.config({ paths: { vs: MONACO_BASE } });
-    window.require(["vs/editor/editor.main"], function () {
-      _monaco = window.monaco;
-      _monacoLoading = false;
-      // Configure Monaco to suppress browser-global suggestions.
-      _monaco.languages.typescript.javascriptDefaults.setCompilerOptions({
-        noLib: true,
-        allowNonTsExtensions: true,
-      });
-      // No in-editor diagnostics — script errors surface only in the
-      // Console tab (see BottomPanel.js), never as red squiggles here.
-      _monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
-        noSemanticValidation: true,
-        noSyntaxValidation: true,
-      });
-      registerIntelliSense(_monaco);
-      _monacoLoadCallbacks.forEach(function (cb) { cb(_monaco); });
-      _monacoLoadCallbacks = [];
-    });
+    window.require(
+      ["vs/editor/editor.main"],
+      function () {
+        _monaco = window.monaco;
+        _monacoLoading = false;
+        // Configure Monaco to suppress browser-global suggestions.
+        _monaco.languages.typescript.javascriptDefaults.setCompilerOptions({
+          noLib: true,
+          allowNonTsExtensions: true,
+        });
+        // No in-editor diagnostics — script errors surface only in the
+        // Console tab (see BottomPanel.js), never as red squiggles here.
+        _monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+          noSemanticValidation: true,
+          noSyntaxValidation: true,
+        });
+        registerIntelliSense(_monaco);
+        _monacoLoadCallbacks.forEach(function (cb) { cb(_monaco); });
+        _monacoLoadCallbacks = [];
+      },
+      // AMD errback: fires if vs/editor/editor.main itself fails to
+      // load (e.g. the loader script loaded but a later chunk from the
+      // CDN 404s/times out). Without this, that failure was silently
+      // swallowed exactly like the script.onerror case below —
+      // _monacoLoading stays true forever and the editor area is just
+      // a dead, empty div with no explanation.
+      function (err) {
+        _monacoLoading = false;
+        _reportMonacoLoadFailure(err);
+      }
+    );
+  };
+  // THE ACTUAL BUG: previously there was no onerror handler here at
+  // all. If this CDN request is blocked or fails for any reason
+  // (offline, DNS failure, a network filter blocking cdnjs.cloudflare.com
+  // — common on managed/school Chromebook networks), the <script> tag
+  // just never fires onload, _monaco stays null forever, no editor
+  // instance is ever created, and #se-monaco-container is left as a
+  // permanently empty div. The rest of the UI (tabs, sidebar, Close
+  // button) still renders normally, so it LOOKS like the editor
+  // opened fine — but no keystroke of any kind does anything, and
+  // nothing is ever logged, because nothing ever threw. That matches
+  // "everything works but typing/WASD/Space do nothing, no errors"
+  // exactly. This handler makes that failure visible instead of silent.
+  script.onerror = function () {
+    _monacoLoading = false;
+    _reportMonacoLoadFailure(new Error("Failed to load script: " + MONACO_LOADER_URL));
   };
   document.head.appendChild(script);
+}
+
+/**
+ * Surfaces a Monaco load failure directly in the editor area (not just
+ * the console, which the user may not have open) so it's obvious why
+ * typing does nothing, instead of the editor silently sitting there as
+ * a dead empty box. Also retries are possible afterward since
+ * _monacoLoading was reset to false by the caller before this runs.
+ */
+function _reportMonacoLoadFailure(err) {
+  console.error("[ScriptEditor] Monaco failed to load:", err);
+  var container = document.getElementById("se-monaco-container");
+  if (container) {
+    container.innerHTML =
+      '<div style="padding:24px;color:#f48771;font:13px/1.6 -apple-system,sans-serif;max-width:520px;">' +
+      "<strong>Couldn't load the code editor.</strong><br/>" +
+      "The script editor loads Monaco from cdnjs.cloudflare.com, and that request failed — " +
+      "this usually means no internet connection, or the domain is blocked by a network filter " +
+      "(common on school/managed Chromebook networks).<br/><br/>" +
+      "Close this window and reopen the script to retry once you have a connection." +
+      "</div>";
+  }
+  // Reset callback queue so a later successful retry (new openScriptEditor
+  // call) isn't stuck waiting on callbacks queued during the failed attempt.
+  _monacoLoadCallbacks = [];
 }
 
 function _getModel(scriptName) {

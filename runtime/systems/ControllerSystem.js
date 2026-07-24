@@ -102,12 +102,48 @@ class InputState {
       // actually released. preventDefault() only for the specific
       // codes this engine binds to game actions (see GAME_KEY_CODES
       // above), so nothing else on the page is affected.
+      //
+      // BUG FIX 2: this listener is attached to `window` and this
+      // system lives for as long as the editor's own live preview is
+      // running (SceneViewport.js calls createGame() to drive it),
+      // not just inside actual Play mode. That means it was ALWAYS
+      // active while using the editor — including while typing in the
+      // Monaco script editor. Since WASD/Space/arrows are exactly the
+      // codes this handler preventDefault()s unconditionally, every
+      // one of those keystrokes was swallowed before Monaco's own
+      // hidden textarea ever saw them, while every other key typed
+      // normally. Guard against that: skip entirely when a normal
+      // text input/textarea or the Monaco editor currently has focus.
+      if (InputState._isTypingTarget(e.target)) return;
       if (GAME_KEY_CODES.has(e.code)) e.preventDefault();
       this.keys.add(e.code);
     };
-    this._onKeyUp = (e) => this.keys.delete(e.code);
+    this._onKeyUp = (e) => {
+      if (InputState._isTypingTarget(e.target)) return;
+      this.keys.delete(e.code);
+    };
     window.addEventListener("keydown", this._onKeyDown);
     window.addEventListener("keyup", this._onKeyUp);
+  }
+
+  /**
+   * True when the event's target is a normal text field or Monaco's
+   * own editing surface, meaning the keystroke is meant for typing —
+   * not game input — and this system should get completely out of
+   * its way (no preventDefault, no key tracking). Checked on both
+   * keydown and keyup so a key held while focus moves in/out of a
+   * text field doesn't leave a stuck entry in `keys`.
+   */
+  static _isTypingTarget(target) {
+    if (!target) return false;
+    if (/^(input|textarea)$/i.test(target.tagName)) return true;
+    if (target.isContentEditable) return true;
+    // Monaco's real keyboard-capturing element is a hidden textarea
+    // with class "inputarea" inside .monaco-editor — some browsers
+    // report its tagName oddly, so also check via closest() as a
+    // belt-and-suspenders match against the editor's outer container.
+    if (target.closest && target.closest(".monaco-editor")) return true;
+    return false;
   }
 
   isDown(...codes) {
