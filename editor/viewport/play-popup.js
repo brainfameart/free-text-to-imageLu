@@ -189,6 +189,18 @@ async function boot() {
   // show up too, not just errors.
   _wireConsoleForwarding();
 
+  // Belt-and-suspenders for keyboard focus: PlayWindow.js already calls
+  // playWin.focus() right after window.open(), but that can still lose
+  // to the OS/browser handing focus back to the opener (observed on
+  // ChromeOS) — the popup then renders and runs fine, just silently
+  // never receives keydown/keyup, so every input.keyDown()/keyPressed()
+  // check in a script stays false forever with no visible error.
+  // Re-asserting focus here (on load) and again on the very first click
+  // anywhere in the popup guarantees the window has focus by the time
+  // the player actually starts pressing movement keys.
+  window.focus();
+  window.addEventListener("pointerdown", function () { window.focus(); });
+
   const payload = window.opener && window.opener.__ZENGINE_PLAY_PAYLOAD__;
   if (!payload) {
     document.body.innerHTML =

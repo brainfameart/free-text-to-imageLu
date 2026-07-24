@@ -103,6 +103,16 @@ export function openPlayWindow(game) {
     pushLog("error", "Play window was blocked by the browser's popup blocker. Allow popups for this site and press Play again.");
     return;
   }
+  // window.open() does NOT reliably hand keyboard focus to the new
+  // window on every platform — on ChromeOS in particular the popup can
+  // open fully rendered and running, but with focus silently left on
+  // the editor window. Since ScriptAPI's keydown/keyup listeners are
+  // attached to the popup's own `window`, an unfocused popup means
+  // every key press is delivered to the editor instead, and scripts
+  // see nothing — input.keyDown()/keyPressed() never go true even
+  // though nothing is actually broken. Explicitly focus it here so
+  // the very first Play press works, not just the reload path below.
+  playWin.focus();
 
   pushLog("log", "Entered Play mode (" + camera.aspectMode + ", " + width + "x" + height + ").");
 }

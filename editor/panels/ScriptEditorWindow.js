@@ -148,6 +148,19 @@ function _switchTab(scriptName) {
   // changed since this tab was last open (renamed object, deleted
   // texture, etc.), and there's no keystroke here to debounce against.
   refreshScriptDiagnostics(_monaco, model);
+  // Explicitly focus Monaco. Every call path into this function follows
+  // a DOM operation that silently drops focus — the initial
+  // monaco.editor.create(), and (via mountScriptEditor -> _mountEditor)
+  // the detach/reattach dance main.js's render() does to survive the
+  // #app innerHTML rebuild (see the "_monacoEl" handling there). Moving
+  // a DOM node, or creating a fresh editor instance, never preserves
+  // keyboard focus on its own. Without this, the editor opens/switches
+  // looking correct but focus is left on <body> (or wherever it was
+  // before), so every keystroke — including WASD and Space — falls
+  // through to the global document keydown listener in EditorEvents.js
+  // and gets reinterpreted as an editor tool shortcut / Play toggle
+  // instead of typing a single character into the script.
+  _editor.focus();
 }
 
 function _closeTab(scriptName) {
