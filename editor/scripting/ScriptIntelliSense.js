@@ -93,8 +93,8 @@ const TRANSFORM_API = [
   { label: "position", detail: "{ x, y } — get/set position as an object", insert: "position", kind: "Property" },
   { label: "rotation", detail: "Rotation in degrees (read/write)", insert: "rotation", kind: "Property" },
   { label: "scale", detail: "{ x, y } — get/set scale as an object", insert: "scale", kind: "Property" },
-  { label: "translate(dx, dy)", detail: "Move by a delta amount this frame", insert: "translate(", kind: "Method" },
-  { label: "lookAt(x, y)", detail: "Rotate to face a world-space point", insert: "lookAt(", kind: "Method" },
+  { label: "translate(dx, dy)", detail: "Move by a delta amount this frame", insert: "translate(${1:dx}, ${2:dy})", kind: "Method", snippet: true },
+  { label: "lookAt(x, y)", detail: "Rotate to face a world-space point", insert: "lookAt(${1:x}, ${2:y})", kind: "Method", snippet: true },
 ];
 
 const SPRITE_API = [
@@ -116,13 +116,13 @@ const RIGIDBODY_API_DYNAMIC = RIGIDBODY_API_COMMON.concat([
   { label: "gravityScale", detail: "Gravity multiplier (1 = normal, 0 = no gravity)", insert: "gravityScale = ", kind: "Property" },
   { label: "linearDamping", detail: "Linear drag — slows the body over time", insert: "linearDamping = ", kind: "Property" },
   { label: "angularDamping", detail: "Rotational drag", insert: "angularDamping = ", kind: "Property" },
-  { label: "addForce(x, y)", detail: "Continuous force — call every frame in onUpdate to sustain a push", insert: "addForce(", kind: "Method" },
-  { label: "addImpulse(x, y)", detail: "One-shot velocity kick — call once (e.g. in onCollision or a jump)", insert: "addImpulse(", kind: "Method" },
-  { label: "addTorque(t)", detail: "Continuous spin force — call every frame to sustain rotation", insert: "addTorque(", kind: "Method" },
-  { label: "addAngularImpulse(t)", detail: "One-shot angular velocity kick", insert: "addAngularImpulse(", kind: "Method" },
+  { label: "addForce(x, y)", detail: "Continuous force — call every frame in onUpdate to sustain a push", insert: "addForce(${1:x}, ${2:y})", kind: "Method", snippet: true },
+  { label: "addImpulse(x, y)", detail: "One-shot velocity kick — call once (e.g. in onCollision or a jump)", insert: "addImpulse(${1:x}, ${2:y})", kind: "Method", snippet: true },
+  { label: "addTorque(t)", detail: "Continuous spin force — call every frame to sustain rotation", insert: "addTorque(${1:t})", kind: "Method", snippet: true },
+  { label: "addAngularImpulse(t)", detail: "One-shot angular velocity kick", insert: "addAngularImpulse(${1:t})", kind: "Method", snippet: true },
 ]);
 const RIGIDBODY_API_KINEMATIC = RIGIDBODY_API_COMMON.concat([
-  { label: "move(dx, dy)", detail: "One-shot swept move this frame — blocked/slid by obstacles just like velocity", insert: "move(", kind: "Method" },
+  { label: "move(dx, dy)", detail: "One-shot swept move this frame — blocked/slid by obstacles just like velocity", insert: "move(${1:dx}, ${2:dy})", kind: "Method", snippet: true },
   { label: "isGrounded", detail: "True when the character controller is touching the ground (read-only)", insert: "isGrounded", kind: "Property" },
   { label: "isOnCeiling", detail: "True when touching a ceiling surface above (read-only)", insert: "isOnCeiling", kind: "Property" },
   { label: "isOnWall", detail: "True when touching a wall — only fires for surfaces steeper than wallAngleLimit (read-only)", insert: "isOnWall", kind: "Property" },
@@ -145,7 +145,7 @@ const CONTROLLER_API_WALK_COMMON = [
   { label: "airControl", detail: "0-1 multiplier on acceleration while airborne", insert: "airControl = ", kind: "Property" },
   { label: "useGravity", detail: "Whether gravity applies (always true for Platformer, always false for Top-Down)", insert: "useGravity = ", kind: "Property" },
   { label: "useDefaultInput", detail: "Whether WASD/Arrows are wired automatically — turn off to drive movement entirely from script", insert: "useDefaultInput = ", kind: "Property" },
-  { label: "simulateMove(x, y)", detail: "Move left/right (and up/down for Top-Down) from script — x/y are -1 to 1", insert: "simulateMove(", kind: "Method" },
+  { label: "simulateMove(x, y)", detail: "Move left/right (and up/down for Top-Down) from script — x/y are -1 to 1", insert: "simulateMove(${1:x}, ${2:y})", kind: "Method", snippet: true },
   { label: "isOnCeiling", detail: "True when touching a ceiling surface above (read-only)", insert: "isOnCeiling", kind: "Property" },
   { label: "isOnWall", detail: "True when touching a wall surface steeper than wallAngleLimit (read-only)", insert: "isOnWall", kind: "Property" },
   { label: "isOnSlope", detail: "True when grounded on a slope steeper than slopeMinAngle (read-only)", insert: "isOnSlope", kind: "Property" },
@@ -189,8 +189,8 @@ const ANIMATOR_API = [
 
 const CAMERA_API = [
   { label: "zoom", detail: "Camera size/zoom. Default 5 = no zoom. Smaller = zoomed in, larger = zoomed out.", insert: "zoom = ", kind: "Property" },
-  { label: "shake(intensity, duration)", detail: "Shake the camera. intensity=pixels of shake, duration=seconds.", insert: "shake(", kind: "Method" },
-  { label: "renderToSprite(spriteEntity)", detail: "Render this camera's view onto a sprite's texture every frame (minimap / security feed).", insert: "renderToSprite(", kind: "Method" },
+  { label: "shake(intensity, duration)", detail: "Shake the camera. intensity=pixels of shake, duration=seconds.", insert: "shake(${1:intensity}, ${2:duration})", kind: "Method", snippet: true },
+  { label: "renderToSprite(spriteEntity)", detail: "Render this camera's view onto a sprite's texture every frame (minimap / security feed).", insert: "renderToSprite(${1:spriteEntity})", kind: "Method", snippet: true },
 ];
 
 const AUDIO_API = [
@@ -207,7 +207,7 @@ const THIS_SHORTCUTS_BASE = [
   { label: "rotation", detail: "Rotation in degrees", insert: "rotation = ", kind: "Property" },
   { label: "scaleX", detail: "Scale X", insert: "scaleX = ", kind: "Property" },
   { label: "scaleY", detail: "Scale Y", insert: "scaleY = ", kind: "Property" },
-  { label: "translate(dx, dy)", detail: "Move by a delta amount this frame", insert: "translate(", kind: "Method" },
+  { label: "translate(dx, dy)", detail: "Move by a delta amount this frame", insert: "translate(${1:dx}, ${2:dy})", kind: "Method", snippet: true },
   { label: "visible", detail: "Show/hide the entity", insert: "visible = ", kind: "Property" },
   { label: "enabled", detail: "Enable/disable this script", insert: "enabled = ", kind: "Property" },
   { label: "name", detail: "The entity's name, set in the Hierarchy panel (read-only)", insert: "name", kind: "Property" },
@@ -235,7 +235,7 @@ const SCENE_API = [
   { label: "restart()", detail: "Restart the current scene from the beginning", insert: "restart()", kind: "Method" },
 ];
 const PHYSICS_API = [
-  { label: "raycast(x1, y1, x2, y2)", detail: "Cast a ray from (x1,y1) to (x2,y2). Returns { entity, point, distance } or null.", insert: "raycast(", kind: "Method" },
+  { label: "raycast(x1, y1, x2, y2)", detail: "Cast a ray from (x1,y1) to (x2,y2). Returns { entity, point, distance } or null.", insert: "raycast(${1:x1}, ${2:y1}, ${3:x2}, ${4:y2})", kind: "Method", snippet: true },
 ];
 const INPUT_API = [
   { label: "keyDown(key)", detail: 'Is the key currently held? Use key codes like "ArrowLeft", "Space", "KeyA"', insert: 'keyDown("', kind: "Method" },
@@ -246,12 +246,12 @@ const TIME_API = [
   { label: "elapsed", detail: "Total seconds since the game started", insert: "elapsed", kind: "Property" },
 ];
 const RANDOM_API = [
-  { label: "int(min, max)", detail: "Random integer in [min, max] inclusive", insert: "int(", kind: "Method" },
-  { label: "float(min, max)", detail: "Random float in [min, max)", insert: "float(", kind: "Method" },
+  { label: "int(min, max)", detail: "Random integer in [min, max] inclusive", insert: "int(${1:min}, ${2:max})", kind: "Method", snippet: true },
+  { label: "float(min, max)", detail: "Random float in [min, max)", insert: "float(${1:min}, ${2:max})", kind: "Method", snippet: true },
 ];
 const DEBUG_API = [
-  { label: "show(on)", detail: "Turn the on-screen debug HUD on (default) or off — debug.show(false) hides it", insert: "show(", kind: "Method" },
-  { label: "showFps(on)", detail: "Show/hide just the FPS line while the HUD stays on", insert: "showFps(", kind: "Method" },
+  { label: "show(on)", detail: "Turn the on-screen debug HUD on (default) or off — debug.show(false) hides it", insert: "show(${1:true})", kind: "Method", snippet: true },
+  { label: "showFps(on)", detail: "Show/hide just the FPS line while the HUD stays on", insert: "showFps(${1:true})", kind: "Method", snippet: true },
   { label: "log(label, value)", detail: 'Add/update a custom HUD line, e.g. debug.log("Player HP", this.hp)', insert: 'log("', kind: "Method" },
   { label: "clear(label)", detail: "Remove one custom HUD line by its label", insert: 'clear("', kind: "Method" },
   { label: "clearAll()", detail: "Remove every custom HUD line", insert: "clearAll()", kind: "Method" },
@@ -354,11 +354,11 @@ function _detectStringContext(lineUntil) {
   // sendMessage(tag, ...) — first argument is a tag
   if (new RegExp(`\\bsendMessage\\s*\\(\\s*${q}$`).test(lineUntil)) return "entityTag";
 
-  // .tag === " / .tag == " / .tag === '
-  if (new RegExp(`\\.tag\\s*===?\\s*${q}$`).test(lineUntil)) return "entityTag";
+  // .tag === " / .tag == " / .tag !== "
+  if (new RegExp(`\\.tag\\s*[!=]==?\\s*${q}$`).test(lineUntil)) return "entityTag";
 
   // .name === " / .name == " / .name !== "
-  if (new RegExp(`\\.name\\s*!?==?\\s*${q}$`).test(lineUntil)) return "entityName";
+  if (new RegExp(`\\.name\\s*[!=]==?\\s*${q}$`).test(lineUntil)) return "entityName";
 
   // controller.targetName = "
   if (new RegExp(`\\.targetName\\s*=\\s*${q}$`).test(lineUntil)) return "entityName";
@@ -369,7 +369,155 @@ function _detectStringContext(lineUntil) {
   return null;
 }
 
-// ─── Existing helpers (unchanged from original) ───────────────────────────────
+// ─── Whole-document diagnostics (typo squiggles) ──────────────────────────────
+// Scans the full script text for calls whose string argument we can verify
+// against live scene/project data (find("Player"), input.keyDown("KeyA"),
+// .texture = "icon", etc.) and flags values that don't match anything that
+// currently exists — the classic "works until Play mode, then silently no-ops"
+// class of bug (misspelled entity name, wrong key code, renamed texture).
+//
+// This is intentionally separate from Monaco's built-in JS diagnostics
+// (which stay disabled — see ScriptEditorWindow.js) so it can't get
+// confused by engine-only globals like `find`/`this.transform` that aren't
+// real JS. Markers are owned under a private marker "owner" name so they
+// never collide with or get cleared by any other diagnostics source.
+const DIAGNOSTIC_OWNER = "zenengine-string-args";
+
+// One entry per validated call pattern: regex captures the string value,
+// `values()` returns the current valid set, `label` is used in the message.
+// The regex is intentionally the same shape as _detectStringContext's
+// patterns but anchored to a full call (opening AND closing quote) instead
+// of "up to the cursor", since this runs on the whole document, not live
+// per-keystroke.
+function _diagnosticRules() {
+  return [
+    {
+      label: "key code",
+      regex: /\binput\s*\.\s*key\w*\s*\(\s*["']([^"']*)["']/g,
+      values: () => new Set(ALL_KEY_CODES),
+      hint: (v) => `Unknown key code "${v}". Check spelling — key codes are case-sensitive (e.g. "KeyA", "Space", "ArrowLeft").`,
+    },
+    {
+      label: "scene name",
+      regex: /\bscene\s*\.\s*load\s*\(\s*["']([^"']*)["']/g,
+      values: () => new Set(_getSceneNames()),
+      hint: (v) => `No scene named "${v}" found in the project.`,
+    },
+    {
+      label: "entity name",
+      regex: /\b(?:scene\s*\.\s*find|find)\s*\(\s*["']([^"']*)["']/g,
+      values: () => new Set(_getEntityNames()),
+      hint: (v) => `No object named "${v}" found in the current scene.`,
+    },
+    {
+      label: "animation clip",
+      regex: /\banimator\s*\.\s*play\s*\(\s*["']([^"']*)["']/g,
+      values: () => new Set(_getAnimClipNames()),
+      hint: (v) => `No animation clip named "${v}" on this object.`,
+    },
+    {
+      label: "texture",
+      regex: /\.texture\s*=\s*["']([^"']*)["']/g,
+      values: () => new Set(_getTextureNames()),
+      hint: (v) => `No sprite/texture asset named "${v}" found in the project.`,
+    },
+    {
+      label: "entity tag",
+      regex: /\bsendMessage\s*\(\s*["']([^"']*)["']/g,
+      values: () => new Set(_getEntityTags()),
+      hint: (v) => `No object in the scene currently has the tag "${v}".`,
+    },
+    {
+      label: "entity tag",
+      regex: /\.tag\s*[!=]==?\s*["']([^"']*)["']/g,
+      values: () => new Set(_getEntityTags()),
+      hint: (v) => `No object in the scene currently has the tag "${v}".`,
+    },
+    {
+      label: "entity name",
+      regex: /\.name\s*[!=]==?\s*["']([^"']*)["']/g,
+      values: () => new Set(_getEntityNames()),
+      hint: (v) => `No object named "${v}" found in the current scene.`,
+    },
+    {
+      label: "entity name",
+      regex: /\.targetName\s*=\s*["']([^"']*)["']/g,
+      values: () => new Set(_getEntityNames()),
+      hint: (v) => `No object named "${v}" found in the current scene. The Follow controller needs targetName to match an existing object's name exactly.`,
+    },
+  ];
+}
+
+/** Scan the model's full text and return Monaco marker objects for any
+ *  string-argument value that doesn't match live scene/project data.
+ *  Empty strings ("" — still being typed) are skipped so half-typed code
+ *  never gets flagged. */
+function _computeDiagnostics(monaco, model) {
+  const text = model.getValue();
+  const markers = [];
+  const rules = _diagnosticRules();
+
+  for (const rule of rules) {
+    const valid = rule.values();
+    // Nothing to validate against yet (e.g. no textures imported) — skip
+    // rather than flag every single call as wrong.
+    if (valid.size === 0) continue;
+
+    rule.regex.lastIndex = 0;
+    let m;
+    while ((m = rule.regex.exec(text)) !== null) {
+      const value = m[1];
+      if (!value) continue; // still-empty string, nothing to check yet
+      if (valid.has(value)) continue;
+
+      // m[1] is captured by the regex's own group, so its offset within
+      // the full match is exactly m[0].length minus everything after the
+      // value (the value itself + its closing quote character). This is
+      // unambiguous — unlike searching for `value` inside m[0], which
+      // could match the wrong spot if the value text happens to repeat.
+      const valueStart = m.index + m[0].length - value.length - 1;
+      const startPos = model.getPositionAt(valueStart);
+      const endPos = model.getPositionAt(valueStart + value.length);
+
+      markers.push({
+        severity: monaco.MarkerSeverity.Warning,
+        message: rule.hint(value),
+        startLineNumber: startPos.lineNumber,
+        startColumn: startPos.column,
+        endLineNumber: endPos.lineNumber,
+        endColumn: endPos.column,
+        source: "ZenEngine",
+      });
+    }
+  }
+
+  return markers;
+}
+
+/** Re-run diagnostics on a model and apply them as squiggly-underline
+ *  markers. Safe to call often — pass a debounced caller from the editor
+ *  (see ScriptEditorWindow.js) so it doesn't re-scan on every keystroke. */
+export function refreshScriptDiagnostics(monaco, model) {
+  if (!monaco || !model || model.isDisposed()) return;
+  try {
+    const markers = _computeDiagnostics(monaco, model);
+    monaco.editor.setModelMarkers(model, DIAGNOSTIC_OWNER, markers);
+  } catch (e) {
+    // Never let a diagnostics bug break the editor itself.
+    console.warn("[ZenEngine IntelliSense] diagnostics pass failed:", e);
+  }
+}
+
+/** Clear any diagnostics markers previously applied to a model (called
+ *  when a model is disposed so stale markers don't linger). */
+export function clearScriptDiagnostics(monaco, model) {
+  if (!monaco || !model || model.isDisposed()) return;
+  try {
+    monaco.editor.setModelMarkers(model, DIAGNOSTIC_OWNER, []);
+  } catch (e) {}
+}
+
+
 
 function _parseFindVariables(text) {
   const map = {};
@@ -539,35 +687,75 @@ function _kindConstant(monaco, kindName) {
 }
 
 function _makeCompletion(monaco, item, range) {
+  const insert = item.insert;
+  const opensString = typeof insert === "string" && /["']$/.test(insert);
+
   const entry = {
     label: item.label,
     kind: _kindConstant(monaco, item.kind || "Function"),
     detail: item.detail || "",
-    insertText: item.insert,
+    insertText: insert,
     range: range,
   };
-  // When the inserted text ends with "." the suggest widget does not
-  // automatically re-open.  Attach a command so Monaco immediately
-  // re-triggers suggestions after insertion (e.g. "scene." → scene API).
-  if (typeof item.insert === "string" && item.insert.endsWith(".")) {
+
+  if (opensString) {
+    // Items like find(", keyDown(", play(" end with an opening quote and
+    // used to rely on Monaco's auto-closing-bracket feature to add the
+    // matching closing quote. Auto-pairing only fires for characters the
+    // user physically types — it never fires for text a completion item
+    // inserts programmatically — so clicking these produced an unclosed
+    // string (e.g. find(" instead of find("")) and left the cursor after
+    // the quote with nothing to close it.
+    // Fix: insert both quotes ourselves as a snippet, put the cursor
+    // between them with $1, and immediately re-trigger suggestions so the
+    // string-argument completion list (entity names, key codes, etc.)
+    // shows up right away instead of requiring the quote to be retyped.
+    const quoteChar = insert.slice(-1);
+    entry.insertText = insert + "$1" + quoteChar;
+    entry.insertTextRules = monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet;
+    entry.command = { id: "editor.action.triggerSuggest", title: "Trigger Suggest" };
+  } else if (item.snippet) {
+    // Multi-argument (or otherwise non-string) calls like
+    // addForce(${1:x}, ${2:y}) or raycast(${1:x1}, ${2:y1}, ...) — insert
+    // as a real snippet so Tab walks through each argument in order
+    // instead of leaving the user to guess the parameter count/order
+    // after a bare "addForce(" with nothing else typed.
+    entry.insertTextRules = monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet;
+  } else if (typeof insert === "string" && insert.endsWith(".")) {
+    // When the inserted text ends with "." the suggest widget does not
+    // automatically re-open. Attach a command so Monaco immediately
+    // re-triggers suggestions after insertion (e.g. "scene." → scene API).
     entry.command = { id: "editor.action.triggerSuggest", title: "Trigger Suggest" };
   }
+
   return entry;
 }
 
-/** Make a string-value completion item (entity name, key code, etc.).
- *  insertText should be just the bare value — do NOT append a closing quote.
- *  Monaco auto-pairs the closing quote, so appending one would double it. */
-function _makeValueCompletion(monaco, label, detail, insertText, range) {
-  return {
+/** Make a string-value completion item (entity name, key code, etc.), used
+ *  when the cursor is already inside an open string (find("pl|"), etc.).
+ *  insertText is the bare value. Whether a closing quote needs to be
+ *  appended depends on what's actually in the document immediately after
+ *  the completion range — NOT on Monaco auto-pairing, which (as above)
+ *  never fires for programmatic inserts and can't be relied on here either.
+ *  `hasClosingQuote` should reflect the real document state at the call site. */
+function _makeValueCompletion(monaco, label, detail, insertText, range, hasClosingQuote) {
+  let text = typeof insertText === "string" ? insertText.replace(/["']$/, "") : insertText;
+  const entry = {
     label: label,
     kind: monaco.languages.CompletionItemKind.Value,
     detail: detail || "",
-    // Strip any trailing quote that was previously appended — the closing
-    // quote already exists in the editor from Monaco's auto-pairing.
-    insertText: typeof insertText === "string" ? insertText.replace(/["']$/, "") : insertText,
+    insertText: text,
     range: range,
   };
+  if (!hasClosingQuote && typeof text === "string") {
+    // No closing quote exists yet in the document (e.g. the user typed
+    // find(" and never got an auto-paired closer, or is editing inside an
+    // already-unbalanced string) — add it ourselves and land the cursor
+    // right after it rather than leaving the string open.
+    entry.insertText = text + "$0" + '"';
+    entry.insertTextRules = monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet;
+  }
+  return entry;
 }
 
 function _allCompletions(monaco, range) {
@@ -627,11 +815,24 @@ export function registerIntelliSense(monaco) {
       // and return scene-aware / project-aware completions instead of code.
       const stringCtx = _detectStringContext(lineUntil);
       if (stringCtx) {
+        // Does a closing quote already exist immediately where the string
+        // ends? Checked against the real document instead of assuming
+        // Monaco auto-paired one — auto-pairing only fires for keys the
+        // user actually types, so a string opened by clicking a completion
+        // (find(") or one the user is re-editing may have no closer at all.
+        // We look at the rest of the current line: if the very next
+        // character is the same quote character used to open the string,
+        // treat it as already closed.
+        const quoteMatch = lineUntil.match(/["']([^"']*)$/);
+        const quoteChar = quoteMatch ? quoteMatch[0][0] : '"';
+        const restOfLine = model.getLineContent(position.lineNumber).slice(position.column - 1);
+        const hasClosingQuote = restOfLine.slice(0, 1) === quoteChar;
+
         if (stringCtx === "entityName") {
           const names = _getEntityNames();
           for (const name of names) {
             suggestions.push(_makeValueCompletion(
-              monaco, name, "Scene object", name + '"', range
+              monaco, name, "Scene object", name + '"', range, hasClosingQuote
             ));
           }
           return { suggestions };
@@ -641,7 +842,7 @@ export function registerIntelliSense(monaco) {
           const scenes = _getSceneNames();
           for (const name of scenes) {
             suggestions.push(_makeValueCompletion(
-              monaco, name, "Scene", name + '"', range
+              monaco, name, "Scene", name + '"', range, hasClosingQuote
             ));
           }
           return { suggestions };
@@ -653,7 +854,8 @@ export function registerIntelliSense(monaco) {
               monaco, key,
               KEY_DETAIL[key] || "Keyboard key code",
               key + '"',
-              range
+              range,
+              hasClosingQuote
             ));
           }
           return { suggestions };
@@ -663,7 +865,7 @@ export function registerIntelliSense(monaco) {
           const textures = _getTextureNames();
           for (const name of textures) {
             suggestions.push(_makeValueCompletion(
-              monaco, name, "Sprite / texture asset", name + '"', range
+              monaco, name, "Sprite / texture asset", name + '"', range, hasClosingQuote
             ));
           }
           // If no textures yet, still return empty (don't fall through)
@@ -674,7 +876,7 @@ export function registerIntelliSense(monaco) {
           const clips = _getAnimClipNames();
           for (const name of clips) {
             suggestions.push(_makeValueCompletion(
-              monaco, name, "Animation clip", name + '"', range
+              monaco, name, "Animation clip", name + '"', range, hasClosingQuote
             ));
           }
           return { suggestions };
@@ -684,7 +886,7 @@ export function registerIntelliSense(monaco) {
           const tags = _getEntityTags();
           for (const tag of tags) {
             suggestions.push(_makeValueCompletion(
-              monaco, tag, "Entity tag", tag + '"', range
+              monaco, tag, "Entity tag", tag + '"', range, hasClosingQuote
             ));
           }
           return { suggestions };
@@ -702,7 +904,7 @@ export function registerIntelliSense(monaco) {
           while ((m = sendRegex.exec(fullText)) !== null) labels.add(m[1]);
           for (const lbl of [...labels].sort()) {
             suggestions.push(_makeValueCompletion(
-              monaco, lbl, "Message label (used in this script)", lbl + '"', range
+              monaco, lbl, "Message label (used in this script)", lbl + '"', range, hasClosingQuote
             ));
           }
           return { suggestions };

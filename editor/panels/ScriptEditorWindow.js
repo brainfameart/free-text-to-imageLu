@@ -25,7 +25,7 @@
 
 import { editorState } from "../state/EditorState.js";
 import { getScriptSource, saveScript, getAllScripts, renameScript } from "../scripting/ScriptStorage.js";
-import { registerIntelliSense } from "../scripting/ScriptIntelliSense.js";
+import { registerIntelliSense, refreshScriptDiagnostics, clearScriptDiagnostics } from "../scripting/ScriptIntelliSense.js";
 
 // Inject CSS once
 (function () {
@@ -71,6 +71,7 @@ let _monacoLoadCallbacks = [];
 let _editor = null;
 let _models = {}; // scriptName -> monaco.editor.ITextModel
 let _saveTimer = null;
+let _diagTimer = null;
 let _apiPanelOpen = false;
 
 const MONACO_LOADER_URL = "https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js";
@@ -143,6 +144,10 @@ function _switchTab(scriptName) {
   if (!_editor || !_monaco) return;
   var model = _getModel(scriptName);
   _editor.setModel(model);
+  // Immediate scan on switch (not debounced) — scene data may have
+  // changed since this tab was last open (renamed object, deleted
+  // texture, etc.), and there's no keystroke here to debounce against.
+  refreshScriptDiagnostics(_monaco, model);
 }
 
 function _closeTab(scriptName) {
@@ -150,6 +155,7 @@ function _closeTab(scriptName) {
   if (idx < 0) return;
   editorState.scriptEditor.openTabs.splice(idx, 1);
   if (_models[scriptName]) {
+    clearScriptDiagnostics(_monaco, _models[scriptName]);
     _models[scriptName].dispose();
     delete _models[scriptName];
   }
@@ -169,6 +175,20 @@ function _scheduleSave(scriptName) {
     // script, so the scene serializes with the latest source.
     _syncSourceToEntities(scriptName, source);
   }, 500);
+}
+
+// Re-validates string-argument values (entity names, key codes, texture
+// names, etc.) against live scene/project data and shows typo squiggles.
+// Debounced separately from auto-save (shorter delay is fine — this is a
+// pure read-only scan, no disk/scene writes) so warnings appear quickly
+// without re-running on every single keystroke.
+function _scheduleDiagnostics(scriptName) {
+  clearTimeout(_diagTimer);
+  _diagTimer = setTimeout(function () {
+    var model = _models[scriptName];
+    if (!model || !_monaco) return;
+    refreshScriptDiagnostics(_monaco, model);
+  }, 300);
 }
 
 function _syncSourceToEntities(scriptName, source) {
@@ -358,12 +378,24 @@ function _mountEditor(container) {
       wordBasedSuggestions: false,
       suggestOnTriggerCharacters: true,
       parameterHints: { enabled: true },
+      // Monaco disables automatic suggestions inside string literals by
+      // default (quickSuggestions.strings is false). Our IntelliSense
+      // provider relies heavily on string-argument completions (find(",
+      // input.keyDown(", .texture = ", etc.), so without this, typing past
+      // the opening quote — or clicking back into an already-typed string —
+      // never reopens the suggestion widget until a trigger character like
+      // " is retyped. Turning this on makes suggestions live-update on every
+      // keystroke inside a string, matching the "other" code behavior.
+      quickSuggestions: { other: true, comment: false, strings: true },
     });
 
     // Auto-save on content change
     _editor.onDidChangeModelContent(function () {
       var active = editorState.scriptEditor.activeTab;
-      if (active) _scheduleSave(active);
+      if (active) {
+        _scheduleSave(active);
+        _scheduleDiagnostics(active);
+      }
     });
 
     _switchTab(editorState.scriptEditor.activeTab);
@@ -384,6 +416,7 @@ export function openScriptEditor(scriptName, source, contextEntityId) {
 
 export function closeScriptEditor() {
   editorState.scriptEditor.open = false;
+  clearTimeout(_diagTimer);
   // Dispose the Monaco instance so the next open creates a fresh,
   // working editor. Models are cached in _models, so content survives.
   if (_editor) {
