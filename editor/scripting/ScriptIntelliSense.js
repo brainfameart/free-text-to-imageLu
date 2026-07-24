@@ -328,38 +328,43 @@ function _getAnimClipNames() {
 // Patterns are ordered from most-specific to least-specific so the first
 // match wins.
 function _detectStringContext(lineUntil) {
+  // Each pattern matches the opening quote followed by zero or more characters
+  // that are not a closing quote — so completions keep working as the user
+  // types partial text inside the string (not just immediately after the quote).
+  const q = `["'][^"']*`;
+
   // input.keyDown(" / input.keyPressed(" / input.keyUp(" etc.
-  if (/\binput\s*\.\s*key\w*\s*\(\s*["']$/.test(lineUntil)) return "keyCode";
+  if (new RegExp(`\\binput\\s*\\.\\s*key\\w*\\s*\\(\\s*${q}$`).test(lineUntil)) return "keyCode";
 
   // scene.load("
-  if (/\bscene\s*\.\s*load\s*\(\s*["']$/.test(lineUntil)) return "sceneName";
+  if (new RegExp(`\\bscene\\s*\\.\\s*load\\s*\\(\\s*${q}$`).test(lineUntil)) return "sceneName";
 
   // scene.find("
-  if (/\bscene\s*\.\s*find\s*\(\s*["']$/.test(lineUntil)) return "entityName";
+  if (new RegExp(`\\bscene\\s*\\.\\s*find\\s*\\(\\s*${q}$`).test(lineUntil)) return "entityName";
 
   // find("  (top-level shortcut or this.find — any context)
-  if (/\bfind\s*\(\s*["']$/.test(lineUntil)) return "entityName";
+  if (new RegExp(`\\bfind\\s*\\(\\s*${q}$`).test(lineUntil)) return "entityName";
 
   // animator.play("
-  if (/\banimator\s*\.\s*play\s*\(\s*["']$/.test(lineUntil)) return "clipName";
+  if (new RegExp(`\\banimator\\s*\\.\\s*play\\s*\\(\\s*${q}$`).test(lineUntil)) return "clipName";
 
-  // .texture = " or .texture = '  (any sub-object path, e.g. this.sprite.texture = ")
-  if (/\.texture\s*=\s*["']$/.test(lineUntil)) return "textureName";
+  // .texture = " or .texture = '
+  if (new RegExp(`\\.texture\\s*=\\s*${q}$`).test(lineUntil)) return "textureName";
 
   // sendMessage(tag, ...) — first argument is a tag
-  if (/\bsendMessage\s*\(\s*["']$/.test(lineUntil)) return "entityTag";
+  if (new RegExp(`\\bsendMessage\\s*\\(\\s*${q}$`).test(lineUntil)) return "entityTag";
 
-  // .tag === " / .tag == " / .tag === '  (comparison)
-  if (/\.tag\s*===?\s*["']$/.test(lineUntil)) return "entityTag";
+  // .tag === " / .tag == " / .tag === '
+  if (new RegExp(`\\.tag\\s*===?\\s*${q}$`).test(lineUntil)) return "entityTag";
 
   // .name === " / .name == " / .name !== "
-  if (/\.name\s*!?==?\s*["']$/.test(lineUntil)) return "entityName";
+  if (new RegExp(`\\.name\\s*!?==?\\s*${q}$`).test(lineUntil)) return "entityName";
 
-  // controller.targetName = " (Follow controller target)
-  if (/\.targetName\s*=\s*["']$/.test(lineUntil)) return "entityName";
+  // controller.targetName = "
+  if (new RegExp(`\\.targetName\\s*=\\s*${q}$`).test(lineUntil)) return "entityName";
 
-  // broadcastMessage("  — first arg is a message label; suggest existing ones
-  if (/\bbroadcastMessage\s*\(\s*["']$/.test(lineUntil)) return "messageLabel";
+  // broadcastMessage("  — first arg is a message label
+  if (new RegExp(`\\bbroadcastMessage\\s*\\(\\s*${q}$`).test(lineUntil)) return "messageLabel";
 
   return null;
 }
@@ -534,22 +539,33 @@ function _kindConstant(monaco, kindName) {
 }
 
 function _makeCompletion(monaco, item, range) {
-  return {
+  const entry = {
     label: item.label,
     kind: _kindConstant(monaco, item.kind || "Function"),
     detail: item.detail || "",
     insertText: item.insert,
     range: range,
   };
+  // When the inserted text ends with "." the suggest widget does not
+  // automatically re-open.  Attach a command so Monaco immediately
+  // re-triggers suggestions after insertion (e.g. "scene." → scene API).
+  if (typeof item.insert === "string" && item.insert.endsWith(".")) {
+    entry.command = { id: "editor.action.triggerSuggest", title: "Trigger Suggest" };
+  }
+  return entry;
 }
 
-/** Make a string-value completion item (entity name, key code, etc.). */
+/** Make a string-value completion item (entity name, key code, etc.).
+ *  insertText should be just the bare value — do NOT append a closing quote.
+ *  Monaco auto-pairs the closing quote, so appending one would double it. */
 function _makeValueCompletion(monaco, label, detail, insertText, range) {
   return {
     label: label,
     kind: monaco.languages.CompletionItemKind.Value,
     detail: detail || "",
-    insertText: insertText,
+    // Strip any trailing quote that was previously appended — the closing
+    // quote already exists in the editor from Monaco's auto-pairing.
+    insertText: typeof insertText === "string" ? insertText.replace(/["']$/, "") : insertText,
     range: range,
   };
 }

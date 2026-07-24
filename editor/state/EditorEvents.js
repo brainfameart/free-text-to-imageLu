@@ -745,8 +745,14 @@ case "select-scene-file": {
     // its own keyboard events (WASD, Space, etc.) internally, but the global
     // listener fires too and re-interprets those keys as editor shortcuts
     // (W→translate tool, Space→play), making it impossible to type them.
+    // Belt-and-suspenders: check both the state flag AND whether the event
+    // physically came from inside the overlay DOM (handles timing edge-cases
+    // where the flag might lag a frame, and Monaco's hidden textarea which
+    // some browsers don't surface as tagName "TEXTAREA" in e.target).
     const _typing = /^(input|textarea)$/i.test(e.target.tagName) || e.target.isContentEditable;
-    if (_typing || editorState.scriptEditor.open || !editorState.world) return;
+    const _inScriptEditor = editorState.scriptEditor.open ||
+      !!(e.target.closest && e.target.closest(".script-editor-overlay"));
+    if (_typing || _inScriptEditor || !editorState.world) return;
     if (e.key === "Delete" || e.key === "Backspace") {
       e.preventDefault(); // stop Backspace navigating back / Delete scrolling
       if (_liveSelectionIds().length === 0) return;
