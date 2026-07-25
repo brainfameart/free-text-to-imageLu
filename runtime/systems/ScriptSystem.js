@@ -221,7 +221,7 @@ export class ScriptSystem {
   _compile(scriptName, source) {
     try {
       const factory = new Function(
-        "find", "scene", "physics", "input", "time", "random", "global", "debug", "console", "Math",
+        "find", "scene", "physics", "input", "time", "random", "global", "debug", "sendMessage", "broadcastMessage", "console", "Math",
         '"use strict";\n' + source + '\n' +
         "return {\n" +
         "  onStart: typeof onStart !== 'undefined' ? onStart : null,\n" +
@@ -256,6 +256,7 @@ export class ScriptSystem {
         const g = this.scriptApi.getGlobals();
         const handlers = factory(
           g.find, g.scene, g.physics, g.input, g.time, g.random, g.global, g.debug,
+          g.sendMessage, g.broadcastMessage,
           console, Math
         );
         const context = this.scriptApi.createEntityContext(entity);
