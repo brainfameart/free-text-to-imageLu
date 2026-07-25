@@ -163,6 +163,15 @@ function render() {
   mountOrUpdateSceneViewport(render);
   mountScriptEditor();
 
+  if (editorState.inspectorScrollTo) {
+    const key = editorState.inspectorScrollTo;
+    editorState.inspectorScrollTo = null;
+    requestAnimationFrame(() => {
+      const section = document.querySelector('.inspector-body [data-section-key="' + key + '"]');
+      if (section) section.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+  }
+
   // Auto-scroll the console list to the newest entry after every render,
   // so fresh log lines are always visible without manual scrolling —
   // exactly how Unity's Console panel works.

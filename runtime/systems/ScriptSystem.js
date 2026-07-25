@@ -77,6 +77,8 @@ export class ScriptSystem {
     this._errorThrottle = new Map();
     /** @type {import('../core/World.js').World|null} current world, stashed at the top of update() */
     this._world = null;
+    /** EntityContext of the lifecycle callback currently executing. */
+    this._activeContext = null;
 
     // Wire sendMessage / broadcastMessage into ScriptAPI's globals so
     // user scripts can call sendMessage(tag, msg, data) and
@@ -88,13 +90,13 @@ export class ScriptSystem {
       if (!self._world) return;
       const entities = self._world.findByTag ? self._world.findByTag(tag) : [];
       if (!entities) return;
-      for (const e of entities) self.fireMessage(e.id, message, null, data);
+      for (const e of entities) self.fireMessage(e.id, message, self._activeContext, data);
     };
     scriptApi._broadcastMessageFn = function(message, data) {
       if (!self._world) return;
       const entities = self._world.getAllEntities ? self._world.getAllEntities() :
         (self._world.entities ? [...self._world.entities.values()] : []);
-      for (const e of entities) self.fireMessage(e.id, message, null, data);
+      for (const e of entities) self.fireMessage(e.id, message, self._activeContext, data);
     };
   }
 
@@ -272,7 +274,7 @@ export class ScriptSystem {
 
         if (inst.handlers.onStart) {
           try {
-            inst.handlers.onStart.call(inst.context);
+            this._invoke(inst, inst.handlers.onStart);
             inst.started = true;
           } catch (err) {
             // onStart only ever runs once — there's no "next frame" to
@@ -290,6 +292,16 @@ export class ScriptSystem {
       } catch (err) {
         this._reportError(script.scriptName, err, "init");
       }
+    }
+  }
+
+  _invoke(inst, handler, ...args) {
+    const previous = this._activeContext;
+    this._activeContext = inst.context;
+    try {
+      return handler.call(inst.context, ...args);
+    } finally {
+      this._activeContext = previous;
     }
   }
 
@@ -321,7 +333,7 @@ export class ScriptSystem {
       for (const inst of instances) {
         if (!inst.enabled || !inst.handlers.onUpdate) continue;
         try {
-          inst.handlers.onUpdate.call(inst.context, dt);
+          this._invoke(inst, inst.handlers.onUpdate, dt);
         } catch (err) {
           // Do NOT disable the instance — skip just this frame's call.
           // The rest of the game (and this entity's other lifecycle
@@ -387,7 +399,7 @@ export class ScriptSystem {
         for (const inst of instances) {
           if (inst.enabled && inst.handlers.onDestroy) {
             try {
-              inst.handlers.onDestroy.call(inst.context);
+              this._invoke(inst, inst.handlers.onDestroy);
             } catch (err) {
               this._reportError(inst.scriptName, err, "onDestroy");
             }
@@ -408,7 +420,7 @@ export class ScriptSystem {
       for (const inst of instances) {
         if (!inst.enabled || !inst.handlers.onFixedUpdate) continue;
         try {
-          inst.handlers.onFixedUpdate.call(inst.context, fixedDt);
+          this._invoke(inst, inst.handlers.onFixedUpdate, fixedDt);
         } catch (err) {
           this._reportError(inst.scriptName, err, "onFixedUpdate");
         }
@@ -430,14 +442,14 @@ export class ScriptSystem {
       // Fire onCollision (legacy) and onCollisionEnter (preferred alias)
       if (inst.handlers.onCollision) {
         try {
-          inst.handlers.onCollision.call(inst.context, otherContext);
+            this._invoke(inst, inst.handlers.onCollision, otherContext);
         } catch (err) {
           this._reportError(inst.scriptName, err, "onCollision");
         }
       }
       if (inst.handlers.onCollisionEnter) {
         try {
-          inst.handlers.onCollisionEnter.call(inst.context, otherContext);
+            this._invoke(inst, inst.handlers.onCollisionEnter, otherContext);
         } catch (err) {
           this._reportError(inst.scriptName, err, "onCollisionEnter");
         }
@@ -452,7 +464,7 @@ export class ScriptSystem {
     for (const inst of instances) {
       if (!inst.enabled || !inst.handlers.onCollisionExit) continue;
       try {
-        inst.handlers.onCollisionExit.call(inst.context, otherContext);
+        this._invoke(inst, inst.handlers.onCollisionExit, otherContext);
       } catch (err) {
         this._reportError(inst.scriptName, err, "onCollisionExit");
       }
@@ -474,7 +486,13 @@ export class ScriptSystem {
     for (const inst of instances) {
       if (!inst.enabled || !inst.handlers.onMessage) continue;
       try {
-        inst.handlers.onMessage.call(inst.context, message, senderContext, data);
+        if (inst.handlers.onMessage.length >= 3) {
+          this._invoke(inst, inst.handlers.onMessage, message, senderContext, data);
+        } else if (inst.handlers.onMessage.length === 2) {
+          this._invoke(inst, inst.handlers.onMessage, message, data);
+        } else {
+          this._invoke(inst, inst.handlers.onMessage, message);
+        }
       } catch (err) {
         this._reportError(inst.scriptName, err, "onMessage");
       }
@@ -489,7 +507,7 @@ export class ScriptSystem {
     for (const inst of instances) {
       if (!inst.enabled || !inst.handlers[handlerName]) continue;
       try {
-        inst.handlers[handlerName].call(inst.context, otherContext);
+        this._invoke(inst, inst.handlers[handlerName], otherContext);
       } catch (err) {
         this._reportError(inst.scriptName, err, handlerName);
       }
@@ -501,7 +519,7 @@ export class ScriptSystem {
       for (const inst of instances) {
         if (inst.enabled && inst.handlers.onDestroy) {
           try {
-            inst.handlers.onDestroy.call(inst.context);
+            this._invoke(inst, inst.handlers.onDestroy);
           } catch (err) {
             this._reportError(inst.scriptName, err, "onDestroy");
           }
@@ -511,6 +529,7 @@ export class ScriptSystem {
     this.instances.clear();
     this._started = false;
     this._fixedAccumulator = 0;
+    this._activeContext = null;
     this._errorThrottle.clear();
   }
 }

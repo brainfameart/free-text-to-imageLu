@@ -11,6 +11,7 @@
  *
  * Smart string-argument completions:
  *   find("           → all entity names in the scene
+ *   findWithTag("    → all object tags in the scene
  *   scene.load("     → all scene names
  *   scene.find("     → all entity names
  *   input.keyDown("  → full keyboard key-code list
@@ -218,6 +219,7 @@ const THIS_SHORTCUTS_BASE = [
 
 const GLOBAL_APIS = [
   { label: "find(name)", detail: 'Find entity by name. Returns an object with .x, .y, .sprite, .rigidbody, etc.', insert: 'find("', kind: "Function" },
+  { label: "findWithTag(tag)", detail: "Find all entities with a tag. Returns an array of live object contexts.", insert: 'findWithTag("', kind: "Function" },
   { label: "scene", detail: "Scene utilities: scene.find(), scene.load(), scene.restart()", insert: "scene.", kind: "Module" },
   { label: "physics", detail: "Physics utilities: physics.raycast(x1,y1,x2,y2)", insert: "physics.", kind: "Module" },
   { label: "input", detail: "Input queries: input.keyDown(key), input.keyPressed(key)", insert: "input.", kind: "Module" },
@@ -231,6 +233,7 @@ const GLOBAL_APIS = [
 
 const SCENE_API = [
   { label: "find(name)", detail: "Find entity by name (same as the top-level find() shortcut)", insert: 'find("', kind: "Method" },
+  { label: "findWithTag(tag)", detail: "Find all entities with a tag", insert: 'findWithTag("', kind: "Method" },
   { label: "load(sceneName)", detail: "Load a different scene by name", insert: 'load("', kind: "Method" },
   { label: "restart()", detail: "Restart the current scene from the beginning", insert: "restart()", kind: "Method" },
 ];
@@ -342,6 +345,9 @@ function _detectStringContext(lineUntil) {
   // scene.find("
   if (new RegExp(`\\bscene\\s*\\.\\s*find\\s*\\(\\s*${q}$`).test(lineUntil)) return "entityName";
 
+  // findWithTag("
+  if (new RegExp(`\\b(?:scene\\s*\\.\\s*)?findWithTag\\s*\\(\\s*${q}$`).test(lineUntil)) return "entityTag";
+
   // find("  (top-level shortcut or this.find — any context)
   if (new RegExp(`\\bfind\\s*\\(\\s*${q}$`).test(lineUntil)) return "entityName";
 
@@ -408,6 +414,12 @@ function _diagnosticRules() {
       regex: /\b(?:scene\s*\.\s*find|find)\s*\(\s*["']([^"']*)["']/g,
       values: () => new Set(_getEntityNames()),
       hint: (v) => `No object named "${v}" found in the current scene.`,
+    },
+    {
+      label: "entity tag",
+      regex: /\b(?:scene\s*\.\s*)?findWithTag\s*\(\s*["']([^"']*)["']/g,
+      values: () => new Set(_getEntityTags()),
+      hint: (v) => `No object in the scene currently has the tag "${v}".`,
     },
     {
       label: "animation clip",
@@ -1038,7 +1050,8 @@ export function registerIntelliSense(monaco) {
         { label: "function onCollisionExit(other)", detail: "Called when collision ends.", insert: "onCollisionExit(other) {\n  $1\n}" },
         { label: "function onTriggerEnter(other)", detail: "Called when entering a trigger collider (Is Trigger = on)", insert: "onTriggerEnter(other) {\n  $1\n}" },
         { label: "function onTriggerExit(other)", detail: "Called when leaving a trigger collider", insert: "onTriggerExit(other) {\n  $1\n}" },
-        { label: "function onMessage(message, sender, data)", detail: "Called when this entity receives a message via sendMessage() or broadcastMessage()", insert: "onMessage(message, sender, data) {\n  $1\n}" },
+        { label: "function onMessage(message, data)", detail: "Called when this entity receives a message. Add sender as a third parameter when needed.", insert: "onMessage(message, data) {\n  $1\n}" },
+        { label: "function onMessage(message, sender, data)", detail: "Message callback with the optional sending object context", insert: "onMessage(message, sender, data) {\n  $1\n}" },
         { label: "function onDestroy()", detail: "Called once when this entity is destroyed or the scene ends", insert: "onDestroy() {\n  $1\n}" },
       ];
       for (const s of snippets) {

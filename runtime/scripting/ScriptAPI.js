@@ -290,7 +290,7 @@ export class ScriptAPI {
   }
 
   /**
-   * Finds an entity by name and returns an EntityContext for it.
+     * Finds an entity by name and returns an EntityContext for it.
    * The returned object has the same .x, .y, .sprite, .rigidbody, etc.
    * properties as `this`, so scripts can interact with other objects.
    */
@@ -298,6 +298,16 @@ export class ScriptAPI {
     var entity = this.world.findFirstByName(name);
     if (!entity) return null;
     return this.createEntityContext(entity);
+  }
+
+  /**
+   * Finds every entity with the given tag and returns live EntityContexts.
+   * The returned array is a snapshot of the matching objects at call time;
+   * each context still reads and writes the live entity.
+   */
+  findWithTag(tag) {
+    var entities = this.world && this.world.findByTag ? this.world.findByTag(tag) : [];
+    return entities.map((entity) => this.createEntityContext(entity));
   }
 
   /**
@@ -374,8 +384,10 @@ export class ScriptAPI {
     var self = this;
     return {
       find: function (name) { return self.find(name); },
+      findWithTag: function (tag) { return self.findWithTag(tag); },
       scene: {
         find: function (name) { return self.find(name); },
+        findWithTag: function (tag) { return self.findWithTag(tag); },
         load: function (sceneName) {
           if (self._loadSceneFn) {
             self._loadSceneFn(sceneName);
@@ -467,7 +479,7 @@ export class ScriptAPI {
 
   findByName(name) { return this.find(name); }
 
-  findByTag(tag) { return this.world.findByTag(tag); }
+  findByTag(tag) { return this.findWithTag(tag); }
 
   setGlobal(key, value) { this._globals.set(key, value); }
 

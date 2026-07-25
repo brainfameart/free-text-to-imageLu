@@ -29,6 +29,7 @@ import { ShadowMode } from "../../runtime/systems/LightingQuality.js";
 import { getCameraResolution } from "../../runtime/core/CameraUtils.js";
 import { getSpriteAsset, getAudioAsset, getAllAudioAssets } from "../../runtime/assets/AssetRegistry.js";
 import { getAllScripts } from "../scripting/ScriptStorage.js";
+import { getTagNames } from "../state/Tags.js";
 
 export function renderInspector() {
   const world = editorState.world;
@@ -905,7 +906,11 @@ export function renderInspector() {
     "</div>" +
     '<div class="obj-header-row2">' +
     '<div class="tag-layer-group"><span>Tag</span>' +
-    dropdownInput([entity.tag, "Untagged", "Player", "Enemy", "Add Tag..."], entity.tag, "entity.tag") +
+     dropdownInput(
+       [...new Set([...getTagNames(), entity.tag, "Add Tag..."])],
+       entity.tag,
+       "entity.tag"
+     ) +
     "</div>" +
     '<div class="tag-layer-group"><span class="layer-label">Layer</span>' +
     dropdownInput(["Default", "TransparentFX", "Ignore Raycast", "Water", "UI", "Add Layer..."]) +

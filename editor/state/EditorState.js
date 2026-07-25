@@ -33,6 +33,8 @@ export const editorState = {
   projectFolder: "scenes",
   sectionsOpen: { transform: true, camera: true, sprite: true, rigidbody: true, collider: true, movement: true, spriteanimation: true, light: true, shadowcaster: true, lightingsettings: true, tileset: true, tilemap: true, script: true },
   addComponentMenuOpen: false,
+  /** @type {string|null} section key to reveal and scroll to after adding */
+  inspectorScrollTo: null,
 
   /** @type {string|null} which top menu-bar dropdown is open ("GameObject", etc), or null */
   openMenu: null,

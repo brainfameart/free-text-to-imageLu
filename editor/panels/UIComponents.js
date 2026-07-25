@@ -52,7 +52,11 @@ export function vec3Input(x, y, z, dataField) {
 export function dropdownInput(options, selected, dataField) {
   return (
     '<div class="dropdown-input"><select' + (dataField ? ' data-field="' + dataField + '"' : "") + ">" +
-    options.map((o) => '<option' + (o === selected ? " selected" : "") + ">" + o + "</option>").join("") +
+    options.map((o) => {
+      const value = typeof o === "object" ? o.value : o;
+      const label = typeof o === "object" ? o.label : o;
+      return '<option value="' + value + '"' + (value === selected ? " selected" : "") + ">" + label + "</option>";
+    }).join("") +
     "</select>" +
     icon("chevrondown", 10, "chev") +
     "</div>"
@@ -65,7 +69,7 @@ export function dropdownInput(options, selected, dataField) {
 export function section(sectionsOpen, key, title, iconName, bodyHtml) {
   const open = sectionsOpen[key] !== false;
   return (
-    '<div class="section">' +
+    '<div class="section" data-section-key="' + key + '">' +
     '<div class="section-header">' +
     '<button class="section-toggle" data-action="toggle-section" data-key="' +
     key +

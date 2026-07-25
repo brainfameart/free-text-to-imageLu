@@ -36,6 +36,7 @@ import { SCRIPT, Script } from "../../runtime/components/Script.js";
 import { createScript, getScriptSource } from "../scripting/ScriptStorage.js";
 import { openScriptEditor, handleScriptEditorAction } from "../panels/ScriptEditorWindow.js";
 import { setLayerName } from "./PhysicsLayers.js";
+import { addTag } from "./Tags.js";
 
 const COMPONENT_TYPE_MAP = {
   Transform: TRANSFORM,
@@ -521,6 +522,23 @@ let _lastSceneClick = { id: null, time: 0 };
         if (!entity) break;
 
         const componentName = t.dataset.component;
+        const scrollTargets = {
+          Rigidbody2D: "rigidbody",
+          Collider2D: "collider",
+          CharacterController: "movement",
+          Light: "light",
+          ShadowCaster: "shadowcaster",
+          LightingSettings: "lightingsettings",
+          SpriteAnimation: "spriteanimation",
+          AudioSource: "audiosource",
+          Tileset: "tileset",
+          Tilemap: "tilemap",
+          Script: "script",
+        };
+        editorState.inspectorScrollTo = scrollTargets[componentName] || null;
+        if (editorState.inspectorScrollTo) {
+          editorState.sectionsOpen[editorState.inspectorScrollTo] = true;
+        }
         if (componentName === "Rigidbody2D") {
           if (!entity.hasComponent(RIGIDBODY_2D)) {
             entity.addComponent(RIGIDBODY_2D, new Rigidbody2D());
@@ -1273,6 +1291,19 @@ case "select-scene-file": {
 function applyFieldChange(field, inputEl) {
   const entity = editorState.world && editorState.world.getEntity(editorState.selectedId);
   if (!entity) return;
+
+  if (field === "entity.tag") {
+    if (inputEl.value === "Add Tag...") {
+      const created = window.prompt("Create an object tag:", "");
+      if (created && created.trim()) {
+        const tag = addTag(created);
+        if (tag) entity.tag = tag;
+      }
+    } else if (inputEl.value.trim()) {
+      entity.tag = addTag(inputEl.value) || inputEl.value;
+    }
+    return;
+  }
 
   // SpriteAnimation has two field shapes the generic componentName.propName
   // split below can't handle: "SpriteAnimation.currentClipName" (needs to
