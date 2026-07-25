@@ -216,6 +216,30 @@ class EntityContext {
     return this._scriptApi.spawn(nameOrTag, opts);
   }
 
+  /**
+   * Runs `callback` once, after `seconds` of game time, with `this`
+   * bound back to THIS entity — the instance-method form of the global
+   * wait(), for scripts that prefer this.wait(...) to the bare global:
+   *   this.wait(2, function () { this.visible = false; });
+   * Same auto-cancel-on-destroy/restart/scene-switch behavior as the
+   * global. See ScriptAPI.wait() for full details.
+   * @param {number} seconds
+   * @param {function} callback
+   * @returns {number} timer id usable with cancelWait()/this.cancelWait()
+   */
+  wait(seconds, callback) {
+    return this._scriptApi.wait(seconds, callback);
+  }
+
+  /**
+   * Cancels a pending timer started by wait()/this.wait(). No-op if it
+   * already fired or was already cancelled.
+   * @param {number} timerId
+   */
+  cancelWait(timerId) {
+    this._scriptApi.cancelWait(timerId);
+  }
+
   // NOTE: velocity, sprite (texture/color/flip/opacity), and rigidbody
   // physics (isGrounded, addForce, move, etc.) are intentionally NOT
   // duplicated here as this.<x> shortcuts. Each lives in exactly ONE
@@ -295,6 +319,10 @@ export class ScriptAPI {
     this._sendMessageFn = null;
     /** Set by ScriptSystem constructor to enable broadcastMessage(msg, data) */
     this._broadcastMessageFn = null;
+    /** Set by ScriptSystem constructor to enable wait(seconds, callback) */
+    this._waitFn = null;
+    /** Set by ScriptSystem constructor to enable cancelWait(timerId) */
+    this._cancelWaitFn = null;
 
     this._setupInput();
   }
@@ -394,6 +422,29 @@ export class ScriptAPI {
     }
     var entity = cloneEntity(this.world, source, opts);
     return this.createEntityContext(entity);
+  }
+
+  /**
+   * Runs `callback` once after `seconds` of game time. Thin passthrough
+   * to ScriptSystem's _scheduleWait (wired up as this._waitFn in
+   * ScriptSystem's constructor, same pattern as _sendMessageFn) — see
+   * that method's doc comment for the full behavior: ownership,
+   * auto-cancel on destroy/restart/scene-switch, and `this` binding.
+   * @param {number} seconds
+   * @param {function} callback
+   * @returns {number} timer id, or -1 if there was no active entity
+   */
+  wait(seconds, callback) {
+    return this._waitFn ? this._waitFn(seconds, callback) : -1;
+  }
+
+  /**
+   * Cancels a pending wait() timer before it fires. No-op if the id
+   * already fired or was already cancelled.
+   * @param {number} timerId
+   */
+  cancelWait(timerId) {
+    if (this._cancelWaitFn) this._cancelWaitFn(timerId);
   }
 
   /**
@@ -527,6 +578,37 @@ export class ScriptAPI {
        */
       spawn: function (nameOrTag, opts) {
         return self.spawn(nameOrTag, opts);
+      },
+      /**
+       * Runs `callback` once, after `seconds` of game time — a simple
+       * beginner-friendly timer. `this` inside the callback is the SAME
+       * entity that called wait(), exactly like onUpdate:
+       *   function onStart() {
+       *     wait(3, function () {
+       *       this.visible = false;
+       *     });
+       *   }
+       * Timers are automatically cancelled if their entity is destroyed,
+       * or if the scene restarts/switches before they fire — a wait()
+       * never fires "late" against a scene that's already gone.
+       * Returns a timer id you can optionally pass to cancelWait(id) to
+       * stop it early:
+       *   var id = wait(5, function () { this.destroy(); });
+       *   // later, e.g. if the player does something that cancels it:
+       *   cancelWait(id);
+       */
+      wait: function (seconds, callback) {
+        return self._waitFn ? self._waitFn(seconds, callback) : -1;
+      },
+      /**
+       * Cancels a pending wait() timer before it fires. Safe to call
+       * with an id that already fired or was already cancelled (does
+       * nothing in either case).
+       *   var id = wait(3, function () { ... });
+       *   cancelWait(id);
+       */
+      cancelWait: function (timerId) {
+        if (self._cancelWaitFn) self._cancelWaitFn(timerId);
       },
       input: {
         keyDown: function (key) { return self._keysDown.has(key); },

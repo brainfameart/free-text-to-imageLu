@@ -83,6 +83,23 @@ export class ScriptSystem {
     this._world = null;
     /** EntityContext of the lifecycle callback currently executing. */
     this._activeContext = null;
+    /**
+     * Pending wait() timers, keyed by the id of the entity that
+     * SCHEDULED them (not necessarily the entity the callback touches —
+     * scripts can close over `this` from another entity, same as any
+     * other JS closure). One entity can have many timers in flight at
+     * once (e.g. several wait() calls from different onUpdate frames),
+     * so each entry is an array.
+     * @type {Map<string, Array<{remaining:number, callback:function, context:object, id:number, cancelled:boolean}>>}
+     */
+    this._timers = new Map();
+    /** Monotonically increasing id handed out by wait(), so scripts can
+     *  cancelWait(id) a specific pending timer if they need to. Never
+     *  reused within a single play session, even across restarts —
+     *  simpler and safer than trying to recycle ids, and the numbers
+     *  themselves carry no meaning scripts should rely on beyond
+     *  uniqueness. */
+    this._nextTimerId = 1;
 
     // Wire sendMessage / broadcastMessage into ScriptAPI's globals so
     // user scripts can call sendMessage(tag, msg, data) and
@@ -101,6 +118,16 @@ export class ScriptSystem {
       const entities = self._world.getAllEntities ? self._world.getAllEntities() :
         (self._world.entities ? [...self._world.entities.values()] : []);
       for (const e of entities) self.fireMessage(e.id, message, self._activeContext, data);
+    };
+
+    // Wire wait() / cancelWait() the same way — see _scheduleWait() and
+    // _cancelWait() below for the full behavior (per-entity ownership,
+    // auto-cancel on destroy/restart/scene-switch).
+    scriptApi._waitFn = function(seconds, callback) {
+      return self._scheduleWait(seconds, callback);
+    };
+    scriptApi._cancelWaitFn = function(timerId) {
+      self._cancelWait(timerId);
     };
   }
 
@@ -225,7 +252,9 @@ export class ScriptSystem {
   _compile(scriptName, source) {
     try {
       const factory = new Function(
-        "find", "scene", "physics", "input", "time", "random", "global", "debug", "sendMessage", "broadcastMessage", "console", "Math",
+        "find", "scene", "physics", "input", "time", "random", "global", "debug",
+        "sendMessage", "broadcastMessage", "spawn", "wait", "cancelWait",
+        "console", "Math",
         '"use strict";\n' + source + '\n' +
         "return {\n" +
         "  onStart: typeof onStart !== 'undefined' ? onStart : null,\n" +
@@ -275,7 +304,7 @@ export class ScriptSystem {
       const g = this.scriptApi.getGlobals();
       const handlers = factory(
         g.find, g.scene, g.physics, g.input, g.time, g.random, g.global, g.debug,
-        g.sendMessage, g.broadcastMessage,
+        g.sendMessage, g.broadcastMessage, g.spawn, g.wait, g.cancelWait,
         console, Math
       );
       const context = this.scriptApi.createEntityContext(entity);
@@ -370,6 +399,143 @@ export class ScriptSystem {
     }
   }
 
+  /**
+   * Schedules `callback` to run once, after `seconds` of game time have
+   * elapsed — the engine's equivalent of a beginner-friendly
+   * setTimeout, but one that plays correctly with entities being
+   * destroyed and scenes restarting/switching (a plain setTimeout would
+   * happily fire minutes later against an entity — or an entire scene —
+   * that no longer exists).
+   *
+   * OWNERSHIP: a timer is tied to whichever entity's script called
+   * wait() — read from this._activeContext, the same "who's currently
+   * running" tracking _invoke() already maintains for every other
+   * lifecycle call. That entity is the timer's owner:
+   *   - if the OWNER is destroyed (this.destroy()) before the timer
+   *     fires, the timer is cancelled — see _flushDestroyed()'s call
+   *     into _cancelTimersForEntity() below.
+   *   - if the SCENE restarts or switches before the timer fires, ALL
+   *     timers are cancelled — see destroy() below, the same whole-
+   *     scene teardown that already clears every script instance.
+   * Either way the callback simply never runs; nothing throws, nothing
+   * needs to check this.destroyed inside the callback itself.
+   *
+   * The callback runs with `this` bound to the OWNER's own
+   * EntityContext (via _invoke, same as onUpdate/onStart/etc.), so
+   * `this.x`, this.destroy(), this.wait(...) all work naturally inside
+   * it, exactly like any other lifecycle method:
+   *   function onStart() {
+   *     wait(2, function () { this.visible = false; });
+   *   }
+   *
+   * A timer scheduled from OUTSIDE any lifecycle call (e.g. accidentally
+   * at top-level script scope, where there's no "current" entity) is
+   * silently ignored, with a console warning — the same "no active
+   * entity" situation this.destroy() and other this.* calls already
+   * guard against elsewhere in this file.
+   *
+   * @param {number} seconds must be >= 0; 0 fires on the very next update()
+   * @param {function} callback
+   * @returns {number} a timer id you can pass to cancelWait(id), or -1
+   *   if there was no active entity to own the timer
+   */
+  _scheduleWait(seconds, callback) {
+    if (typeof callback !== "function") {
+      if (typeof console !== "undefined") {
+        console.warn("[wait] second argument must be a function, e.g. wait(2, function() { ... })");
+      }
+      return -1;
+    }
+    const context = this._activeContext;
+    if (!context) {
+      if (typeof console !== "undefined") {
+        console.warn("[wait] called outside a lifecycle function (onStart/onUpdate/etc.) — ignored, there's no entity to run it on");
+      }
+      return -1;
+    }
+    const entityId = context._entity.id;
+    const timer = {
+      remaining: Math.max(0, Number(seconds) || 0),
+      callback,
+      context,
+      id: this._nextTimerId++,
+      cancelled: false,
+    };
+    if (!this._timers.has(entityId)) this._timers.set(entityId, []);
+    this._timers.get(entityId).push(timer);
+    return timer.id;
+  }
+
+  /**
+   * Cancels a single pending timer by the id wait() returned. Safe to
+   * call with an id that already fired or was already cancelled — a
+   * no-op in both cases, same as the DOM's clearTimeout.
+   * @param {number} timerId
+   */
+  _cancelWait(timerId) {
+    for (const list of this._timers.values()) {
+      for (const timer of list) {
+        if (timer.id === timerId) {
+          timer.cancelled = true;
+          return;
+        }
+      }
+    }
+  }
+
+  /**
+   * Cancels every pending timer owned by ONE entity — called from
+   * _flushDestroyed() when that entity's own this.destroy() goes
+   * through, so a wait() scheduled by a script never fires against an
+   * entity (or reads a `this`) that's already gone.
+   * @param {string} entityId
+   */
+  _cancelTimersForEntity(entityId) {
+    this._timers.delete(entityId);
+  }
+
+  /**
+   * Advances every pending timer by dt and fires any whose time is up.
+   * Called once per frame from update(), after the regular onUpdate
+   * pass — matches Unity's Invoke()/coroutine timing, which also
+   * resolve after that frame's Update() has run.
+   *
+   * A timer firing is allowed to schedule ANOTHER wait() (including
+   * from inside its own callback) — that new timer simply lands in
+   * next frame's pass, same as calling wait() from onUpdate would.
+   * Iterates over a COPY of each entity's list before clearing fired/
+   * cancelled ones out, so a callback that itself calls wait() again
+   * doesn't mutate the array while this loop is still reading it.
+   */
+  _tickTimers(dt) {
+    if (this._timers.size === 0) return;
+    for (const [entityId, list] of this._timers) {
+      const stillPending = [];
+      for (const timer of list) {
+        if (timer.cancelled) continue;
+        timer.remaining -= dt;
+        if (timer.remaining > 0) {
+          stillPending.push(timer);
+          continue;
+        }
+        try {
+          timer.callback.call(timer.context);
+        } catch (err) {
+          this._reportError(
+            (timer.context && timer.context._entity && timer.context._entity.name) || "wait()",
+            err,
+            "wait"
+          );
+        }
+      }
+      if (stillPending.length > 0) {
+        this._timers.set(entityId, stillPending);
+      } else {
+        this._timers.delete(entityId);
+      }
+    }
+  }
+
   update(world, dt) {
     // Stash world reference so sendMessage / broadcastMessage callbacks
     // (wired up in the constructor) can reach the entity list at call time.
@@ -414,6 +580,13 @@ export class ScriptSystem {
       }
     }
 
+    // Fire any wait() timers whose time is up. Runs AFTER the regular
+    // onUpdate pass (matches Unity's own Invoke()/coroutine timing) but
+    // BEFORE _flushDestroyed() below, so a timer callback that calls
+    // this.destroy() is picked up by the SAME frame's destroy flush
+    // rather than sitting half-destroyed until next frame.
+    this._tickTimers(dt);
+
     // Clear per-frame input state (keyPressed only lasts one frame).
     //
     // BUG FIX — ORDERING: this used to run BEFORE the onUpdate loop
@@ -451,9 +624,10 @@ export class ScriptSystem {
    * onDestroy on that entity's own script instances (same try/catch/
    * report pattern as every other lifecycle call — a buggy onDestroy
    * doesn't stop the rest of cleanup), then drops its instances Map
-   * entry and its cached EntityContext (scriptApi.clearContext) so
-   * nothing keeps a stale reference once World.flushDestroyed() below
-   * actually removes it — the same reuse-safety clearContexts() exists
+   * entry and its cached EntityContext (scriptApi.clearContext), and
+   * cancels any pending wait() timers it owns, so nothing keeps a stale
+   * reference once World.flushDestroyed() below actually removes it —
+   * the same reuse-safety clearContexts() exists
    * for on a whole-scene reload, just scoped to one entity here.
    * World.flushDestroyed() itself removes the entity from
    * world.entities; PhysicsWorld.step() and RenderSystem.update()
@@ -481,6 +655,12 @@ export class ScriptSystem {
       if (this.scriptApi && this.scriptApi.clearContext) {
         this.scriptApi.clearContext(entity.id);
       }
+      // Any wait() this entity scheduled (and hasn't fired yet) dies
+      // with it — see _scheduleWait()'s doc comment for why this
+      // matters: without this, a timer started by an entity that gets
+      // destroyed mid-countdown would still fire later against a
+      // `this` that no longer exists in the world.
+      this._cancelTimersForEntity(entity.id);
     }
   }
 
@@ -585,6 +765,20 @@ export class ScriptSystem {
     }
   }
 
+  /**
+   * Whole-scene teardown, called by runtime/index.js on BOTH scene
+   * restart and scene switch — fires onDestroy for every remaining
+   * script instance (a restarting/switching scene still means every
+   * entity in it is going away), then wipes every timer regardless of
+   * which entity owns it: unlike the single-entity case in
+   * _flushDestroyed(), there's no "still running" entity left to check
+   * against here — the ENTIRE world is being torn down, so every
+   * pending wait() everywhere is cancelled unconditionally. Without
+   * this, a wait(10, ...) started just before a restart would still be
+   * sitting in this._timers and fire 10 seconds later against a
+   * `this` from the OLD scene, even though the player is now several
+   * seconds into a brand new one.
+   */
   destroy() {
     for (const [, instances] of this.instances) {
       for (const inst of instances) {
@@ -598,6 +792,7 @@ export class ScriptSystem {
       }
     }
     this.instances.clear();
+    this._timers.clear();
     this._started = false;
     this._fixedAccumulator = 0;
     this._activeContext = null;

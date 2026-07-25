@@ -219,6 +219,8 @@ const THIS_SHORTCUTS_BASE = [
   { label: "destroyed", detail: "True once destroy() has been called (read-only)", insert: "destroyed", kind: "Property" },
   { label: "isClone", detail: "True if this entity was created by spawn() at runtime, rather than placed in the scene (read-only)", insert: "isClone", kind: "Property" },
   { label: "spawn(nameOrTag, options)", detail: 'Clone another entity by name (or tag with {byTag:true}). E.g. this.spawn("Bullet", { x: this.x, y: this.y })', insert: 'spawn("', kind: "Method" },
+  { label: "wait(seconds, callback)", detail: 'Run callback once after N seconds. this inside the callback is still this entity. E.g. this.wait(2, function () { this.visible = false; })', insert: 'wait(${1:1}, function () {\n\t$0\n})', kind: "Method", snippet: true },
+  { label: "cancelWait(timerId)", detail: "Cancel a pending wait() timer before it fires (pass the id wait() returned)", insert: "cancelWait(${1:timerId})", kind: "Method", snippet: true },
 ];
 
 const GLOBAL_APIS = [
@@ -234,6 +236,8 @@ const GLOBAL_APIS = [
   { label: "sendMessage(tag, message, data)", detail: 'Send a named message to all entities with the given tag. E.g. sendMessage("Enemy", "takeDamage", { amount: 10 })', insert: 'sendMessage("', kind: "Function" },
   { label: "broadcastMessage(message, data)", detail: 'Send a named message to ALL entities in the scene. E.g. broadcastMessage("gameOver")', insert: 'broadcastMessage("', kind: "Function" },
   { label: "spawn(nameOrTag, options)", detail: 'Clone an existing entity at runtime. E.g. spawn("Bullet", { x: this.x, y: this.y }). Pass { byTag: true } to look up by tag instead of name.', insert: 'spawn("', kind: "Function" },
+  { label: "wait(seconds, callback)", detail: 'Run callback once after N seconds of game time. E.g. wait(3, function () { this.destroy(); }). Auto-cancelled if the entity is destroyed or the scene restarts/switches first.', insert: 'wait(${1:1}, function () {\n\t$0\n})', kind: "Function", snippet: true },
+  { label: "cancelWait(timerId)", detail: "Cancel a pending wait() timer before it fires — pass the id wait() returned.", insert: "cancelWait(${1:timerId})", kind: "Function", snippet: true },
 ];
 
 const SCENE_API = [
