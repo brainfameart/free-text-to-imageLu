@@ -36,7 +36,7 @@ import { SCRIPT, Script } from "../../runtime/components/Script.js";
 import { createScript, getScriptSource } from "../scripting/ScriptStorage.js";
 import { openScriptEditor, handleScriptEditorAction } from "../panels/ScriptEditorWindow.js";
 import { setLayerName } from "./PhysicsLayers.js";
-import { addTag } from "./Tags.js";
+import { addTag, deleteTag } from "./Tags.js";
 
 const COMPONENT_TYPE_MAP = {
   Transform: TRANSFORM,
@@ -602,6 +602,18 @@ let _lastSceneClick = { id: null, time: 0 };
           }
         }
         render();
+        break;
+      }
+      case "delete-tag": {
+        const tagToDelete = t.dataset.tag;
+        if (tagToDelete && tagToDelete !== "Untagged") {
+          deleteTag(tagToDelete);
+          // If the currently selected entity carries this tag, reset it
+          // to "Untagged" so its tag field stays valid in the dropdown.
+          const tagEntity = editorState.world && editorState.world.getEntity(editorState.selectedId);
+          if (tagEntity && tagEntity.tag === tagToDelete) tagEntity.tag = "Untagged";
+          render();
+        }
         break;
       }
       case "remove-component": {

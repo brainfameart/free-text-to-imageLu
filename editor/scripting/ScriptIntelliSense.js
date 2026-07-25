@@ -39,6 +39,7 @@ import { SPRITE_ANIMATION } from "../../runtime/components/SpriteAnimation.js";
 import { CHARACTER_CONTROLLER, ControllerType } from "../../runtime/components/CharacterController.js";
 import { getAllSpriteAssets, getAllAudioAssets } from "../../runtime/assets/AssetRegistry.js";
 import { getSceneList } from "../../runtime/scene/SceneManager.js";
+import { getAllScripts, getScriptSource } from "./ScriptStorage.js";
 
 let _registered = false;
 
@@ -324,6 +325,46 @@ function _getAnimClipNames() {
   return [...names].sort();
 }
 
+/**
+ * Scan every saved script for sendMessage / broadcastMessage CALLS and
+ * return the unique set of message names being SENT.
+ * Pass extraSource (current model text) to include unsaved edits.
+ */
+function _getSentMessageNames(extraSource) {
+  const names = new Set();
+  const bcRx = /\bbroadcastMessage\s*\(\s*["']([^"']+)["']/g;
+  const smRx = /\bsendMessage\s*\(\s*["'][^"']*["']\s*,\s*["']([^"']+)["']/g;
+  const scan = (src) => {
+    if (!src) return;
+    bcRx.lastIndex = 0; smRx.lastIndex = 0;
+    let m;
+    while ((m = bcRx.exec(src)) !== null) names.add(m[1]);
+    while ((m = smRx.exec(src)) !== null) names.add(m[1]);
+  };
+  try { for (const n of getAllScripts()) scan(getScriptSource(n)); } catch (_) {}
+  if (extraSource) scan(extraSource);
+  return names;
+}
+
+/**
+ * Scan every saved script for onMessage("msg") DECLARATIONS and
+ * return the unique set of message names being HANDLED.
+ * Pass extraSource (current model text) to include unsaved edits.
+ */
+function _getHandledMessageNames(extraSource) {
+  const names = new Set();
+  const rx = /\bonMessage\s*\(\s*["']([^"']+)["']/g;
+  const scan = (src) => {
+    if (!src) return;
+    rx.lastIndex = 0;
+    let m;
+    while ((m = rx.exec(src)) !== null) names.add(m[1]);
+  };
+  try { for (const n of getAllScripts()) scan(getScriptSource(n)); } catch (_) {}
+  if (extraSource) scan(extraSource);
+  return names;
+}
+
 // ─── String-argument context detection ───────────────────────────────────────
 // Returns a string tag describing what kind of completions to provide when
 // the cursor is inside a string argument (trigger character `"`).
@@ -360,6 +401,15 @@ function _detectStringContext(lineUntil) {
   // sendMessage(tag, ...) — first argument is a tag
   if (new RegExp(`\\bsendMessage\\s*\\(\\s*${q}$`).test(lineUntil)) return "entityTag";
 
+  // sendMessage("tag", "msg") — second arg: show names of existing handlers
+  if (new RegExp(`\\bsendMessage\\s*\\(\\s*${q}["']\\s*,\\s*${q}$`).test(lineUntil)) return "messageHandled";
+
+  // broadcastMessage("msg") — first arg: show names of existing handlers
+  if (new RegExp(`\\bbroadcastMessage\\s*\\(\\s*${q}$`).test(lineUntil)) return "messageHandled";
+
+  // onMessage("msg") — first arg: show names of messages being sent elsewhere
+  if (new RegExp(`\\bonMessage\\s*\\(\\s*${q}$`).test(lineUntil)) return "messageSent";
+
   // .tag === " / .tag == " / .tag !== "
   if (new RegExp(`\\.tag\\s*[!=]==?\\s*${q}$`).test(lineUntil)) return "entityTag";
 
@@ -368,9 +418,6 @@ function _detectStringContext(lineUntil) {
 
   // controller.targetName = "
   if (new RegExp(`\\.targetName\\s*=\\s*${q}$`).test(lineUntil)) return "entityName";
-
-  // broadcastMessage("  — first arg is a message label
-  if (new RegExp(`\\bbroadcastMessage\\s*\\(\\s*${q}$`).test(lineUntil)) return "messageLabel";
 
   return null;
 }
@@ -456,6 +503,28 @@ function _diagnosticRules() {
       regex: /\.targetName\s*=\s*["']([^"']*)["']/g,
       values: () => new Set(_getEntityNames()),
       hint: (v) => `No object named "${v}" found in the current scene. The Follow controller needs targetName to match an existing object's name exactly.`,
+    },
+    {
+      // onMessage("msg") — warn if nothing in any script sends "msg".
+      // Skipped when no messages are sent yet (fresh project).
+      label: "message name",
+      regex: /\bonMessage\s*\(\s*["']([^"']+)["']/g,
+      values: () => _getSentMessageNames(),
+      hint: (v) => `No script sends the message "${v}". Check spelling matches your sendMessage / broadcastMessage call.`,
+    },
+    {
+      // sendMessage("tag","msg") — warn if nothing handles "msg".
+      label: "message name",
+      regex: /\bsendMessage\s*\(\s*["'][^"']*["']\s*,\s*["']([^"']+)["']/g,
+      values: () => _getHandledMessageNames(),
+      hint: (v) => `No script has an onMessage("${v}") handler. Check spelling matches your onMessage declaration.`,
+    },
+    {
+      // broadcastMessage("msg") — warn if nothing handles "msg".
+      label: "message name",
+      regex: /\bbroadcastMessage\s*\(\s*["']([^"']+)["']/g,
+      values: () => _getHandledMessageNames(),
+      hint: (v) => `No script has an onMessage("${v}") handler. Check spelling matches your onMessage declaration.`,
     },
   ];
 }
@@ -904,19 +973,25 @@ export function registerIntelliSense(monaco) {
           return { suggestions };
         }
 
-        if (stringCtx === "messageLabel") {
-          // Scan the full script text for onMessage handlers to suggest
-          // existing message labels (broadcastMessage("xxx") → "xxx").
-          const fullText = model.getValue();
-          const msgRegex = /broadcastMessage\s*\(\s*["']([^"']+)["']/g;
-          const sendRegex = /sendMessage\s*\(\s*["'][^"']*["']\s*,\s*["']([^"']+)["']/g;
-          const labels = new Set();
-          let m;
-          while ((m = msgRegex.exec(fullText)) !== null) labels.add(m[1]);
-          while ((m = sendRegex.exec(fullText)) !== null) labels.add(m[1]);
-          for (const lbl of [...labels].sort()) {
+        if (stringCtx === "messageSent") {
+          // onMessage(" — show message names that scripts are SENDING so the
+          // user can pick the matching handler name.
+          const sent = _getSentMessageNames(model.getValue());
+          for (const lbl of [...sent].sort()) {
             suggestions.push(_makeValueCompletion(
-              monaco, lbl, "Message label (used in this script)", lbl + '"', range, hasClosingQuote
+              monaco, lbl, "Message being sent (sendMessage / broadcastMessage)", lbl + '"', range, hasClosingQuote
+            ));
+          }
+          return { suggestions };
+        }
+
+        if (stringCtx === "messageHandled") {
+          // sendMessage("tag", " or broadcastMessage(" — show message names
+          // that scripts are HANDLING so the user can pick a consistent name.
+          const handled = _getHandledMessageNames(model.getValue());
+          for (const lbl of [...handled].sort()) {
+            suggestions.push(_makeValueCompletion(
+              monaco, lbl, "Message handled by an onMessage declaration", lbl + '"', range, hasClosingQuote
             ));
           }
           return { suggestions };
@@ -1050,8 +1125,9 @@ export function registerIntelliSense(monaco) {
         { label: "function onCollisionExit(other)", detail: "Called when collision ends.", insert: "onCollisionExit(other) {\n  $1\n}" },
         { label: "function onTriggerEnter(other)", detail: "Called when entering a trigger collider (Is Trigger = on)", insert: "onTriggerEnter(other) {\n  $1\n}" },
         { label: "function onTriggerExit(other)", detail: "Called when leaving a trigger collider", insert: "onTriggerExit(other) {\n  $1\n}" },
-        { label: "function onMessage(message, data)", detail: "Called when this entity receives a message. Add sender as a third parameter when needed.", insert: "onMessage(message, data) {\n  $1\n}" },
-        { label: "function onMessage(message, sender, data)", detail: "Message callback with the optional sending object context", insert: "onMessage(message, sender, data) {\n  $1\n}" },
+        { label: "function onMessage(message)", detail: "Message received — just the message string. Simplest form.", insert: "onMessage(message) {\n  $1\n}" },
+        { label: "function onMessage(message, data)", detail: "Message + payload. data is whatever was passed as the third arg of sendMessage() or second arg of broadcastMessage().", insert: "onMessage(message, data) {\n  $1\n}" },
+        { label: "function onMessage(message, sender, data)", detail: "Full form. sender is an entity context (like 'this') — use sender.name, sender.tag, sender.x etc. sender is null for broadcastMessage.", insert: "onMessage(message, sender, data) {\n  $1\n}" },
         { label: "function onDestroy()", detail: "Called once when this entity is destroyed or the scene ends", insert: "onDestroy() {\n  $1\n}" },
       ];
       for (const s of snippets) {

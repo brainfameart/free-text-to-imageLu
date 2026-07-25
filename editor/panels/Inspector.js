@@ -31,6 +31,9 @@ import { getSpriteAsset, getAudioAsset, getAllAudioAssets } from "../../runtime/
 import { getAllScripts } from "../scripting/ScriptStorage.js";
 import { getTagNames } from "../state/Tags.js";
 
+// Tags that ship with every project and cannot be deleted.
+const BUILTIN_TAGS = new Set(["Untagged", "Player", "Enemy"]);
+
 export function renderInspector() {
   const world = editorState.world;
   const entity = world ? world.getEntity(editorState.selectedId) : null;
@@ -911,6 +914,9 @@ export function renderInspector() {
        entity.tag,
        "entity.tag"
      ) +
+     (!BUILTIN_TAGS.has(entity.tag)
+       ? '<button class="tag-delete-btn" data-action="delete-tag" data-tag="' + entity.tag + '" title="Remove \'' + entity.tag + '\' from the project tag list">✕</button>'
+       : '') +
     "</div>" +
     '<div class="tag-layer-group"><span class="layer-label">Layer</span>' +
     dropdownInput(["Default", "TransparentFX", "Ignore Raycast", "Water", "UI", "Add Layer..."]) +

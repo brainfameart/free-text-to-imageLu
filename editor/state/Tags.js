@@ -41,3 +41,19 @@ export function addTag(tag) {
   } catch (_) {}
   return name;
 }
+
+/**
+ * Remove a custom tag from the project tag list.
+ * "Untagged" cannot be removed. Entities that already have this tag
+ * keep their current tag value — it just disappears from the dropdown.
+ * @param {string} tag
+ */
+export function deleteTag(tag) {
+  const name = String(tag == null ? "" : tag).trim();
+  if (!name || name === "Untagged") return;
+  const names = getTagNames().filter((t) => t !== name);
+  _sessionCache = names;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(names));
+  } catch (_) {}
+}

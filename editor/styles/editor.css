@@ -170,6 +170,8 @@ svg.icon{display:inline-block;vertical-align:middle;flex-shrink:0;}
 .tag-layer-group{display:flex;align-items:center;gap:4px;flex:1;}
 .tag-layer-group span{font-size:11px;color:#ccc;width:30px;flex-shrink:0;}
 .tag-layer-group span.layer-label{width:35px;}
+.tag-delete-btn{flex-shrink:0;background:none;border:none;color:#888;font-size:11px;padding:0 3px;cursor:pointer;line-height:1;border-radius:2px;}
+.tag-delete-btn:hover{color:#e06c75;background:#3a2020;}
 
 .section{border-bottom:1px solid #202020;}
 .section-header{display:flex;align-items:center;width:100%;background:#3e3e3e;border-top:1px solid #4a4a4a;border-bottom:1px solid #1a1a1a;-webkit-user-select:none;user-select:none;}
