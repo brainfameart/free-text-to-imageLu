@@ -129,3 +129,53 @@ export function instantiateEntity(world, data, nameOverride) {
   }
   return entity;
 }
+
+/**
+ * Clones a LIVE entity already in the world — the runtime counterpart to
+ * instantiateEntity (which builds from a plain-data payload instead).
+ * Used by ScriptAPI.spawn() (this.spawn() / global spawn() in user
+ * scripts) to spawn a runtime copy of any existing entity, exactly like
+ * Unity's Object.Instantiate(original).
+ *
+ * Goes through the SAME serializeEntity -> COMPONENT_REGISTRY reconstruct
+ * path as editor copy/paste, so a clone is byte-for-byte identical to the
+ * source (deep-cloned components, fresh entity id, no shared references)
+ * with zero special-casing per component type. Nothing here touches
+ * Rapier bodies, sprites, or script instances directly — those are all
+ * driven by other systems that re-query world.entities every frame
+ * (PhysicsWorld.step, RenderSystem.update, ScriptSystem's incremental
+ * _initScripts pass), so a clone "just works" with physics/rendering/
+ * scripting the moment it's added to the world, the same way any other
+ * runtime-created entity does.
+ *
+ * @param {import('../core/World.js').World} world
+ * @param {import('../core/Entity.js').Entity} source entity to copy
+ * @param {{ name?: string, x?: number, y?: number }} [overrides]
+ *   name: rename the clone (defaults to the source's own name, matching
+ *   Unity — Instantiate() does not auto-suffix "(Clone)").
+ *   x/y: place the clone at a specific position instead of the source's
+ *   own Transform position (only applied if the entity has a Transform).
+ * @returns {import('../core/Entity.js').Entity} the new entity
+ */
+export function cloneEntity(world, source, overrides) {
+  const data = serializeEntity(source);
+  const entity = instantiateEntity(world, data, overrides && overrides.name);
+  if (overrides && (overrides.x !== undefined || overrides.y !== undefined)) {
+    const t = entity.getComponent(TRANSFORM);
+    if (t) {
+      if (overrides.x !== undefined) t.x = overrides.x;
+      if (overrides.y !== undefined) t.y = overrides.y;
+    }
+  }
+  // Flag so ScriptSystem's incremental init (_initNewInstances) knows to
+  // fire onClone() and set this.isClone = true for this entity's own
+  // script instances. Not part of the Entity class's own fields (see
+  // core/Entity.js) since it's a one-off runtime marker relevant only to
+  // ScriptSystem, not scene data — deliberately left OUT of
+  // serializeEntity/serializeScene so a clone that later gets saved back
+  // into a scene (e.g. editor "Apply changes") is indistinguishable from
+  // a hand-placed entity, exactly like Unity: Instantiate()'d objects
+  // carry no special marker once baked into a scene.
+  entity.__isClone = true;
+  return entity;
+}

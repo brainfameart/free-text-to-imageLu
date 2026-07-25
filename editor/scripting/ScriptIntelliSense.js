@@ -19,6 +19,7 @@
  *   .texture = "     → all sprite/texture asset names
  *   animator.play("  → animation clip names on the context entity
  *   sendMessage("    → all unique entity tags in the scene
+ *   spawn("          → all entity names in the scene (spawn(name) clones it)
  *   .name === "      → all entity names
  *   .tag === "       → all entity tags
  *   .name == "       → all entity names
@@ -216,6 +217,8 @@ const THIS_SHORTCUTS_BASE = [
   { label: "tag", detail: "The entity's tag, set in the Inspector's Tag dropdown (read/write)", insert: "tag", kind: "Property" },
   { label: "destroy()", detail: "Destroy this entity — removed at end of frame, onDestroy() fires just before removal", insert: "destroy()", kind: "Method" },
   { label: "destroyed", detail: "True once destroy() has been called (read-only)", insert: "destroyed", kind: "Property" },
+  { label: "isClone", detail: "True if this entity was created by spawn() at runtime, rather than placed in the scene (read-only)", insert: "isClone", kind: "Property" },
+  { label: "spawn(nameOrTag, options)", detail: 'Clone another entity by name (or tag with {byTag:true}). E.g. this.spawn("Bullet", { x: this.x, y: this.y })', insert: 'spawn("', kind: "Method" },
 ];
 
 const GLOBAL_APIS = [
@@ -230,6 +233,7 @@ const GLOBAL_APIS = [
   { label: "debug", detail: "On-screen debug HUD: debug.show(), debug.log(label, value)", insert: "debug.", kind: "Module" },
   { label: "sendMessage(tag, message, data)", detail: 'Send a named message to all entities with the given tag. E.g. sendMessage("Enemy", "takeDamage", { amount: 10 })', insert: 'sendMessage("', kind: "Function" },
   { label: "broadcastMessage(message, data)", detail: 'Send a named message to ALL entities in the scene. E.g. broadcastMessage("gameOver")', insert: 'broadcastMessage("', kind: "Function" },
+  { label: "spawn(nameOrTag, options)", detail: 'Clone an existing entity at runtime. E.g. spawn("Bullet", { x: this.x, y: this.y }). Pass { byTag: true } to look up by tag instead of name.', insert: 'spawn("', kind: "Function" },
 ];
 
 const SCENE_API = [
@@ -391,6 +395,9 @@ function _detectStringContext(lineUntil) {
 
   // find("  (top-level shortcut or this.find — any context)
   if (new RegExp(`\\bfind\\s*\\(\\s*${q}$`).test(lineUntil)) return "entityName";
+
+  // spawn("  (top-level shortcut or this.spawn — clones by name by default)
+  if (new RegExp(`\\bspawn\\s*\\(\\s*${q}$`).test(lineUntil)) return "entityName";
 
   // animator.play("
   if (new RegExp(`\\banimator\\s*\\.\\s*play\\s*\\(\\s*${q}$`).test(lineUntil)) return "clipName";
@@ -1118,6 +1125,7 @@ export function registerIntelliSense(monaco) {
       // Lifecycle method snippets
       const snippets = [
         { label: "function onStart()", detail: "Called once before the first onUpdate — use for initialization", insert: "onStart() {\n  $1\n}" },
+        { label: "function onClone()", detail: "Called once, right before onStart(), but ONLY on entities created by spawn(). Never fires for entities placed in the scene.", insert: "onClone() {\n  $1\n}" },
         { label: "function onUpdate(dt)", detail: "Called every frame. dt = seconds since last frame (use for movement)", insert: "onUpdate(dt) {\n  $1\n}" },
         { label: "function onFixedUpdate(dt)", detail: "Called at a fixed 60 Hz rate — use for physics/rigidbody changes", insert: "onFixedUpdate(dt) {\n  $1\n}" },
         { label: "function onCollision(other)", detail: "Called when this entity's collider touches another. 'other' has .x, .y, .name, .tag, etc.", insert: "onCollision(other) {\n  $1\n}" },

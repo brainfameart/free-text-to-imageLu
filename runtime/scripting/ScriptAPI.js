@@ -53,6 +53,7 @@ import { SPRITE_ANIMATION } from "../components/SpriteAnimation.js";
 import { CAMERA } from "../components/Camera.js";
 import { AUDIO_SOURCE } from "../components/AudioSource.js";
 import { CHARACTER_CONTROLLER } from "../components/CharacterController.js";
+import { cloneEntity } from "../scene/SceneSerializer.js";
 import { createTransformAPI } from "./components/TransformAPI.js";
 import { createSpriteAPI } from "./components/SpriteAPI.js";
 import { createRigidbodyAPI } from "./components/RigidbodyAPI.js";
@@ -66,9 +67,19 @@ import { createControllerAPI } from "./components/ControllerAPI.js";
  * from / writes to the entity's live components.
  */
 class EntityContext {
-  constructor(entity, world) {
+  constructor(entity, world, scriptApi) {
     this._entity = entity;
     this._world = world;
+    this._scriptApi = scriptApi;
+    // Set to true ONLY on the context handed to a freshly-spawned
+    // entity's OWN script instances (see ScriptSystem
+    // ._initEntityScripts()) — false for every entity that came from
+    // the scene file itself, and false for every OTHER context this same
+    // clone hands out later (e.g. `other` inside onCollision) even
+    // though contexts are cached per-entity-id, since this flag is set
+    // once right after creation and never toggled again. Mirrors
+    // Unity's own convention of tagging runtime-Instantiate()'d copies.
+    this._isClone = false;
     this._buildSubObjects();
   }
 
@@ -176,6 +187,33 @@ class EntityContext {
    *  (there's no context left to read it from at that point). */
   get destroyed() {
     return this._world.isPendingDestroy(this._entity.id);
+  }
+
+  /**
+   * True if THIS entity was itself created via spawn() (a runtime
+   * clone) rather than loaded from the scene file. Read-only — an
+   * entity's origin isn't meant to be reassigned at runtime, same as
+   * Unity's own gameObject identity. Typical use inside onStart():
+   *   function onStart() {
+   *     if (this.isClone) { this.hp = 50; } // clones start weaker, say
+   *   }
+   */
+  get isClone() {
+    return this._isClone;
+  }
+
+  /**
+   * Spawns a runtime copy of ANOTHER entity, positioned at (x, y) if
+   * given (otherwise at the source's own position) — Unity's
+   * Object.Instantiate(original, position) as an instance method, so
+   * scripts can do this.spawn("Bullet", { x: this.x, y: this.y })
+   * without needing the free global. See ScriptAPI.spawn() for
+   * full behavior (source lookup, onClone/onStart timing, isClone).
+   * @param {string} nameOrTag
+   * @param {{x?:number, y?:number, name?:string, byTag?:boolean}} [opts]
+   */
+  spawn(nameOrTag, opts) {
+    return this._scriptApi.spawn(nameOrTag, opts);
   }
 
   // NOTE: velocity, sprite (texture/color/flip/opacity), and rigidbody
@@ -311,13 +349,61 @@ export class ScriptAPI {
   }
 
   /**
+   * Spawns a runtime copy of an existing entity — Unity's
+   * Object.Instantiate(original). Looks up the SOURCE entity by name
+   * (default) or by tag (opts.byTag: true / opts.tag), deep-clones it
+   * via cloneEntity() (same registry-driven reconstruct as editor
+   * copy/paste — every component type is handled uniformly, nothing
+   * per-type to keep in sync here), and returns an EntityContext for
+   * the new entity.
+   *
+   * If multiple entities share the lookup name/tag, the FIRST match is
+   * cloned (same "first match" rule find()/scene.find() already use).
+   * Returns null if no source entity is found — mirrors find()'s own
+   * null-on-miss behavior rather than throwing, so a script can safely
+   * do `var e = spawn("Enemy"); if (e) { ... }`.
+   *
+   * WIRING NOTE: the new entity is added straight into world.entities,
+   * so PhysicsWorld.step() and RenderSystem.update() (both re-query the
+   * live world every single frame) pick it up automatically next frame
+   * with zero special-casing. ScriptSystem is the one system that does
+   * NOT re-scan every frame (it only compiles once at scene start for
+   * performance) — see ScriptSystem._initNewInstances(), called right
+   * after this returns, which incrementally compiles/starts scripts for
+   * ANY entity that doesn't have instances yet, clone or otherwise, and
+   * is what actually fires this clone's own onClone()/onStart().
+   *
+   * @param {string} nameOrTag        name (default) or tag (opts.byTag) to search for
+   * @param {{x?:number, y?:number, name?:string, byTag?:boolean}} [opts]
+   *   x/y      — spawn position (defaults to the source's own position)
+   *   name     — rename the clone (defaults to the source's own name)
+   *   byTag    — true to look up nameOrTag as a TAG instead of a name
+   * @returns {object|null} EntityContext for the new entity, or null if no source was found
+   */
+  spawn(nameOrTag, opts) {
+    opts = opts || {};
+    var source = opts.byTag
+      ? (this.world.findByTag ? this.world.findByTag(nameOrTag)[0] : null)
+      : this.world.findFirstByName(nameOrTag);
+    if (!source) {
+      if (typeof console !== "undefined") {
+        console.warn("[ScriptAPI] spawn('" + nameOrTag + "') — no entity found " +
+          (opts.byTag ? "with tag" : "named") + " '" + nameOrTag + "'");
+      }
+      return null;
+    }
+    var entity = cloneEntity(this.world, source, opts);
+    return this.createEntityContext(entity);
+  }
+
+  /**
    * Creates (or returns a cached) EntityContext for the given entity.
    */
   createEntityContext(entity) {
     if (this._contexts.has(entity.id)) {
       return this._contexts.get(entity.id);
     }
-    var ctx = new EntityContext(entity, this.world);
+    var ctx = new EntityContext(entity, this.world, this);
     this._contexts.set(entity.id, ctx);
     return ctx;
   }
@@ -425,6 +511,22 @@ export class ScriptAPI {
        */
       broadcastMessage: function(message, data) {
         if (self._broadcastMessageFn) self._broadcastMessageFn(message, data);
+      },
+      /**
+       * Spawns a runtime clone of an existing entity — Unity's
+       * Object.Instantiate(). Looks the source up by NAME by default:
+       *   spawn("Bullet")
+       *   spawn("Bullet", { x: this.x, y: this.y })
+       * Pass byTag to look up by tag instead (clones the FIRST match):
+       *   spawn("Enemy", { byTag: true, x: 200, y: 100 })
+       * Optionally rename the clone with `name`. Returns an
+       * EntityContext for the new entity (same shape as `this` — .x,
+       * .sprite, .rigidbody, etc.), or null if no source entity exists
+       * with that name/tag. The clone's own onClone()/onStart() fire
+       * automatically on the next frame, with this.isClone === true.
+       */
+      spawn: function (nameOrTag, opts) {
+        return self.spawn(nameOrTag, opts);
       },
       input: {
         keyDown: function (key) { return self._keysDown.has(key); },

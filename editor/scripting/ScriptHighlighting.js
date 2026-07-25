@@ -32,7 +32,8 @@
 // 1. JavaScript keywords       → Monaco's normal keyword color (untouched)
 // 2. Engine classes/globals    → the top-level names scripts are handed:
 //                                find, scene, physics, input, time, random,
-//                                global, debug, sendMessage, broadcastMessage
+//                                global, debug, sendMessage, broadcastMessage,
+//                                spawn
 // 3. Engine objects            → the per-entity sub-objects hanging off
 //                                `this`: transform, sprite, rigidbody,
 //                                animator, camera, audio, controller
@@ -46,11 +47,11 @@
 
 const ENGINE_GLOBALS = [
   "find", "scene", "physics", "input", "time", "random", "global",
-  "debug", "sendMessage", "broadcastMessage",
+  "debug", "sendMessage", "broadcastMessage", "spawn",
 ];
 
 const ENGINE_LIFECYCLE = [
-  "onStart", "onUpdate", "onFixedUpdate", "onCollision",
+  "onStart", "onClone", "onUpdate", "onFixedUpdate", "onCollision",
   "onCollisionEnter", "onCollisionExit", "onTriggerEnter",
   "onTriggerExit", "onMessage", "onDestroy",
 ];
@@ -99,7 +100,7 @@ const ENGINE_MEMBERS = [
   // Debug
   "show", "showFps", "log", "clear", "clearAll",
   // Entity-level (this.*, not tied to a sub-object)
-  "destroy", "destroyed", "visible", "enabled", "tag",
+  "destroy", "destroyed", "visible", "enabled", "tag", "isClone", "spawn",
 ];
 
 const THEME_NAME = "zenengine-dark";
@@ -119,8 +120,8 @@ export function defineZenTheme(monaco) {
     inherit: true,
     rules: [
       // Engine classes/globals (find, scene, physics, input, time,
-      // random, global, debug, sendMessage, broadcastMessage) — a
-      // warm gold, distinct from both keywords (blue) and strings
+      // random, global, debug, sendMessage, broadcastMessage, spawn) —
+      // a warm gold, distinct from both keywords (blue) and strings
       // (orange), so they read as "this is a Thing the engine gives you".
       { token: "zen-global", foreground: "e0af68", fontStyle: "bold" },
       // Engine objects (this.sprite, this.rigidbody, etc.) — teal,

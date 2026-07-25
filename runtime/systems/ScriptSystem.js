@@ -10,6 +10,10 @@
  *
  * Lifecycle events called automatically:
  *   onStart()          — once, before the first onUpdate
+ *   onClone()          — once, ONLY on entities created by spawn()
+ *                         (see ScriptAPI.spawn()), called right
+ *                         BEFORE onStart() on that same instance. Never
+ *                         fires for entities loaded from the scene file.
  *   onUpdate(dt)       — every render frame
  *   onFixedUpdate(dt)  — at a fixed 60 Hz timestep (accumulator)
  *   onCollision(other)      — when this entity's collider touches another (enter)
@@ -233,6 +237,7 @@ export class ScriptSystem {
         "  onTriggerEnter: typeof onTriggerEnter !== 'undefined' ? onTriggerEnter : null,\n" +
         "  onTriggerExit: typeof onTriggerExit !== 'undefined' ? onTriggerExit : null,\n" +
         "  onMessage: typeof onMessage !== 'undefined' ? onMessage : null,\n" +
+        "  onClone: typeof onClone !== 'undefined' ? onClone : null,\n" +
         "  onDestroy: typeof onDestroy !== 'undefined' ? onDestroy : null,\n" +
         "};\n"
       );
@@ -243,56 +248,115 @@ export class ScriptSystem {
     }
   }
 
+  /**
+   * Compiles + starts every Script instance on ONE entity. Shared by:
+   *  - _initScripts() — the once-per-scene full pass over every SCRIPT
+   *    entity present when the scene first starts.
+   *  - _initNewInstances() — the lightweight per-frame pass that picks
+   *    up any entity that DIDN'T exist yet at that first pass, i.e. one
+   *    spawned at runtime via spawn() (see ScriptAPI.spawn),
+   *    or any other Script-bearing entity created by engine code later.
+   *
+   * @param {import('../core/Entity.js').Entity} entity
+   * @param {boolean} isClone true if this entity was created via
+   *   spawn() — passed through so onClone() fires (and
+   *   this.isClone reads true) for exactly those instances, matching
+   *   Unity's convention that a runtime Instantiate()'d object's own
+   *   scripts know they're a clone from their very first onStart().
+   */
+  _initEntityScripts(entity, isClone) {
+    const script = entity.getComponent(SCRIPT);
+    if (!script || !script.enabled || !script.source) return;
+
+    const factory = this._compile(script.scriptName, script.source);
+    if (!factory) return;
+
+    try {
+      const g = this.scriptApi.getGlobals();
+      const handlers = factory(
+        g.find, g.scene, g.physics, g.input, g.time, g.random, g.global, g.debug,
+        g.sendMessage, g.broadcastMessage,
+        console, Math
+      );
+      const context = this.scriptApi.createEntityContext(entity);
+      if (isClone) context._isClone = true;
+
+      if (!this.instances.has(entity.id)) {
+        this.instances.set(entity.id, []);
+      }
+      const inst = {
+        handlers,
+        context,
+        scriptName: script.scriptName,
+        enabled: true,
+        started: false,
+      };
+      this.instances.get(entity.id).push(inst);
+
+      // onClone fires ONCE, right before onStart, and ONLY for clones —
+      // same try/catch/disable behavior as onStart below, since like
+      // onStart it only ever runs once and there's no "next frame" to
+      // retry a botched onClone on.
+      if (isClone && inst.handlers.onClone) {
+        try {
+          this._invoke(inst, inst.handlers.onClone);
+        } catch (err) {
+          this._reportError(script.scriptName, err, "onClone");
+          inst.enabled = false;
+        }
+      }
+
+      if (inst.enabled && inst.handlers.onStart) {
+        try {
+          this._invoke(inst, inst.handlers.onStart);
+          inst.started = true;
+        } catch (err) {
+          // onStart only ever runs once — there's no "next frame" to
+          // retry it on, and letting onUpdate run against state
+          // onStart never got to set up would likely just throw
+          // again immediately. This is the one case that still
+          // disables the instance; every other lifecycle call below
+          // recovers on its own next frame instead.
+          this._reportError(script.scriptName, err, "onStart");
+          inst.enabled = false;
+        }
+      } else if (inst.enabled) {
+        inst.started = true;
+      }
+    } catch (err) {
+      this._reportError(script.scriptName, err, "init");
+    }
+  }
+
   _initScripts(world) {
     const entities = world.query(SCRIPT);
     for (const entity of entities) {
-      const script = entity.getComponent(SCRIPT);
-      if (!script || !script.enabled || !script.source) continue;
+      this._initEntityScripts(entity, false);
+    }
+  }
 
-      const factory = this._compile(script.scriptName, script.source);
-      if (!factory) continue;
-
-      try {
-        const g = this.scriptApi.getGlobals();
-        const handlers = factory(
-          g.find, g.scene, g.physics, g.input, g.time, g.random, g.global, g.debug,
-          g.sendMessage, g.broadcastMessage,
-          console, Math
-        );
-        const context = this.scriptApi.createEntityContext(entity);
-
-        if (!this.instances.has(entity.id)) {
-          this.instances.set(entity.id, []);
-        }
-        const inst = {
-          handlers,
-          context,
-          scriptName: script.scriptName,
-          enabled: true,
-          started: false,
-        };
-        this.instances.get(entity.id).push(inst);
-
-        if (inst.handlers.onStart) {
-          try {
-            this._invoke(inst, inst.handlers.onStart);
-            inst.started = true;
-          } catch (err) {
-            // onStart only ever runs once — there's no "next frame" to
-            // retry it on, and letting onUpdate run against state
-            // onStart never got to set up would likely just throw
-            // again immediately. This is the one case that still
-            // disables the instance; every other lifecycle call below
-            // recovers on its own next frame instead.
-            this._reportError(script.scriptName, err, "onStart");
-            inst.enabled = false;
-          }
-        } else {
-          inst.started = true;
-        }
-      } catch (err) {
-        this._reportError(script.scriptName, err, "init");
-      }
+  /**
+   * Runs every frame (cheap: world.query(SCRIPT) is already an O(n)
+   * active-entity scan RenderSystem/PhysicsWorld both also do every
+   * frame — no extra bookkeeping needed) and compiles/starts scripts
+   * for any SCRIPT entity that isn't in `this.instances` yet. This is
+   * what makes a clone's onClone()/onStart() actually fire: spawn()
+   * only creates the Entity + components (see SceneSerializer.cloneEntity)
+   * — it never touches ScriptSystem directly — so without this pass a
+   * clone's Script component would sit there compiled-but-never-run
+   * forever, since the one-time _initScripts() pass already happened
+   * before the clone existed.
+   *
+   * Also naturally covers any OTHER runtime-created Script entity
+   * (e.g. a future spawn path that doesn't go through spawn() at all) —
+   * "not in this.instances yet" is the only condition that matters,
+   * not how the entity came to exist.
+   */
+  _initNewInstances(world) {
+    const entities = world.query(SCRIPT);
+    for (const entity of entities) {
+      if (this.instances.has(entity.id)) continue;
+      this._initEntityScripts(entity, !!entity.__isClone);
     }
   }
 
@@ -314,6 +378,12 @@ export class ScriptSystem {
     if (!this._started) {
       this._started = true;
       this._initScripts(world);
+    } else {
+      // Picks up any Script entity that didn't exist during the pass
+      // above — i.e. anything spawned at runtime via spawn()
+      // since last frame. Skipped on the very first frame itself since
+      // _initScripts() just did the identical work for the whole scene.
+      this._initNewInstances(world);
     }
 
     // Update time
