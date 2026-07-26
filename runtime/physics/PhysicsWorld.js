@@ -263,6 +263,36 @@ export class PhysicsWorld {
   }
 
   /**
+   * Finds every entity whose Collider2D shape actually contains the
+   * given WORLD-space point — i.e. real shape-accurate hit-testing
+   * (box/circle/capsule/triangle, including rotation), not just a
+   * bounding-box check. This is what powers mouse.clickedOn(),
+   * this.isClicked, and mouse.isOver() in ScriptAPI — Rapier is
+   * already tracking every one of these shapes for physics, so this
+   * reuses that instead of reimplementing per-shape point tests.
+   *
+   * Returns entities ordered arbitrarily (Rapier's own broad-phase
+   * order, not z/depth order) — if several overlapping colliders
+   * contain the point, ALL of them are returned; the caller decides
+   * what "the" clicked object means for its use case.
+   *
+   * @param {number} x world-space x
+   * @param {number} y world-space y
+   * @returns {string[]} entityIds whose collider contains the point (possibly empty)
+   */
+  entityAtPoint(x, y) {
+    if (!this.ready || !this.rapierWorld) return [];
+    const found = [];
+    const point = { x, y };
+    this.rapierWorld.intersectionsWithPoint(point, (collider) => {
+      const entityId = this._colliderHandleMap.get(collider.handle);
+      if (entityId) found.push(entityId);
+      return true; // keep searching — a point can be inside multiple overlapping colliders
+    });
+    return found;
+  }
+
+  /**
    * Creates/updates Rapier bodies+colliders to match current ECS state,
    * steps the simulation, then writes results back to Transform.
    * No-ops silently until Rapier finishes loading (whenReady()).

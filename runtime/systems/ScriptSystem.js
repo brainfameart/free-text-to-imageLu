@@ -6,7 +6,7 @@
  * or the editor's scope. Each script's `this` is an EntityContext built
  * by ScriptAPI (see scripting/ScriptAPI.js), giving it safe access to
  * this.x, this.transform, this.sprite, find(), scene, physics, input,
- * time, random, and global.
+ * mouse, touch, time, random, and global.
  *
  * Lifecycle events called automatically:
  *   onStart()          — once, before the first onUpdate
@@ -15,6 +15,8 @@
  *                         BEFORE onStart() on that same instance. Never
  *                         fires for entities loaded from the scene file.
  *   onUpdate(dt)       — every render frame
+ *   onClick()          — the frame the mouse/a finger is pressed while
+ *                         over this entity's collider (needs Collider2D)
  *   onFixedUpdate(dt)  — at a fixed 60 Hz timestep (accumulator)
  *   onCollision(other)      — when this entity's collider touches another (enter)
  *   onCollisionEnter(other) — alias for onCollision; prefer this for clarity
@@ -128,6 +130,15 @@ export class ScriptSystem {
     };
     scriptApi._cancelWaitFn = function(timerId) {
       self._cancelWait(timerId);
+    };
+    // repeat() / cancelRepeat() — same timer mechanism as wait(), just
+    // re-armed instead of removed each time it fires. See
+    // _scheduleRepeat()'s doc comment below.
+    scriptApi._repeatFn = function(seconds, callback) {
+      return self._scheduleRepeat(seconds, callback);
+    };
+    scriptApi._cancelRepeatFn = function(timerId) {
+      self._cancelRepeat(timerId);
     };
   }
 
@@ -253,12 +264,13 @@ export class ScriptSystem {
     try {
       const factory = new Function(
         "find", "scene", "physics", "input", "time", "random", "global", "debug",
-        "sendMessage", "broadcastMessage", "spawn", "wait", "cancelWait",
+        "sendMessage", "broadcastMessage", "spawn", "wait", "cancelWait", "repeat", "cancelRepeat",
         "console", "Math",
         '"use strict";\n' + source + '\n' +
         "return {\n" +
         "  onStart: typeof onStart !== 'undefined' ? onStart : null,\n" +
         "  onUpdate: typeof onUpdate !== 'undefined' ? onUpdate : null,\n" +
+        "  onClick: typeof onClick !== 'undefined' ? onClick : null,\n" +
         "  onFixedUpdate: typeof onFixedUpdate !== 'undefined' ? onFixedUpdate : null,\n" +
         "  onCollision: typeof onCollision !== 'undefined' ? onCollision : null,\n" +
         "  onCollisionEnter: typeof onCollisionEnter !== 'undefined' ? onCollisionEnter : null,\n" +
@@ -304,7 +316,7 @@ export class ScriptSystem {
       const g = this.scriptApi.getGlobals();
       const handlers = factory(
         g.find, g.scene, g.physics, g.input, g.time, g.random, g.global, g.debug,
-        g.sendMessage, g.broadcastMessage, g.spawn, g.wait, g.cancelWait,
+        g.sendMessage, g.broadcastMessage, g.spawn, g.wait, g.cancelWait, g.repeat, g.cancelRepeat,
         console, Math
       );
       const context = this.scriptApi.createEntityContext(entity);
@@ -400,25 +412,31 @@ export class ScriptSystem {
   }
 
   /**
-   * Schedules `callback` to run once, after `seconds` of game time have
-   * elapsed — the engine's equivalent of a beginner-friendly
-   * setTimeout, but one that plays correctly with entities being
-   * destroyed and scenes restarting/switching (a plain setTimeout would
-   * happily fire minutes later against an entity — or an entire scene —
-   * that no longer exists).
+   * Shared scheduling logic behind wait() and repeat() — the engine's
+   * equivalent of a beginner-friendly setTimeout/setInterval, but one
+   * that plays correctly with entities being destroyed and scenes
+   * restarting/switching (a plain setTimeout/setInterval would happily
+   * keep firing against an entity — or an entire scene — that no
+   * longer exists).
+   *
+   * ONE-SHOT vs REPEATING: `interval === null` means wait()'s "run
+   * once" behavior — the timer is removed after it fires. A number
+   * means repeat()'s "run every N seconds forever" behavior — see
+   * _tickTimers() below for how re-arming works.
    *
    * OWNERSHIP: a timer is tied to whichever entity's script called
-   * wait() — read from this._activeContext, the same "who's currently
-   * running" tracking _invoke() already maintains for every other
-   * lifecycle call. That entity is the timer's owner:
+   * wait()/repeat() — read from this._activeContext, the same "who's
+   * currently running" tracking _invoke() already maintains for every
+   * other lifecycle call. That entity is the timer's owner:
    *   - if the OWNER is destroyed (this.destroy()) before the timer
-   *     fires, the timer is cancelled — see _flushDestroyed()'s call
-   *     into _cancelTimersForEntity() below.
-   *   - if the SCENE restarts or switches before the timer fires, ALL
-   *     timers are cancelled — see destroy() below, the same whole-
-   *     scene teardown that already clears every script instance.
-   * Either way the callback simply never runs; nothing throws, nothing
-   * needs to check this.destroyed inside the callback itself.
+   *     fires (or fires again, for repeat()), the timer is cancelled —
+   *     see _flushDestroyed()'s call into _cancelTimersForEntity()
+   *     below.
+   *   - if the SCENE restarts or switches, ALL timers are cancelled —
+   *     see destroy() below, the same whole-scene teardown that
+   *     already clears every script instance.
+   * Either way the callback simply never runs again; nothing throws,
+   * nothing needs to check this.destroyed inside the callback itself.
    *
    * The callback runs with `this` bound to the OWNER's own
    * EntityContext (via _invoke, same as onUpdate/onStart/etc.), so
@@ -436,26 +454,30 @@ export class ScriptSystem {
    *
    * @param {number} seconds must be >= 0; 0 fires on the very next update()
    * @param {function} callback
-   * @returns {number} a timer id you can pass to cancelWait(id), or -1
-   *   if there was no active entity to own the timer
+   * @param {number|null} interval seconds between repeats (repeat()), or null for a one-shot (wait())
+   * @returns {number} a timer id you can pass to cancelWait()/cancelRepeat(),
+   *   or -1 if there was no active entity to own the timer
    */
-  _scheduleWait(seconds, callback) {
+  _scheduleTimer(seconds, callback, interval) {
     if (typeof callback !== "function") {
       if (typeof console !== "undefined") {
-        console.warn("[wait] second argument must be a function, e.g. wait(2, function() { ... })");
+        const fnName = interval == null ? "wait" : "repeat";
+        console.warn(`[${fnName}] second argument must be a function, e.g. ${fnName}(2, function() { ... })`);
       }
       return -1;
     }
     const context = this._activeContext;
     if (!context) {
       if (typeof console !== "undefined") {
-        console.warn("[wait] called outside a lifecycle function (onStart/onUpdate/etc.) — ignored, there's no entity to run it on");
+        const fnName = interval == null ? "wait" : "repeat";
+        console.warn(`[${fnName}] called outside a lifecycle function (onStart/onUpdate/etc.) — ignored, there's no entity to run it on`);
       }
       return -1;
     }
     const entityId = context._entity.id;
     const timer = {
       remaining: Math.max(0, Number(seconds) || 0),
+      interval: interval == null ? null : Math.max(0, Number(interval) || 0),
       callback,
       context,
       id: this._nextTimerId++,
@@ -466,10 +488,45 @@ export class ScriptSystem {
     return timer.id;
   }
 
+  /** One-shot form — see _scheduleTimer()'s doc comment above for the
+   *  full ownership/cancellation contract shared with repeat(). */
+  _scheduleWait(seconds, callback) {
+    return this._scheduleTimer(seconds, callback, null);
+  }
+
   /**
-   * Cancels a single pending timer by the id wait() returned. Safe to
-   * call with an id that already fired or was already cancelled — a
-   * no-op in both cases, same as the DOM's clearTimeout.
+   * Schedules `callback` to run every `seconds`, starting `seconds`
+   * from now (same beat as Unity's InvokeRepeating with equal delay
+   * and interval) — the beginner-friendly way to do "spawn an enemy
+   * every 2 seconds" without hand-writing a self-rescheduling wait():
+   *   function onStart() {
+   *     repeat(2, function () {
+   *       spawn("Enemy", { x: random.int(0, 800), y: 0 });
+   *     });
+   *   }
+   * Runs FOREVER until you call cancelRepeat(id)/this.cancelRepeat(id),
+   * the owning entity is destroyed, or the scene restarts/switches —
+   * exactly the same auto-cancellation rules as wait(), since this is
+   * literally the same timer mechanism underneath, just re-armed
+   * instead of removed each time it fires. There is deliberately no
+   * separate "forever loop" construct in this engine beyond onUpdate()
+   * and repeat() — a real infinite loop (while(true)) would freeze the
+   * tab, since scripts run synchronously within a single frame with no
+   * yield point for the engine to keep rendering.
+   * @param {number} seconds interval between calls, and also the delay before the first one
+   * @param {function} callback
+   * @returns {number} timer id usable with cancelRepeat()
+   */
+  _scheduleRepeat(seconds, callback) {
+    return this._scheduleTimer(seconds, callback, seconds);
+  }
+
+  /**
+   * Cancels a single pending timer by the id wait()/repeat() returned.
+   * Works on BOTH kinds — a one-shot wait() or an ongoing repeat() —
+   * since they're the same underlying timer object. Safe to call with
+   * an id that already fired (wait()) or was already cancelled — a
+   * no-op in both cases, same as the DOM's clearTimeout/clearInterval.
    * @param {number} timerId
    */
   _cancelWait(timerId) {
@@ -481,6 +538,14 @@ export class ScriptSystem {
         }
       }
     }
+  }
+
+  /** Alias of _cancelWait — cancelRepeat() and cancelWait() are
+   *  literally the same operation under the hood (both just flag the
+   *  timer as cancelled), kept as two names purely so repeat()'s API
+   *  reads symmetrically with wait()'s rather than mixing vocabulary. */
+  _cancelRepeat(timerId) {
+    this._cancelWait(timerId);
   }
 
   /**
@@ -500,12 +565,23 @@ export class ScriptSystem {
    * pass — matches Unity's Invoke()/coroutine timing, which also
    * resolve after that frame's Update() has run.
    *
-   * A timer firing is allowed to schedule ANOTHER wait() (including
-   * from inside its own callback) — that new timer simply lands in
-   * next frame's pass, same as calling wait() from onUpdate would.
-   * Iterates over a COPY of each entity's list before clearing fired/
-   * cancelled ones out, so a callback that itself calls wait() again
-   * doesn't mutate the array while this loop is still reading it.
+   * A ONE-SHOT timer (wait(), timer.interval === null) is removed once
+   * it fires. A REPEATING timer (repeat(), timer.interval is a number)
+   * is instead RE-ARMED with `remaining = interval` and kept — same
+   * timer object, same id, so a cancelRepeat(id) issued at any point
+   * still finds and stops it. Re-arming happens AFTER the callback
+   * runs, so if that callback itself calls cancelRepeat() on its own
+   * timer (or this.destroy()s its own entity), we check `cancelled`
+   * again — and that the entity's timer list still exists at all —
+   * before putting it back, rather than resurrecting a timer someone
+   * just asked to stop.
+   *
+   * A timer firing is allowed to schedule ANOTHER wait()/repeat()
+   * (including from inside its own callback) — that new timer simply
+   * lands in next frame's pass. Iterates over a COPY of each entity's
+   * list before writing the surviving ones back, so a callback that
+   * itself calls wait()/repeat() again doesn't mutate the array while
+   * this loop is still reading it.
    */
   _tickTimers(dt) {
     if (this._timers.size === 0) return;
@@ -518,14 +594,25 @@ export class ScriptSystem {
           stillPending.push(timer);
           continue;
         }
+        const fnName = timer.interval == null ? "wait" : "repeat";
         try {
           timer.callback.call(timer.context);
         } catch (err) {
           this._reportError(
-            (timer.context && timer.context._entity && timer.context._entity.name) || "wait()",
+            (timer.context && timer.context._entity && timer.context._entity.name) || fnName + "()",
             err,
-            "wait"
+            fnName
           );
+          // An erroring repeat() callback would just throw again next
+          // interval forever, spamming the error log — stop it here,
+          // same call _initEntityScripts makes for a bad onStart.
+          continue;
+        }
+        // Re-arm if this is a repeat() timer that wasn't cancelled (or
+        // its owning entity destroyed) from inside the callback itself.
+        if (timer.interval != null && !timer.cancelled && this._timers.has(entityId)) {
+          timer.remaining = timer.interval;
+          stillPending.push(timer);
         }
       }
       if (stillPending.length > 0) {
@@ -576,6 +663,30 @@ export class ScriptSystem {
           // The rest of the game (and this entity's other lifecycle
           // methods) keeps running; onUpdate is tried again next frame.
           this._reportError(inst.scriptName, err, "onUpdate");
+        }
+      }
+    }
+
+    // onClick — fires on whichever entities were actually under the
+    // pointer the SAME frame the (left) mouse button/a finger went
+    // down. Only runs the real hit-test query when a click actually
+    // happened this frame (mouse.pressed(0) is a one-frame pulse) —
+    // no per-entity physics query on every ordinary frame, since a
+    // click is a comparatively rare event next to onUpdate running
+    // every single frame regardless.
+    if (this.scriptApi && this.scriptApi._mouse && this.scriptApi._mouse.buttonsPressed.has(0)) {
+      const clicked = this.scriptApi._entitiesAtPoint(this.scriptApi._mouse.x, this.scriptApi._mouse.y);
+      for (const ctx of clicked) {
+        const entityId = ctx._entity.id;
+        const instances = this.instances.get(entityId);
+        if (!instances) continue;
+        for (const inst of instances) {
+          if (!inst.enabled || !inst.handlers.onClick) continue;
+          try {
+            this._invoke(inst, inst.handlers.onClick);
+          } catch (err) {
+            this._reportError(inst.scriptName, err, "onClick");
+          }
         }
       }
     }

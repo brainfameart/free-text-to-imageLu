@@ -140,6 +140,23 @@ export function createGame({ pixiApp, followMainCamera = false }) {
   world.addSystem(audioSystem);
 
   const scriptApi = new ScriptAPI(world);
+  // Wires up mouse.x/y, mouse.down()/pressed(), touch, this.isClicked,
+  // this.isPointerOver, etc. against the ACTUAL game canvas — must run
+  // here (not inside ScriptAPI's own constructor) because it needs both
+  // pixiApp.view (the canvas) and renderSystem (for correct screen-to-
+  // world coordinate conversion through the live camera transform),
+  // neither of which exists yet when `new ScriptAPI(world)` runs above.
+  scriptApi.attachPointerInput(pixiApp.view, renderSystem);
+  // Backs mouse.isOver()/clickedOn() and this.isPointerOver/isClicked
+  // with REAL Rapier shape queries (PhysicsWorld.entityAtPoint) rather
+  // than a bounding-box guess — same reasoning as every other physics-
+  // backed API wired in below (setScriptSystem, etc.): PhysicsWorld
+  // already tracks every Collider2D's true shape for the physics
+  // simulation itself, so click hit-testing reuses that instead of
+  // re-deriving box/circle/capsule/triangle math a second time here.
+  scriptApi._physicsHitTestFn = function (x, y) {
+    return physicsSystem.physicsWorld.entityAtPoint(x, y);
+  };
   // ScriptSystem runs user-attached scripts ONLY during the game loop
   // (play-mode popup / standalone player) — never in the editor, which
   // only calls syncSpriteRender() selectively, never game.loop.start().

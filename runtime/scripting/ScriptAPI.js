@@ -203,6 +203,46 @@ class EntityContext {
   }
 
   /**
+   * True while the mouse cursor (or, on a touchscreen, any active
+   * finger) is currently over THIS entity's own collider shape — real
+   * shape-accurate hit-testing, same as mouse.isOver("Name") but
+   * without needing to look this entity up by name/tag since you're
+   * already inside its own script:
+   *   function onUpdate() {
+   *     this.sprite.opacity = this.isPointerOver ? 1 : 0.6; // hover highlight
+   *   }
+   * Requires this entity to have a Collider2D — an entity with no
+   * collider can never register as "under" the pointer.
+   */
+  get isPointerOver() {
+    var hits = this._scriptApi._entitiesAtPoint(this._scriptApi._mouse.x, this._scriptApi._mouse.y);
+    for (var i = 0; i < hits.length; i++) {
+      if (hits[i]._entity.id === this._entity.id) return true;
+    }
+    return false;
+  }
+
+  /**
+   * True for exactly the one frame the left mouse button (or a finger,
+   * on a touchscreen) was pressed while over THIS entity — the
+   * beginner-friendly "was I just clicked" check, meant to be read
+   * inside onUpdate():
+   *   function onUpdate() {
+   *     if (this.isClicked) { this.destroy(); } // click to pop
+   *   }
+   * Same underlying hit-test as mouse.clickedOn("Name"), just phrased
+   * as "did it happen to ME" instead of a name/tag lookup. For a
+   * button other than left-click, use mouse.clickedOn(this.name, button)
+   * instead — this shortcut always checks the left button (0), the
+   * overwhelmingly common case for "click this thing" on both desktop
+   * and mobile (a tap registers as left-click/button 0).
+   */
+  get isClicked() {
+    if (!this._scriptApi._mouse.buttonsPressed.has(0)) return false;
+    return this.isPointerOver;
+  }
+
+  /**
    * Spawns a runtime copy of ANOTHER entity, positioned at (x, y) if
    * given (otherwise at the source's own position) — Unity's
    * Object.Instantiate(original, position) as an instance method, so
@@ -238,6 +278,35 @@ class EntityContext {
    */
   cancelWait(timerId) {
     this._scriptApi.cancelWait(timerId);
+  }
+
+  /**
+   * Runs `callback` every `seconds`, forever, starting `seconds` from
+   * now — the instance-method form of the global repeat():
+   *   this.repeat(2, function () { this.hp += 1; }); // regen over time
+   * Same auto-cancel-on-destroy/restart/scene-switch behavior as
+   * wait(). See ScriptAPI.repeat() for full details, and cancelRepeat()/
+   * this.cancelRepeat() to stop it early.
+   * @param {number} seconds
+   * @param {function} callback
+   * @returns {number} timer id usable with cancelRepeat()/this.cancelRepeat()
+   */
+  repeat(seconds, callback) {
+    return this._scriptApi.repeat(seconds, callback);
+  }
+
+  /**
+   * Stops a repeat() started by this entity. No-op if it was already
+   * cancelled. Commonly called from inside the repeat's OWN callback
+   * once some condition is met:
+   *   var id = this.repeat(1, function () {
+   *     this.hp -= 1;
+   *     if (this.hp <= 0) this.cancelRepeat(id);
+   *   });
+   * @param {number} timerId
+   */
+  cancelRepeat(timerId) {
+    this._scriptApi.cancelRepeat(timerId);
   }
 
   // NOTE: velocity, sprite (texture/color/flip/opacity), and rigidbody
@@ -295,6 +364,49 @@ export class ScriptAPI {
     this._keysDown = new Set();
     this._keysPressed = new Set();
 
+    /**
+     * Mouse/pointer state. World-space x/y are recomputed every time the
+     * pointer moves (see attachPointerInput below) by inverting
+     * worldContainer's live transform — so they stay correct through
+     * camera pan/zoom/rotation and window resizing without this class
+     * needing to know anything about cameras itself.
+     * buttonsDown/buttonsPressed/buttonsReleased mirror the
+     * keysDown/keysPressed pattern: "Pressed"/"Released" are one-frame
+     * pulses, cleared at the end of every frame by _clearFrameKeys().
+     * Button numbers match the DOM's e.button (0=left, 1=middle, 2=right).
+     */
+    this._mouse = {
+      x: 0, y: 0,               // world-space, updated live as the pointer moves
+      screenX: 0, screenY: 0,   // canvas-pixel space (0,0 = top-left of the game view)
+      buttonsDown: new Set(),
+      buttonsPressed: new Set(),
+      buttonsReleased: new Set(),
+      /** True while the pointer is anywhere over the game canvas at all. */
+      over: false,
+    };
+
+    /**
+     * Active touches, keyed by the browser's own pointerId/identifier so
+     * a specific finger can be tracked across move events even with
+     * several fingers down at once. Each entry:
+     *   { id, x, y, screenX, screenY, startX, startY }
+     * world x/y computed the same way mouse.x/y are. startX/startY are
+     * WORLD-space too, captured once at touchstart, so scripts can
+     * measure a swipe/drag distance without storing anything themselves:
+     *   touch.x - touch.startX
+     * @type {Map<number, object>}
+     */
+    this._touches = new Map();
+    /** Touch ids that just went down this frame (one-frame pulse, like
+     *  buttonsPressed) — lets `touch.justStarted` work without the
+     *  script tracking previous-frame state itself. */
+    this._touchesStarted = new Set();
+    /** Touch ids that were just lifted/cancelled this frame. Kept ONE
+     *  frame after removal from _touches so a script reading
+     *  touch.justEnded during onUpdate still sees it — cleared at the
+     *  same point buttonsPressed/keysPressed are. */
+    this._touchesEnded = new Set();
+
     /** Updated by ScriptSystem each frame */
     this.time = { deltaTime: 0, elapsed: 0 };
 
@@ -323,6 +435,19 @@ export class ScriptAPI {
     this._waitFn = null;
     /** Set by ScriptSystem constructor to enable cancelWait(timerId) */
     this._cancelWaitFn = null;
+    /** Set by ScriptSystem constructor to enable repeat(seconds, callback) */
+    this._repeatFn = null;
+    /** Set by ScriptSystem constructor to enable cancelRepeat(timerId) */
+    this._cancelRepeatFn = null;
+    /** Set by createGame to enable mouse.clickedOn()/isOver() and
+     *  this.isClicked/this.isPointerOver — a (x, y) -> entityId[]
+     *  function backed by PhysicsWorld.entityAtPoint (real Rapier
+     *  shape queries, not a bounding-box guess). null until physics
+     *  finishes loading OR outside a play/editor context that wires it
+     *  (e.g. running scripts isn't possible at all without this, so in
+     *  practice this is always set before any script runs — kept
+     *  nullable defensively, same as every other _*Fn hook here). */
+    this._physicsHitTestFn = null;
 
     this._setupInput();
   }
@@ -347,12 +472,138 @@ export class ScriptAPI {
     });
     window.addEventListener("blur", function () {
       self._keysDown.clear();
+      // A window losing focus mid-drag/click is exactly like alt-tabbing
+      // mid-keypress — the browser will never send the matching
+      // mouseup/touchend, so without this a button/finger could get
+      // stuck "down" forever from the game's point of view.
+      self._mouse.buttonsDown.clear();
+      self._touches.clear();
     });
   }
 
-  /** Called by ScriptSystem at the end of each frame. */
+  /**
+   * Wires up mouse + touch input against the actual game canvas. Called
+   * once by createGame() (runtime/index.js) — NOT from the constructor,
+   * because unlike keyboard input (which listens on `window` and needs
+   * nothing else) pointer input needs to know both WHICH canvas is the
+   * game view and how to convert a screen pixel into a world position,
+   * and neither of those exists yet at ScriptAPI construction time.
+   *
+   * @param {HTMLCanvasElement} canvas the PIXI Application's own canvas (pixiApp.view)
+   * @param {import('../systems/RenderSystem.js').RenderSystem} renderSystem
+   *   used for renderSystem.worldContainer.toLocal(...) — the SAME live
+   *   PIXI transform (pan/zoom/rotation/camera-follow) sprites are
+   *   already drawn through, so mouse.x/y always land exactly where the
+   *   sprite under the cursor visually is, with no coordinate math
+   *   duplicated here that could drift out of sync with rendering.
+   */
+  attachPointerInput(canvas, renderSystem) {
+    if (!canvas || typeof window === "undefined") return;
+    var self = this;
+
+    /**
+     * Converts a browser pointer event's page coordinates into both
+     * screen-pixel (canvas-local) and world-space coordinates, and
+     * writes them onto this._mouse. Shared by mouse AND touch handling
+     * below — a "finger" and "the mouse" are the same underlying
+     * screen→world conversion, just sourced from different browser
+     * event types.
+     * @param {number} clientX
+     * @param {number} clientY
+     * @returns {{screenX:number, screenY:number, worldX:number, worldY:number}}
+     */
+    function toCoords(clientX, clientY) {
+      var rect = canvas.getBoundingClientRect();
+      // canvas.width/height are the REAL backing-buffer resolution;
+      // rect.width/height are the CSS-displayed size, which can differ
+      // (responsive scaling, devicePixelRatio) — dividing by rect and
+      // multiplying by the backing size corrects for that, so
+      // screenX/screenY always land in actual game-pixel space
+      // regardless of how the canvas is stretched on the page.
+      var scaleX = canvas.width / rect.width;
+      var scaleY = canvas.height / rect.height;
+      var screenX = (clientX - rect.left) * scaleX;
+      var screenY = (clientY - rect.top) * scaleY;
+      var world = { x: screenX, y: screenY };
+      if (renderSystem && renderSystem.worldContainer && renderSystem.worldContainer.toLocal) {
+        // toLocal inverts worldContainer's CURRENT scale/rotation/position
+        // in one call — the exact inverse of however _applyMainCameraOffset
+        // (RenderSystem.js) positioned it this frame, so this stays correct
+        // through camera pan/zoom/rotation without reimplementing that math.
+        var local = renderSystem.worldContainer.toLocal({ x: screenX, y: screenY });
+        world = { x: local.x, y: local.y };
+      }
+      return { screenX: screenX, screenY: screenY, worldX: world.x, worldY: world.y };
+    }
+
+    canvas.addEventListener("pointermove", function (e) {
+      var c = toCoords(e.clientX, e.clientY);
+      self._mouse.x = c.worldX;
+      self._mouse.y = c.worldY;
+      self._mouse.screenX = c.screenX;
+      self._mouse.screenY = c.screenY;
+      self._mouse.over = true;
+
+      // Mobile browsers fire pointermove for touch drags too — mirror
+      // that finger's position into _touches so a script reading
+      // touch.x mid-drag sees the live position, not just where it
+      // started. pointerType distinguishes an actual finger from a
+      // mouse move so we don't create a phantom touch entry from mouse
+      // movement on a touch-capable laptop.
+      if (e.pointerType === "touch" && self._touches.has(e.pointerId)) {
+        var t = self._touches.get(e.pointerId);
+        t.x = c.worldX; t.y = c.worldY;
+        t.screenX = c.screenX; t.screenY = c.screenY;
+      }
+    });
+    canvas.addEventListener("pointerleave", function () {
+      self._mouse.over = false;
+    });
+    canvas.addEventListener("pointerdown", function (e) {
+      var c = toCoords(e.clientX, e.clientY);
+      if (e.pointerType === "touch") {
+        self._touches.set(e.pointerId, {
+          id: e.pointerId,
+          x: c.worldX, y: c.worldY,
+          screenX: c.screenX, screenY: c.screenY,
+          startX: c.worldX, startY: c.worldY,
+        });
+        self._touchesStarted.add(e.pointerId);
+      } else {
+        self._mouse.buttonsDown.add(e.button);
+        self._mouse.buttonsPressed.add(e.button);
+      }
+    });
+    function endPointer(e) {
+      if (e.pointerType === "touch") {
+        if (self._touches.has(e.pointerId)) {
+          self._touches.delete(e.pointerId);
+          self._touchesEnded.add(e.pointerId);
+        }
+      } else {
+        self._mouse.buttonsDown.delete(e.button);
+        self._mouse.buttonsReleased.add(e.button);
+      }
+    }
+    canvas.addEventListener("pointerup", endPointer);
+    canvas.addEventListener("pointercancel", endPointer);
+
+    // Right-click normally opens the browser's context menu — suppress
+    // it on the game canvas so mouse.pressed(2) (right click) actually
+    // reaches scripts instead of the menu eating the event.
+    canvas.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+  }
+
+  /** Called by ScriptSystem at the end of each frame — clears every
+   *  one-frame "pulse" flag (keyPressed, mouse.pressed/released,
+   *  touch.justStarted/justEnded) so each only reads true for the
+   *  single frame the event actually happened on. */
   _clearFrameKeys() {
     this._keysPressed.clear();
+    this._mouse.buttonsPressed.clear();
+    this._mouse.buttonsReleased.clear();
+    this._touchesStarted.clear();
+    this._touchesEnded.clear();
   }
 
   /**
@@ -448,6 +699,27 @@ export class ScriptAPI {
   }
 
   /**
+   * Runs `callback` every `seconds`, forever, until cancelled or the
+   * owning entity/scene goes away. Thin passthrough to ScriptSystem's
+   * _scheduleRepeat (wired up as this._repeatFn), same pattern as
+   * wait()/_waitFn — see that method's doc comment for full behavior.
+   * @param {number} seconds
+   * @param {function} callback
+   * @returns {number} timer id, or -1 if there was no active entity
+   */
+  repeat(seconds, callback) {
+    return this._repeatFn ? this._repeatFn(seconds, callback) : -1;
+  }
+
+  /**
+   * Stops a repeat() before its next fire. No-op if already cancelled.
+   * @param {number} timerId
+   */
+  cancelRepeat(timerId) {
+    if (this._cancelRepeatFn) this._cancelRepeatFn(timerId);
+  }
+
+  /**
    * Creates (or returns a cached) EntityContext for the given entity.
    */
   createEntityContext(entity) {
@@ -488,29 +760,49 @@ export class ScriptAPI {
   }
 
   /**
-   * Raycasts a line segment against all collider entities. Returns the
-   * closest hit as { entity, point: {x,y}, distance } or null.
-   * Uses Liang-Barsky segment-vs-AABB intersection.
+   * Real shape-accurate hit-test: which entities' Collider2D actually
+   * contains this WORLD-space point (box/circle/capsule/triangle,
+   * including rotation — not a bounding-box guess). Thin wrapper over
+   * _physicsHitTestFn (wired to PhysicsWorld.entityAtPoint by
+   * createGame — see runtime/index.js), returning EntityContexts
+   * instead of raw ids so callers get the same `this`-shaped object
+   * every other API here returns.
+   * @param {number} x world-space x
+   * @param {number} y world-space y
+   * @returns {object[]} EntityContexts whose collider contains the point (possibly empty)
    */
-  _raycast(x1, y1, x2, y2) {
-    var entities = this.world.query(COLLIDER_2D);
-    var bestHit = null;
-    var bestT = 1;
-    for (var i = 0; i < entities.length; i++) {
-      var ctx = this.createEntityContext(entities[i]);
-      var aabb = ctx._getColliderAABB();
-      if (!aabb) continue;
-      var t = _segmentAABB(x1, y1, x2, y2, aabb.minX, aabb.minY, aabb.maxX, aabb.maxY);
-      if (t !== null && t < bestT) {
-        bestT = t;
-        bestHit = {
-          entity: ctx,
-          point: { x: x1 + (x2 - x1) * t, y: y1 + (y2 - y1) * t },
-          distance: t,
-        };
-      }
+  _entitiesAtPoint(x, y) {
+    if (!this._physicsHitTestFn) return [];
+    var ids = this._physicsHitTestFn(x, y) || [];
+    var out = [];
+    for (var i = 0; i < ids.length; i++) {
+      var entity = this.world.getEntity(ids[i]);
+      if (entity) out.push(this.createEntityContext(entity));
     }
-    return bestHit;
+    return out;
+  }
+
+  /**
+   * Finds the entity currently under the mouse cursor matching
+   * `nameOrTag` (by name, or by tag with opts.byTag), or null if the
+   * cursor isn't over any matching entity right now. Shared by
+   * mouse.isOver()/mouse.clickedOn() (lookup by name/tag) — this.
+   * isClicked/this.isPointerOver instead check ONE specific entity
+   * directly via _entitiesAtPoint, without a name/tag search, since
+   * they already know which entity they are.
+   * @param {string} nameOrTag
+   * @param {{byTag?:boolean}} [opts]
+   * @returns {object|null} EntityContext, or null
+   */
+  _entityUnderMouse(nameOrTag, opts) {
+    opts = opts || {};
+    var hits = this._entitiesAtPoint(this._mouse.x, this._mouse.y);
+    for (var i = 0; i < hits.length; i++) {
+      var entity = hits[i]._entity;
+      var matches = opts.byTag ? entity.tag === nameOrTag : entity.name === nameOrTag;
+      if (matches) return hits[i];
+    }
+    return null;
   }
 
   /**
@@ -610,9 +902,125 @@ export class ScriptAPI {
       cancelWait: function (timerId) {
         if (self._cancelWaitFn) self._cancelWaitFn(timerId);
       },
+      /**
+       * Runs `callback` every `seconds`, forever — the beginner-friendly
+       * way to do repeating actions without writing a self-rescheduling
+       * wait() by hand:
+       *   function onStart() {
+       *     repeat(2, function () {
+       *       spawn("Enemy", { x: random.int(0, 800), y: 0 });
+       *     });
+       *   }
+       * The first call happens `seconds` from now, then every `seconds`
+       * after that, forever, until you call cancelRepeat(id), the
+       * entity is destroyed, or the scene restarts/switches — same
+       * auto-cancellation as wait(). There's no separate "forever loop"
+       * construct in this engine: onUpdate() already runs every frame
+       * for as long as the entity exists, and repeat() covers "do this
+       * every N seconds" — an actual while(true) would freeze the game,
+       * since scripts run synchronously with no pause point mid-frame.
+       * Returns a timer id for cancelRepeat(id).
+       */
+      repeat: function (seconds, callback) {
+        return self._repeatFn ? self._repeatFn(seconds, callback) : -1;
+      },
+      /**
+       * Stops a repeat() before its next fire. Safe to call with an id
+       * that was already cancelled (does nothing).
+       *   var id = repeat(1, function () { ... });
+       *   cancelRepeat(id);
+       */
+      cancelRepeat: function (timerId) {
+        if (self._cancelRepeatFn) self._cancelRepeatFn(timerId);
+      },
       input: {
         keyDown: function (key) { return self._keysDown.has(key); },
         keyPressed: function (key) { return self._keysPressed.has(key); },
+      },
+      /**
+       * Mouse position + buttons. x/y are WORLD coordinates — the same
+       * space this.x/this.y use — so you can compare them directly:
+       *   function onUpdate() {
+       *     this.x = mouse.x; // sprite follows the cursor
+       *   }
+       * screenX/screenY are raw canvas-pixel coordinates instead (0,0
+       * at the top-left of the game view), for UI-style code that
+       * doesn't care about the world/camera at all.
+       * down()/pressed()/released() take a button number: 0 = left,
+       * 1 = middle, 2 = right (same numbering the browser itself uses).
+       * pressed()/released() are true for exactly the one frame the
+       * button changed state, same as input.keyPressed().
+       */
+      mouse: {
+        get x() { return self._mouse.x; },
+        get y() { return self._mouse.y; },
+        get screenX() { return self._mouse.screenX; },
+        get screenY() { return self._mouse.screenY; },
+        /** True while the cursor is anywhere over the game screen. */
+        get over() { return self._mouse.over; },
+        down: function (button) { return self._mouse.buttonsDown.has(button === undefined ? 0 : button); },
+        pressed: function (button) { return self._mouse.buttonsPressed.has(button === undefined ? 0 : button); },
+        released: function (button) { return self._mouse.buttonsReleased.has(button === undefined ? 0 : button); },
+        /**
+         * True if the mouse is currently over the FIRST entity with the
+         * given name (or tag, with {byTag:true}) — real shape-accurate
+         * hit-testing (matches a circle collider as a circle, not its
+         * bounding box), same query this.isPointerOver uses for "this"
+         * entity specifically.
+         *   if (mouse.isOver("PlayButton")) { ... }
+         */
+        isOver: function (nameOrTag, opts) {
+          return self._entityUnderMouse(nameOrTag, opts) !== null;
+        },
+        /**
+         * True the SAME FRAME the given button was pressed while the
+         * cursor was over the named entity (or tag) — the "I clicked
+         * this specific thing" check, combining isOver() + pressed()
+         * into one beginner-friendly call:
+         *   if (mouse.clickedOn("PlayButton")) { scene.load("Level1"); }
+         * Defaults to the left mouse button (0). For "did I click
+         * ANYTHING on this entity, tracked entity-side", see
+         * this.isClicked instead — same underlying check, just phrased
+         * as a property on the object itself rather than a global
+         * lookup by name.
+         */
+        clickedOn: function (nameOrTag, opts, button) {
+          if (typeof opts === "number") { button = opts; opts = undefined; }
+          if (!self._mouse.buttonsPressed.has(button === undefined ? 0 : button)) return false;
+          return self._entityUnderMouse(nameOrTag, opts) !== null;
+        },
+      },
+      /**
+       * Active touches for mobile/touchscreen games — one entry per
+       * finger currently on the screen, keyed by array position (NOT a
+       * stable per-finger index — use touch.id if you need to tell two
+       * fingers apart across frames, e.g. a two-finger pinch gesture).
+       * Each touch has the same shape as mouse: x/y (world), screenX/
+       * screenY (canvas pixels), PLUS startX/startY (world position
+       * where that finger first touched down — handy for measuring a
+       * swipe: touch.x - touch.startX) and justStarted/justEnded
+       * (true for exactly the one frame that finger went down/up).
+       *   function onUpdate() {
+       *     if (touch.count > 0) {
+       *       this.x = touch.first.x; // drag this entity with one finger
+       *     }
+       *   }
+       */
+      get touch() {
+        var list = [];
+        for (var t of self._touches.values()) {
+          list.push({
+            id: t.id,
+            x: t.x, y: t.y,
+            screenX: t.screenX, screenY: t.screenY,
+            startX: t.startX, startY: t.startY,
+            justStarted: self._touchesStarted.has(t.id),
+            justEnded: false,
+          });
+        }
+        list.count = list.length;
+        list.first = list.length > 0 ? list[0] : null;
+        return list;
       },
       time: self.time,
       random: {

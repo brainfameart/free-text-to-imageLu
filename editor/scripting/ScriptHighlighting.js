@@ -31,9 +31,10 @@
 // ─── Color tiers ────────────────────────────────────────────────────────────
 // 1. JavaScript keywords       → Monaco's normal keyword color (untouched)
 // 2. Engine classes/globals    → the top-level names scripts are handed:
-//                                find, scene, physics, input, time, random,
-//                                global, debug, sendMessage, broadcastMessage,
-//                                spawn, wait, cancelWait
+//                                find, scene, physics, input, mouse, touch,
+//                                time, random, global, debug, sendMessage,
+//                                broadcastMessage, spawn, wait, cancelWait,
+//                                repeat, cancelRepeat
 // 3. Engine objects            → the per-entity sub-objects hanging off
 //                                `this`: transform, sprite, rigidbody,
 //                                animator, camera, audio, controller
@@ -46,12 +47,13 @@
 //                                identifier color, i.e. left alone entirely.
 
 const ENGINE_GLOBALS = [
-  "find", "scene", "physics", "input", "time", "random", "global",
-  "debug", "sendMessage", "broadcastMessage", "spawn", "wait", "cancelWait",
+  "find", "scene", "physics", "input", "mouse", "touch", "time", "random",
+  "global", "debug", "sendMessage", "broadcastMessage", "spawn", "wait",
+  "cancelWait", "repeat", "cancelRepeat",
 ];
 
 const ENGINE_LIFECYCLE = [
-  "onStart", "onClone", "onUpdate", "onFixedUpdate", "onCollision",
+  "onStart", "onClone", "onUpdate", "onClick", "onFixedUpdate", "onCollision",
   "onCollisionEnter", "onCollisionExit", "onTriggerEnter",
   "onTriggerExit", "onMessage", "onDestroy",
 ];
@@ -93,6 +95,11 @@ const ENGINE_MEMBERS = [
   "raycast",
   // Input
   "keyDown", "keyPressed",
+  // Mouse / Touch (short generic names like x/y/count are deliberately
+  // NOT listed here, same restraint already applied to Transform's own
+  // x/y above — too likely to false-positive-highlight unrelated user
+  // variables of the same name)
+  "isOver", "clickedOn",
   // Time
   "deltaTime", "elapsed",
   // Random
@@ -100,7 +107,8 @@ const ENGINE_MEMBERS = [
   // Debug
   "show", "showFps", "log", "clear", "clearAll",
   // Entity-level (this.*, not tied to a sub-object)
-  "destroy", "destroyed", "visible", "enabled", "tag", "isClone", "spawn", "wait", "cancelWait",
+  "destroy", "destroyed", "visible", "enabled", "tag", "isClone", "spawn", "wait", "cancelWait", "repeat", "cancelRepeat",
+  "isPointerOver", "isClicked",
 ];
 
 const THEME_NAME = "zenengine-dark";
@@ -119,9 +127,10 @@ export function defineZenTheme(monaco) {
     base: "vs-dark",
     inherit: true,
     rules: [
-      // Engine classes/globals (find, scene, physics, input, time,
-      // random, global, debug, sendMessage, broadcastMessage, spawn,
-      // wait, cancelWait) — a warm gold, distinct from both keywords
+      // Engine classes/globals (find, scene, physics, input, mouse,
+      // touch, time, random, global, debug, sendMessage,
+      // broadcastMessage, spawn, wait, cancelWait, repeat,
+      // cancelRepeat) — a warm gold, distinct from both keywords
       // (blue) and strings (orange), so they read as "this is a Thing
       // the engine gives you".
       { token: "zen-global", foreground: "e0af68", fontStyle: "bold" },

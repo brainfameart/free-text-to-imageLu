@@ -20,6 +20,7 @@
  *   animator.play("  → animation clip names on the context entity
  *   sendMessage("    → all unique entity tags in the scene
  *   spawn("          → all entity names in the scene (spawn(name) clones it)
+ *   mouse.isOver("   → all entity names (mouse.clickedOn(" too)
  *   .name === "      → all entity names
  *   .tag === "       → all entity tags
  *   .name == "       → all entity names
@@ -34,6 +35,7 @@ import { editorState } from "../state/EditorState.js";
 import { TRANSFORM } from "../../runtime/components/Transform.js";
 import { SPRITE_RENDERER } from "../../runtime/components/SpriteRenderer.js";
 import { RIGIDBODY_2D, BodyType } from "../../runtime/components/Rigidbody2D.js";
+import { COLLIDER_2D } from "../../runtime/components/Collider2D.js";
 import { CAMERA } from "../../runtime/components/Camera.js";
 import { AUDIO_SOURCE } from "../../runtime/components/AudioSource.js";
 import { SPRITE_ANIMATION } from "../../runtime/components/SpriteAnimation.js";
@@ -221,6 +223,20 @@ const THIS_SHORTCUTS_BASE = [
   { label: "spawn(nameOrTag, options)", detail: 'Clone another entity by name (or tag with {byTag:true}). E.g. this.spawn("Bullet", { x: this.x, y: this.y })', insert: 'spawn("', kind: "Method" },
   { label: "wait(seconds, callback)", detail: 'Run callback once after N seconds. this inside the callback is still this entity. E.g. this.wait(2, function () { this.visible = false; })', insert: 'wait(${1:1}, function () {\n\t$0\n})', kind: "Method", snippet: true },
   { label: "cancelWait(timerId)", detail: "Cancel a pending wait() timer before it fires (pass the id wait() returned)", insert: "cancelWait(${1:timerId})", kind: "Method", snippet: true },
+  { label: "repeat(seconds, callback)", detail: 'Run callback every N seconds, forever, starting N seconds from now. this inside the callback is still this entity. E.g. this.repeat(2, function () { this.hp += 1; })', insert: 'repeat(${1:1}, function () {\n\t$0\n})', kind: "Method", snippet: true },
+  { label: "cancelRepeat(timerId)", detail: "Stop a repeat() before its next call (pass the id repeat() returned)", insert: "cancelRepeat(${1:timerId})", kind: "Method", snippet: true },
+];
+
+// Only offered when the current entity (or context entity(ies)) actually
+// has a Collider2D — isPointerOver/isClicked read this.x/y against the
+// entity's REAL collider shape, so without one they'd always read false
+// and just be confusing noise in the suggestion list. Same gating
+// principle COMPONENT_APIS already applies to this.rigidbody/this.
+// controller, applied here to two flat this.* properties instead of a
+// whole sub-object namespace.
+const THIS_SHORTCUTS_COLLIDER = [
+  { label: "isPointerOver", detail: "True while the mouse (or a finger) is over this entity's collider shape (read-only)", insert: "isPointerOver", kind: "Property" },
+  { label: "isClicked", detail: "True for exactly the one frame this entity was clicked/tapped (read-only)", insert: "isClicked", kind: "Property" },
 ];
 
 const GLOBAL_APIS = [
@@ -229,6 +245,8 @@ const GLOBAL_APIS = [
   { label: "scene", detail: "Scene utilities: scene.find(), scene.load(), scene.restart()", insert: "scene.", kind: "Module" },
   { label: "physics", detail: "Physics utilities: physics.raycast(x1,y1,x2,y2)", insert: "physics.", kind: "Module" },
   { label: "input", detail: "Input queries: input.keyDown(key), input.keyPressed(key)", insert: "input.", kind: "Module" },
+  { label: "mouse", detail: "Mouse position + buttons: mouse.x, mouse.y, mouse.down(button), mouse.isOver(name), mouse.clickedOn(name)", insert: "mouse.", kind: "Module" },
+  { label: "touch", detail: "Active touches for mobile: touch.count, touch.first.x/.y, or loop over touch for multi-finger", insert: "touch", kind: "Module" },
   { label: "time", detail: "Frame timing: time.deltaTime, time.elapsed", insert: "time.", kind: "Module" },
   { label: "random", detail: "Random numbers: random.int(min,max), random.float(min,max)", insert: "random.", kind: "Module" },
   { label: "global", detail: "Cross-script shared state: global.score = 0, global.lives, etc.", insert: "global.", kind: "Module" },
@@ -238,6 +256,8 @@ const GLOBAL_APIS = [
   { label: "spawn(nameOrTag, options)", detail: 'Clone an existing entity at runtime. E.g. spawn("Bullet", { x: this.x, y: this.y }). Pass { byTag: true } to look up by tag instead of name.', insert: 'spawn("', kind: "Function" },
   { label: "wait(seconds, callback)", detail: 'Run callback once after N seconds of game time. E.g. wait(3, function () { this.destroy(); }). Auto-cancelled if the entity is destroyed or the scene restarts/switches first.', insert: 'wait(${1:1}, function () {\n\t$0\n})', kind: "Function", snippet: true },
   { label: "cancelWait(timerId)", detail: "Cancel a pending wait() timer before it fires — pass the id wait() returned.", insert: "cancelWait(${1:timerId})", kind: "Function", snippet: true },
+  { label: "repeat(seconds, callback)", detail: 'Run callback every N seconds, forever, until cancelled or the entity/scene goes away. E.g. repeat(2, function () { spawn("Enemy", { x: random.int(0,800), y: 0 }); })', insert: 'repeat(${1:1}, function () {\n\t$0\n})', kind: "Function", snippet: true },
+  { label: "cancelRepeat(timerId)", detail: "Stop a repeat() before its next call — pass the id repeat() returned.", insert: "cancelRepeat(${1:timerId})", kind: "Function", snippet: true },
 ];
 
 const SCENE_API = [
@@ -252,6 +272,32 @@ const PHYSICS_API = [
 const INPUT_API = [
   { label: "keyDown(key)", detail: 'Is the key currently held? Use key codes like "ArrowLeft", "Space", "KeyA"', insert: 'keyDown("', kind: "Method" },
   { label: "keyPressed(key)", detail: 'Was the key pressed this frame only (not held)? Same key codes as keyDown.', insert: 'keyPressed("', kind: "Method" },
+];
+const MOUSE_API = [
+  { label: "x", detail: "Cursor world-space x position — same space as this.x", insert: "x", kind: "Property" },
+  { label: "y", detail: "Cursor world-space y position — same space as this.y", insert: "y", kind: "Property" },
+  { label: "screenX", detail: "Cursor x in raw canvas pixels (0 = left edge of the game screen)", insert: "screenX", kind: "Property" },
+  { label: "screenY", detail: "Cursor y in raw canvas pixels (0 = top edge of the game screen)", insert: "screenY", kind: "Property" },
+  { label: "over", detail: "True while the cursor is anywhere over the game screen", insert: "over", kind: "Property" },
+  { label: "down(button)", detail: "Is the button currently held? 0=left, 1=middle, 2=right. Defaults to left.", insert: "down(${1:0})", kind: "Method", snippet: true },
+  { label: "pressed(button)", detail: "Was the button pressed this frame only? 0=left, 1=middle, 2=right.", insert: "pressed(${1:0})", kind: "Method", snippet: true },
+  { label: "released(button)", detail: "Was the button released this frame only? 0=left, 1=middle, 2=right.", insert: "released(${1:0})", kind: "Method", snippet: true },
+  { label: "isOver(nameOrTag, options)", detail: 'Is the cursor over the entity with this name (or tag with {byTag:true})? Real shape-accurate hit-testing. E.g. mouse.isOver("PlayButton")', insert: 'isOver("', kind: "Method" },
+  { label: "clickedOn(nameOrTag, options)", detail: 'Was this entity clicked THIS frame? Combines isOver() + pressed() into one check. E.g. if (mouse.clickedOn("PlayButton")) { scene.load("Level1"); }', insert: 'clickedOn("', kind: "Method" },
+];
+const TOUCH_API = [
+  { label: "count", detail: "How many fingers are currently touching the screen", insert: "count", kind: "Property" },
+  { label: "first", detail: "The first active finger (same shape as any touch entry), or null if none — handy for simple one-finger controls", insert: "first", kind: "Property" },
+];
+const TOUCH_ITEM_API = [
+  { label: "id", detail: "Stable id for this specific finger — use to tell fingers apart across frames (e.g. a pinch gesture)", insert: "id", kind: "Property" },
+  { label: "x", detail: "This finger's world-space x position", insert: "x", kind: "Property" },
+  { label: "y", detail: "This finger's world-space y position", insert: "y", kind: "Property" },
+  { label: "screenX", detail: "This finger's x in raw canvas pixels", insert: "screenX", kind: "Property" },
+  { label: "screenY", detail: "This finger's y in raw canvas pixels", insert: "screenY", kind: "Property" },
+  { label: "startX", detail: "World-space x where this finger FIRST touched down — subtract from x for swipe distance", insert: "startX", kind: "Property" },
+  { label: "startY", detail: "World-space y where this finger FIRST touched down — subtract from y for swipe distance", insert: "startY", kind: "Property" },
+  { label: "justStarted", detail: "True for exactly the one frame this finger touched down", insert: "justStarted", kind: "Property" },
 ];
 const TIME_API = [
   { label: "deltaTime", detail: "Seconds since the last frame (use to keep movement frame-rate independent)", insert: "deltaTime", kind: "Property" },
@@ -402,6 +448,10 @@ function _detectStringContext(lineUntil) {
 
   // spawn("  (top-level shortcut or this.spawn — clones by name by default)
   if (new RegExp(`\\bspawn\\s*\\(\\s*${q}$`).test(lineUntil)) return "entityName";
+
+  // mouse.isOver(" / mouse.clickedOn("  — name lookup by default (byTag
+  // is an opts flag, same convention as spawn's {byTag:true})
+  if (new RegExp(`\\bmouse\\s*\\.\\s*(?:isOver|clickedOn)\\s*\\(\\s*${q}$`).test(lineUntil)) return "entityName";
 
   // animator.play("
   if (new RegExp(`\\banimator\\s*\\.\\s*play\\s*\\(\\s*${q}$`).test(lineUntil)) return "clipName";
@@ -867,9 +917,26 @@ function _allCompletions(monaco, range) {
   return suggestions;
 }
 
+/**
+ * Pushes the always-available this.* shortcuts (position, destroy(),
+ * spawn(), wait(), etc. — THIS_SHORTCUTS_BASE), PLUS any shortcut
+ * group gated on a specific component actually being present on the
+ * entity/entities this completion is for. `keys` is the Set of
+ * component keys already computed for that context (see
+ * _contextComponentKeys()/_entityComponentKeys() at the call sites) —
+ * when it's empty (nothing selected, or looking at an untracked
+ * find() variable) collider-gated entries are simply left out rather
+ * than guessed at, same "don't show what might not work" rule
+ * COMPONENT_APIS already follows for this.rigidbody/this.controller.
+ */
 function _pushShortcutCompletions(monaco, range, suggestions, keys, entities) {
   for (const item of THIS_SHORTCUTS_BASE) {
     suggestions.push(_makeCompletion(monaco, item, range));
+  }
+  if (keys && keys.has(COLLIDER_2D)) {
+    for (const item of THIS_SHORTCUTS_COLLIDER) {
+      suggestions.push(_makeCompletion(monaco, item, range));
+    }
   }
 }
 
@@ -1074,6 +1141,21 @@ export function registerIntelliSense(monaco) {
         } else if (subObj === "input") {
           isKnownSubObj = true;
           items = INPUT_API;
+        } else if (subObj === "mouse") {
+          isKnownSubObj = true;
+          items = MOUSE_API;
+        } else if (subObj === "touch") {
+          isKnownSubObj = true;
+          items = TOUCH_API;
+        } else if (subObj === "first") {
+          // touch.first.<partial> — same shape as one entry in the
+          // touch array itself (id/x/y/screenX/screenY/startX/startY/
+          // justStarted), not the touch array's own count/first. Best-
+          // effort match on the property name alone (same trade-off
+          // "other" already makes elsewhere in this file for
+          // onCollision(other) — no full expression-type tracking).
+          isKnownSubObj = true;
+          items = TOUCH_ITEM_API;
         } else if (subObj === "time") {
           isKnownSubObj = true;
           items = TIME_API;
@@ -1126,22 +1208,45 @@ export function registerIntelliSense(monaco) {
         suggestions.push(_makeCompletion(monaco, item, range));
       }
 
-      // Lifecycle method snippets
-      const snippets = [
+      // Lifecycle method snippets. Split into always-available (every
+      // entity can use these — they don't depend on any component) and
+      // collider-gated (onClick/onCollision*/onTrigger* only ever fire
+      // for an entity with a Collider2D — see ScriptSystem.js: onClick
+      // is dispatched from a physics hit-test, onCollision*/onTrigger*
+      // come from Rapier collision events. Suggesting them on an
+      // entity with no collider would offer something that silently
+      // never runs — same "don't show what won't work" rule already
+      // applied to this.rigidbody/this.controller and now
+      // isPointerOver/isClicked above).
+      const snippetsBase = [
         { label: "function onStart()", detail: "Called once before the first onUpdate — use for initialization", insert: "onStart() {\n  $1\n}" },
         { label: "function onClone()", detail: "Called once, right before onStart(), but ONLY on entities created by spawn(). Never fires for entities placed in the scene.", insert: "onClone() {\n  $1\n}" },
         { label: "function onUpdate(dt)", detail: "Called every frame. dt = seconds since last frame (use for movement)", insert: "onUpdate(dt) {\n  $1\n}" },
         { label: "function onFixedUpdate(dt)", detail: "Called at a fixed 60 Hz rate — use for physics/rigidbody changes", insert: "onFixedUpdate(dt) {\n  $1\n}" },
-        { label: "function onCollision(other)", detail: "Called when this entity's collider touches another. 'other' has .x, .y, .name, .tag, etc.", insert: "onCollision(other) {\n  $1\n}" },
-        { label: "function onCollisionEnter(other)", detail: "Called when collision begins. 'other' has .x, .y, .name, etc.", insert: "onCollisionEnter(other) {\n  $1\n}" },
-        { label: "function onCollisionExit(other)", detail: "Called when collision ends.", insert: "onCollisionExit(other) {\n  $1\n}" },
-        { label: "function onTriggerEnter(other)", detail: "Called when entering a trigger collider (Is Trigger = on)", insert: "onTriggerEnter(other) {\n  $1\n}" },
-        { label: "function onTriggerExit(other)", detail: "Called when leaving a trigger collider", insert: "onTriggerExit(other) {\n  $1\n}" },
         { label: "function onMessage(message)", detail: "Message received — just the message string. Simplest form.", insert: "onMessage(message) {\n  $1\n}" },
         { label: "function onMessage(message, data)", detail: "Message + payload. data is whatever was passed as the third arg of sendMessage() or second arg of broadcastMessage().", insert: "onMessage(message, data) {\n  $1\n}" },
         { label: "function onMessage(message, sender, data)", detail: "Full form. sender is an entity context (like 'this') — use sender.name, sender.tag, sender.x etc. sender is null for broadcastMessage.", insert: "onMessage(message, sender, data) {\n  $1\n}" },
         { label: "function onDestroy()", detail: "Called once when this entity is destroyed or the scene ends", insert: "onDestroy() {\n  $1\n}" },
       ];
+      const snippetsCollider = [
+        { label: "function onClick()", detail: "Called the frame this entity is clicked/tapped", insert: "onClick() {\n  $1\n}" },
+        { label: "function onCollision(other)", detail: "Called when this entity's collider touches another. 'other' has .x, .y, .name, .tag, etc.", insert: "onCollision(other) {\n  $1\n}" },
+        { label: "function onCollisionEnter(other)", detail: "Called when collision begins. 'other' has .x, .y, .name, etc.", insert: "onCollisionEnter(other) {\n  $1\n}" },
+        { label: "function onCollisionExit(other)", detail: "Called when collision ends.", insert: "onCollisionExit(other) {\n  $1\n}" },
+        { label: "function onTriggerEnter(other)", detail: "Called when entering a trigger collider (Is Trigger = on)", insert: "onTriggerEnter(other) {\n  $1\n}" },
+        { label: "function onTriggerExit(other)", detail: "Called when leaving a trigger collider", insert: "onTriggerExit(other) {\n  $1\n}" },
+      ];
+      const snippetContextKeys = _contextComponentKeys();
+      const snippets = snippetContextKeys.has(COLLIDER_2D)
+        ? snippetsBase.concat(snippetsCollider)
+        // No entity selected/tracked for this script tab (or it has no
+        // collider yet) — same "no context, show everything" fallback
+        // _allCompletions uses elsewhere, since refusing to suggest a
+        // hook the user might be about to add a collider FOR would be
+        // more annoying than occasionally suggesting one early.
+        : snippetContextKeys.size === 0
+        ? snippetsBase.concat(snippetsCollider)
+        : snippetsBase;
       for (const s of snippets) {
         suggestions.push({
           label: s.label,
