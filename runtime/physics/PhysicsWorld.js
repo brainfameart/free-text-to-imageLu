@@ -1348,6 +1348,21 @@ export class PhysicsWorld {
 
     if (!collider) {
       if (handle.collider) {
+        // BUGFIX: this used to remove the Rapier collider without also
+        // deleting its entry from _colliderHandleMap. Rapier RECYCLES
+        // removed collider handle indices for the next collider it
+        // creates — so the stale map entry (still pointing at THIS
+        // entity's id) could silently get reassigned to a completely
+        // different entity's new collider on a later frame. Every
+        // handle -> entityId lookup that reads this map (raycasts,
+        // collision/trigger event dispatch, entityAtPoint, the kinematic
+        // contactPair scan) would then resolve to the WRONG entity —
+        // showing up as "collides without respecting layers" even though
+        // the actual layer/mask filtering was correct all along; the
+        // hit/contact was just attributed to the wrong object. Must be
+        // cleaned up here, symmetric with every other removeCollider/
+        // removeRigidBody call site in this file.
+        this._colliderHandleMap.delete(handle.collider.handle);
         this.rapierWorld.removeCollider(handle.collider, true);
         handle.collider = null;
         handle._colliderRef = null;
@@ -1398,6 +1413,24 @@ export class PhysicsWorld {
     const geo = getColliderWorldGeometry(collider, transform);
 
     if (handle.collider) {
+      // BUGFIX (same root cause as the !collider branch above): delete
+      // the stale handle -> entityId mapping BEFORE removing the Rapier
+      // collider, not after. This runs whenever a shape field OR
+      // layer/mask changed since last frame (see the dirty-check just
+      // above) — e.g. a script doing `this.collider.layer = 2` at
+      // runtime. Without this delete, Rapier can recycle the removed
+      // handle's numeric index for ANY new collider created afterward
+      // (this entity's own replacement, or a totally different entity
+      // spawned later), and the old entry would keep resolving that
+      // index back to THIS entity. Every consumer of
+      // _colliderHandleMap — castRay(), the collision/trigger event
+      // drain, entityAtPoint(), _dispatchKinematicCollisions' contactPair
+      // scan — would then attribute a hit/contact to the wrong entity,
+      // which is exactly what "physics layer collides with things it
+      // shouldn't, sometimes" looks like from a script's perspective:
+      // the layer filter itself was fine, the collider handle bookkeeping
+      // wasn't.
+      this._colliderHandleMap.delete(handle.collider.handle);
       this.rapierWorld.removeCollider(handle.collider, true);
       handle.collider = null;
     }

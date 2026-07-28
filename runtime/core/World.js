@@ -164,6 +164,43 @@ export class World {
     return this.getAllEntities().filter((e) => e.name === name);
   }
 
+  // --- Explicit find-by-name / find-by-tag API ---
+  //
+  // findFirstByName/findAllByName/findByTag (above) are kept exactly as
+  // they were — existing scripts and any other engine code that calls
+  // them keep working unchanged. These are additional, more explicit
+  // names for the exact same lookups, added so the ambiguity between
+  // "find by name" and "find by tag" is resolved by the METHOD NAME
+  // itself rather than by an opts flag a caller has to remember to pass
+  // (e.g. spawn()'s opts.byTag). findFirst/findAll search by NAME;
+  // findFirstWithTag/findAllWithTag search by TAG — the "WithTag" suffix
+  // is the one and only signal for "this is a tag lookup, not a name
+  // lookup" anywhere these are used (World, ScriptAPI globals, and the
+  // editor autocomplete all use this same convention).
+
+  /** Find the first entity with the given NAME, or null. Same lookup as
+   *  findFirstByName — this is just the shorter, preferred name. */
+  findFirst(name) {
+    return this.findFirstByName(name);
+  }
+
+  /** Find every entity with the given NAME. Same lookup as
+   *  findAllByName — this is just the shorter, preferred name. */
+  findAll(name) {
+    return this.findAllByName(name);
+  }
+
+  /** Find the first entity with the given TAG, or null. */
+  findFirstWithTag(tag) {
+    return this.getAllEntities().find((e) => e.tag === tag) || null;
+  }
+
+  /** Find every entity with the given TAG. Same lookup as findByTag —
+   *  this is just the name that matches findFirstWithTag/findAllWithTag. */
+  findAllWithTag(tag) {
+    return this.findByTag(tag);
+  }
+
   addSystem(system) {
     this.systems.push(system);
     if (typeof system.onAdded === "function") system.onAdded(this);

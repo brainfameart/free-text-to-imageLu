@@ -62,6 +62,50 @@ function updateDebugOverlay(el, scriptApi, fps) {
   el.textContent = lines.join("\n") || "(debug on — no stats yet)";
 }
 
+/**
+ * Draws every debug ray a script cast this frame via
+ * physics.raycast(x1,y1,x2,y2,{debug:true}) — see ScriptAPI._raycast().
+ * `graphics` is a PIXI.Graphics parented under the SAME world-space
+ * container sprites render into (gameContentContainer, via
+ * game.getDebugLayer() below), so a debug line drawn in world
+ * coordinates automatically pans/zooms with the camera exactly like
+ * everything else in the scene — no manual camera-transform math here.
+ *
+ * Runs unconditionally (not gated by debugState.enabled — matches
+ * Unity's Debug.DrawLine, which draws regardless of a separate on/off
+ * toggle; debug.show() only controls the text HUD). Drawing is cheap
+ * when debugLines is empty (a single .clear() call), so this costs
+ * nothing for games that never call raycast with debug:true.
+ *
+ * IMPORTANT: clears debugState.debugLines itself, once, right after
+ * drawing — this is intentionally NOT done by ScriptSystem's per-frame
+ * cleanup (_clearFrameKeys). Scripts run inside world.update(), which
+ * happens BEFORE this function's caller (game.loop.onTick) on the very
+ * same frame — clearing any earlier would wipe a line before it ever
+ * got drawn once.
+ */
+function renderDebugLines(graphics, scriptApi) {
+  const state = scriptApi.debugState;
+  graphics.clear();
+  if (!state || !state.debugLines || state.debugLines.length === 0) return;
+
+  for (const line of state.debugLines) {
+    graphics.lineStyle(1, line.color, 0.9);
+    graphics.moveTo(line.x1, line.y1);
+    graphics.lineTo(line.x2, line.y2);
+    if (line.hitPoint) {
+      // Small filled circle marking exactly what the ray touched —
+      // makes the difference between "hit" and "grazed past" obvious
+      // at a glance, especially on shallow-angle hits.
+      graphics.lineStyle(0);
+      graphics.beginFill(line.color, 1);
+      graphics.drawCircle(line.hitPoint.x, line.hitPoint.y, 4);
+      graphics.endFill();
+    }
+  }
+  state.debugLines.length = 0;
+}
+
 async function boot() {
   const mount = document.getElementById("game-canvas");
 
@@ -106,9 +150,11 @@ async function boot() {
   // full explanation. Hidden until a script calls debug.show().
   const debugOverlayEl = createDebugOverlay();
   const fpsTick = createFpsTracker();
+  const debugLayer = game.getDebugLayer();
   game.loop.onTick = function (dt) {
     const fps = fpsTick(dt);
     updateDebugOverlay(debugOverlayEl, game.scriptApi, fps);
+    renderDebugLines(debugLayer, game.scriptApi);
   };
 
   // Exposed for debugging from the browser console only; not used by any

@@ -30,12 +30,23 @@
  * the way the old single-pass filter's additive term could.
  *
  * RUNTIME-ONLY FILE (depends on PIXI's Filter, not on the editor).
+ *
+ * REALISM PASS (point/spot lights): a flat single-color disc scaled by
+ * one smooth brightness curve reads as fake — real light sources shift
+ * toward white/hot right at the source and only show their actual
+ * tint further out (radialHotness blends uLightColor toward white near
+ * the core), and real light scatter is never a mathematically perfect
+ * gradient (radialGrain layers a faint two-octave noise texture, rigid
+ * to the light's own local space, onto the falloff). Both are additive
+ * refinements on top of the existing radialFalloff hot-core curve —
+ * area/directional/god-rays/freeform lights are untouched, since none
+ * of them represent a single point source a "core" makes sense for.
  */
 
-// Same caps/tradeoffs as before — see the old LightingShaderSource.js
-// for the uniform-budget math; unchanged here since the same light/
-// occluder data still needs to reach the GPU, just into a different
-// shader with a different job.
+// Same uniform-budget caps as the single-pass shader this replaced:
+// GLSL ES 1.00 requires compile-time-constant array sizes, so lights/
+// occluders get a fixed-size cap plus an explicit count uniform that
+// tells the shader how much of each array is actually populated.
 export const MAX_LIGHTS = 32;
 export const MAX_OCCLUDERS = 24;
 export const MAX_RAYMARCH_STEPS = 48;
@@ -151,6 +162,47 @@ float radialFalloff(float distT) {
     }
     float bloomT = (distT - HOT_CORE_T) / (1.0 - HOT_CORE_T);
     return 0.92 * (1.0 - pow(clamp(bloomT, 0.0, 1.0), 2.4));
+}
+
+// How "hot" (white-core, filament-like) a point on a radial/spot light
+// is, purely as a function of distance from the source — used to blend
+// the light's own color toward white near the core (see uLightColor
+// mix below). Real light sources are whiter/hotter right at the source
+// and take on their actual tint further out (a candle's flame tip is
+// near-white while its glow is amber; a red neon tube's own surface
+// reads near-white-pink while its halo is saturated red) — a flat
+// single-color disc reads as fake because real light never holds one
+// flat hue all the way from source to edge.
+float radialHotness(float distT) {
+    const float HOT_T = 0.22;
+    float t = clamp(distT / HOT_T, 0.0, 1.0);
+    // Eased falloff (not linear) so the white-hot zone stays small and
+    // concentrated right at the source instead of washing out a third
+    // of the light's whole radius toward white.
+    return 1.0 - t * t;
+}
+
+// Cheap 2D hash — used to break the perfectly-smooth analytic falloff
+// gradient with a faint irregular texture, the way real light scatter
+// through air/dust never reads as a mathematically perfect gradient.
+// Small enough magnitude to read as organic shimmer, not visible
+// banding or grain.
+float hash2(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+// Layers a very faint radial "grain" onto an otherwise-smooth falloff
+// value. Sampled in the light's own LOCAL space (toPixel, not world
+// space) so the texture is rigidly attached to the light and never
+// swims across the screen as the light moves — a real light's own
+// scatter pattern travels with it. Two octaves (coarse + fine) so it
+// reads as soft atmospheric variation rather than a single repeating
+// pattern.
+float radialGrain(vec2 toPixel, float radius) {
+    vec2 cell = toPixel / max(radius, 0.0001);
+    float coarse = hash2(floor(cell * 6.0));
+    float fine = hash2(floor(cell * 17.0) + 91.7);
+    return mix(0.94, 1.0, coarse) * mix(0.97, 1.0, fine);
 }
 
 // Strictly contained within the light's own rectangle — matches its
@@ -350,6 +402,12 @@ void main(void) {
         vec2 lightPos = uLightPos[i];
 
         float brightness = 0.0;
+        // How much this pixel should blend toward white-hot for a
+        // point/spot light's core (see radialHotness) — stays 0 for
+        // every other light type, which keeps their own color exactly
+        // as authored (a directional/area light has no single "source
+        // point" for a core to make physical sense around).
+        float hotness = 0.0;
 
         if (typeId == 0) {
             brightness = 1.0;
@@ -360,11 +418,13 @@ void main(void) {
             if (typeId == 1) {
                 float radius = uLightRadius[i];
                 float distT = clamp(dist / max(radius, 0.0001), 0.0, 1.0);
-                brightness = dist > radius ? 0.0 : radialFalloff(distT);
+                brightness = dist > radius ? 0.0 : radialFalloff(distT) * radialGrain(toPixel, radius);
+                hotness = dist > radius ? 0.0 : radialHotness(distT);
             } else if (typeId == 2) {
                 float radius = uLightRadius[i];
                 float distT = clamp(dist / max(radius, 0.0001), 0.0, 1.0);
-                float radial = dist > radius ? 0.0 : radialFalloff(distT);
+                float radial = dist > radius ? 0.0 : radialFalloff(distT) * radialGrain(toPixel, radius);
+                hotness = dist > radius ? 0.0 : radialHotness(distT);
 
                 float angleToPixel = atan(toPixel.y, toPixel.x);
                 float rel = angleToPixel - uLightRotation[i];
@@ -476,9 +536,19 @@ void main(void) {
         // this stays a bright hot core surrounded by its normal
         // colored falloff, never a flat white wash.
         float over = max(0.0, litBrightness - 1.0);
-        float hotAmount = clamp(over / (1.0 + over), 0.0, 1.0);
+        float overbrightHot = clamp(over / (1.0 + over), 0.0, 1.0);
+        // Combine the two hot-core sources: distance-based (this pixel
+        // is simply near the light's physical source, at ANY intensity
+        // — a normal, non-overbright lamp still has a brighter, whiter
+        // filament than its glow) and overbright-based (the existing
+        // effect above, for when Intensity itself is cranked past 1).
+        // max(), not add: an overbright light's core doesn't need to be
+        // hotter than a normal light's core just because both effects
+        // are present — either one alone is enough to justify full
+        // white, so they saturate together rather than stacking past 1.
+        float hotAmount = max(hotness * (1.0 - shadowAmount), overbrightHot);
         vec3 litColor = mix(color, vec3(1.0), hotAmount);
-        float litMagnitude = min(litBrightness, 1.0) + hotAmount * 0.6;
+        float litMagnitude = min(litBrightness, 1.0) + overbrightHot * 0.6;
         accumulatedLight += litColor * litMagnitude;
 
         if (shadowAmount > 0.0015) {

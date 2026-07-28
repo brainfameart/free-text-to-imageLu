@@ -12,6 +12,10 @@
  * Smart string-argument completions:
  *   find("           → all entity names in the scene
  *   findWithTag("    → all object tags in the scene
+ *   findFirst("      → all entity names in the scene (same list as find()
+ *   findAll("        → all entity names in the scene (returns every match)
+ *   findFirstWithTag(" → all object tags in the scene
+ *   findAllWithTag(" → all object tags in the scene (same list as findWithTag()
  *   scene.load("     → all scene names
  *   scene.find("     → all entity names
  *   input.keyDown("  → full keyboard key-code list
@@ -277,8 +281,12 @@ const THIS_SHORTCUTS_COLLIDER = [
 const GLOBAL_APIS = [
   { label: "find(name)", detail: 'Find entity by name. Returns an object with .x, .y, .sprite, .rigidbody, etc.', insert: 'find("', kind: "Function" },
   { label: "findWithTag(tag)", detail: "Find all entities with a tag. Returns an array of live object contexts.", insert: 'findWithTag("', kind: "Function" },
+  { label: "findFirst(name)", detail: "Find the first entity with this name. Same lookup as find(), with an explicit name. Returns an object, or null if none match.", insert: 'findFirst("', kind: "Function" },
+  { label: "findAll(name)", detail: "Find EVERY entity with this name. Returns an array (empty if none match).", insert: 'findAll("', kind: "Function" },
+  { label: "findFirstWithTag(tag)", detail: "Find the first entity with this tag. Returns an object, or null if none match.", insert: 'findFirstWithTag("', kind: "Function" },
+  { label: "findAllWithTag(tag)", detail: "Find EVERY entity with this tag. Same as findWithTag() — returns an array (empty if none match).", insert: 'findAllWithTag("', kind: "Function" },
   { label: "scene", detail: "Scene utilities: scene.find(), scene.load(), scene.restart()", insert: "scene.", kind: "Module" },
-  { label: "physics", detail: "Physics utilities: physics.raycast(x1,y1,x2,y2)", insert: "physics.", kind: "Module" },
+  { label: "physics", detail: "Physics utilities: physics.raycast(x1,y1,x2,y2,opts), physics.layer(n)", insert: "physics.", kind: "Module" },
   { label: "input", detail: "Input queries: input.keyDown(key), input.keyPressed(key)", insert: "input.", kind: "Module" },
   { label: "mouse", detail: "Mouse position + buttons: mouse.x, mouse.y, mouse.down(button), mouse.isOver(name), mouse.clickedOn(name)", insert: "mouse.", kind: "Module" },
   { label: "touch", detail: "Active touches for mobile: touch.count, touch.first.x/.y, or loop over touch for multi-finger", insert: "touch", kind: "Module" },
@@ -298,11 +306,17 @@ const GLOBAL_APIS = [
 const SCENE_API = [
   { label: "find(name)", detail: "Find entity by name (same as the top-level find() shortcut)", insert: 'find("', kind: "Method" },
   { label: "findWithTag(tag)", detail: "Find all entities with a tag", insert: 'findWithTag("', kind: "Method" },
+  { label: "findFirst(name)", detail: "Find the first entity with this name. Returns an object, or null if none match.", insert: 'findFirst("', kind: "Method" },
+  { label: "findAll(name)", detail: "Find EVERY entity with this name. Returns an array (empty if none match).", insert: 'findAll("', kind: "Method" },
+  { label: "findFirstWithTag(tag)", detail: "Find the first entity with this tag. Returns an object, or null if none match.", insert: 'findFirstWithTag("', kind: "Method" },
+  { label: "findAllWithTag(tag)", detail: "Find EVERY entity with this tag. Returns an array (empty if none match).", insert: 'findAllWithTag("', kind: "Method" },
   { label: "load(sceneName)", detail: "Load a different scene by name", insert: 'load("', kind: "Method" },
   { label: "restart()", detail: "Restart the current scene from the beginning", insert: "restart()", kind: "Method" },
 ];
 const PHYSICS_API = [
-  { label: "raycast(x1, y1, x2, y2)", detail: "Cast a ray from (x1,y1) to (x2,y2). Returns { entity, point, distance } or null.", insert: "raycast(${1:x1}, ${2:y1}, ${3:x2}, ${4:y2})", kind: "Method", snippet: true },
+  { label: "raycast(x1, y1, x2, y2)", detail: "Cast a ray from (x1,y1) to (x2,y2) against real physics shapes. Returns { entity, point, normal, distance } or null.", insert: "raycast(${1:x1}, ${2:y1}, ${3:x2}, ${4:y2})", kind: "Method", snippet: true },
+  { label: "raycast(x1, y1, x2, y2, opts)", detail: 'Cast a ray with options: { layerMask: physics.layer(2,3), debug: true }. layerMask restricts which physics layers the ray can hit; debug:true draws the ray in the Play window (green=hit, red=miss).', insert: "raycast(${1:x1}, ${2:y1}, ${3:x2}, ${4:y2}, { layerMask: ${5:physics.layer(0)}, debug: ${6:true} })", kind: "Method", snippet: true },
+  { label: "layer(...indices)", detail: "Build a layerMask from one or more layer indices (0-15) for raycast's opts.layerMask. E.g. physics.layer(2, 3) hits only layers 2 and 3.", insert: "layer(${1:0})", kind: "Method", snippet: true },
 ];
 const INPUT_API = [
   { label: "keyDown(key)", detail: 'Is the key currently held? Use key codes like "ArrowLeft", "Space", "KeyA"', insert: 'keyDown("', kind: "Method" },
@@ -475,8 +489,16 @@ function _detectStringContext(lineUntil) {
   // scene.find("
   if (new RegExp(`\\bscene\\s*\\.\\s*find\\s*\\(\\s*${q}$`).test(lineUntil)) return "entityName";
 
-  // findWithTag("
-  if (new RegExp(`\\b(?:scene\\s*\\.\\s*)?findWithTag\\s*\\(\\s*${q}$`).test(lineUntil)) return "entityTag";
+  // findWithTag(" / findFirstWithTag(" / findAllWithTag("  (top-level or scene.*)
+  // — checked BEFORE the plain find(" pattern below since these are all
+  // longer names that happen to start with "find"; matching this first
+  // stops e.g. findFirstWithTag(" from also (wrongly) satisfying a
+  // looser find*( check further down.
+  if (new RegExp(`\\b(?:scene\\s*\\.\\s*)?find(?:First|All)?WithTag\\s*\\(\\s*${q}$`).test(lineUntil)) return "entityTag";
+
+  // findFirst(" / findAll("  (top-level or scene.*) — name lookups, same
+  // completion list as plain find(".
+  if (new RegExp(`\\b(?:scene\\s*\\.\\s*)?find(?:First|All)\\s*\\(\\s*${q}$`).test(lineUntil)) return "entityName";
 
   // find("  (top-level shortcut or this.find — any context)
   if (new RegExp(`\\bfind\\s*\\(\\s*${q}$`).test(lineUntil)) return "entityName";
@@ -554,13 +576,13 @@ function _diagnosticRules() {
     },
     {
       label: "entity name",
-      regex: /\b(?:scene\s*\.\s*find|find)\s*\(\s*["']([^"']*)["']/g,
+      regex: /\b(?:scene\s*\.\s*)?find(?:First|All)?\s*\(\s*["']([^"']*)["']/g,
       values: () => new Set(_getEntityNames()),
       hint: (v) => `No object named "${v}" found in the current scene.`,
     },
     {
       label: "entity tag",
-      regex: /\b(?:scene\s*\.\s*)?findWithTag\s*\(\s*["']([^"']*)["']/g,
+      regex: /\b(?:scene\s*\.\s*)?find(?:First|All)?WithTag\s*\(\s*["']([^"']*)["']/g,
       values: () => new Set(_getEntityTags()),
       hint: (v) => `No object in the scene currently has the tag "${v}".`,
     },
@@ -698,9 +720,20 @@ export function clearScriptDiagnostics(monaco, model) {
 
 function _parseFindVariables(text) {
   const map = {};
-  const regex = /(?:\b(?:var|let|const)\s+)?(\w+)\s*=\s*find\s*\(\s*["']([^"']+)["']\s*\)/g;
+  // find("Name") and findFirst("Name") both return a single EntityContext
+  // (or null) — same shape, so both are tracked identically here for
+  // component-key autocomplete on the assigned variable. findAll(",
+  // findWithTag(", and findAllWithTag(" are deliberately NOT included:
+  // they return ARRAYS, so `e.` on a variable assigned from one of those
+  // would need per-element completions, not the single-entity path this
+  // function feeds.
+  const regex = /(?:\b(?:var|let|const)\s+)?(\w+)\s*=\s*findFirst\s*\(\s*["']([^"']+)["']\s*\)/g;
   let match;
   while ((match = regex.exec(text)) !== null) {
+    map[match[1]] = match[2];
+  }
+  const plainFindRegex = /(?:\b(?:var|let|const)\s+)?(\w+)\s*=\s*find\s*\(\s*["']([^"']+)["']\s*\)/g;
+  while ((match = plainFindRegex.exec(text)) !== null) {
     map[match[1]] = match[2];
   }
   return map;

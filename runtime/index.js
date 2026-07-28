@@ -92,6 +92,19 @@ export function createGame({ pixiApp, followMainCamera = false }) {
   const gameContentContainer = new PIXI.Container();
   pixiApp.stage.addChild(gameContentContainer);
 
+  // Dedicated child container for physics.raycast(...,{debug:true})
+  // lines (see ScriptAPI._raycast / player/main.js's renderDebugLines).
+  // Parented under gameContentContainer (not pixiApp.stage directly) so
+  // it inherits the exact same camera pan/zoom transform every sprite
+  // does — a debug line drawn in world coordinates lines up with the
+  // colliders it's testing without any manual transform math in the
+  // host (play-popup.js / player/main.js) that actually draws into it.
+  // Added AFTER RenderSystem/TilemapSystem/LightingSystem below so it
+  // stacks visually on top of sprites and tiles, matching how a debug
+  // overlay is expected to always be visible rather than hidden behind
+  // scene content.
+  const debugGraphicsLayer = new PIXI.Graphics();
+
   const renderSystem = new RenderSystem(gameContentContainer, { followMainCamera });
   const controllerSystem = new ControllerSystem();
   world.addSystem(controllerSystem);
@@ -132,6 +145,11 @@ export function createGame({ pixiApp, followMainCamera = false }) {
   const cameraRenderSystem = new CameraRenderSystem(gameContentContainer, renderSystem, pixiApp);
   world.addSystem(cameraRenderSystem);
 
+  // Add the debug-ray layer LAST so it paints on top of every sprite,
+  // tile, and lighting effect already in gameContentContainer — a debug
+  // line hidden behind scene content would defeat the point of it.
+  gameContentContainer.addChild(debugGraphicsLayer);
+
   // AudioSystem doesn't touch gameContentContainer at all (it drives
   // plain HTMLAudioElements, not PIXI display objects) so its place in
   // the system order relative to rendering/lighting doesn't matter —
@@ -156,6 +174,20 @@ export function createGame({ pixiApp, followMainCamera = false }) {
   // re-deriving box/circle/capsule/triangle math a second time here.
   scriptApi._physicsHitTestFn = function (x, y) {
     return physicsSystem.physicsWorld.entityAtPoint(x, y);
+  };
+  // Backs physics.raycast() with REAL Rapier shape-accurate ray queries
+  // (PhysicsWorld.castRay — see runtime/physics/PhysicsWorld.js). castRay
+  // already accepts { layerMask } and returns the closest hit
+  // (entityId/point/normal/distance) or null; ScriptAPI._raycast just
+  // forwards opts.layerMask through and resolves entityId back to a
+  // live EntityContext for the calling script. Declared but left
+  // unassigned before this line (see the constructor doc comment on
+  // _physicsRaycastFn) is what made physics.raycast() throw/no-op
+  // previously — this is the missing wiring. The old AABB-only fallback
+  // (EntityContext._getColliderAABB) has been removed from ScriptAPI.js
+  // entirely — it was dead code once this wiring landed.
+  scriptApi._physicsRaycastFn = function (x1, y1, x2, y2, opts) {
+    return physicsSystem.physicsWorld.castRay(x1, y1, x2, y2, opts);
   };
   // ScriptSystem runs user-attached scripts ONLY during the game loop
   // (play-mode popup / standalone player) — never in the editor, which
@@ -348,6 +380,16 @@ export function createGame({ pixiApp, followMainCamera = false }) {
     /** ScriptSystem instance — the play popup uses this to wire the
      *  onError callback so script errors are sent back to the editor. */
     scriptSystem,
+
+    /**
+     * PIXI.Graphics layer for physics.raycast(...,{debug:true}) lines —
+     * see runtime/scripting/ScriptAPI.js's debugState.debugLines and
+     * player/main.js / editor/viewport/play-popup.js's renderDebugLines().
+     * Already parented under gameContentContainer (so it tracks the
+     * camera automatically) and drawn on top of every sprite/tile —
+     * hosts just need to .clear()/redraw it once per onTick.
+     */
+    getDebugLayer: () => debugGraphicsLayer,
 
     // Multi-scene project management (see scene/SceneManager.js). Sprite
     // assets are NOT scoped per-scene — AssetRegistry.js is one shared

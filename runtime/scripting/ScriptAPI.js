@@ -46,7 +46,7 @@
 
 import { TRANSFORM } from "../components/Transform.js";
 import { SCRIPT } from "../components/Script.js";
-import { COLLIDER_2D, ColliderShape } from "../components/Collider2D.js";
+import { COLLIDER_2D } from "../components/Collider2D.js";
 import { SPRITE_RENDERER } from "../components/SpriteRenderer.js";
 import { RIGIDBODY_2D } from "../components/Rigidbody2D.js";
 import { SPRITE_ANIMATION } from "../components/SpriteAnimation.js";
@@ -84,29 +84,14 @@ class EntityContext {
     this._buildSubObjects();
   }
 
-  // --- Raycast support (used by physics.raycast) ---
-
-  /** Returns the collider's world-space AABB for raycast testing. */
-  _getColliderAABB() {
-    var t = this._entity.getComponent(TRANSFORM);
-    var c = this._entity.getComponent(COLLIDER_2D);
-    if (!t || !c) return null;
-    var cx = t.x + (c.offsetX || 0);
-    var cy = t.y + (c.offsetY || 0);
-    var minX, minY, maxX, maxY;
-    if (c.shape === ColliderShape.BOX) {
-      minX = cx - c.width / 2; maxX = cx + c.width / 2;
-      minY = cy - c.height / 2; maxY = cy + c.height / 2;
-    } else if (c.shape === ColliderShape.CIRCLE) {
-      minX = cx - c.radius; maxX = cx + c.radius;
-      minY = cy - c.radius; maxY = cy + c.radius;
-    } else {
-      var r = c.radius || (c.width || 1) / 2;
-      minX = cx - r; maxX = cx + r;
-      minY = cy - r; maxY = cy + r;
-    }
-    return { minX: minX, minY: minY, maxX: maxX, maxY: maxY };
-  }
+  // Raycasting is handled entirely by Rapier now (PhysicsWorld.castRay,
+  // wired through _physicsRaycastFn — see runtime/index.js and _raycast()
+  // below). The old _getColliderAABB() box-fit approximation used to back
+  // a manual raycast path here; it's gone because Rapier's real shape
+  // query is both more accurate (correct on circle/capsule/triangle/
+  // polygon colliders, not just their bounding boxes) and cheaper (no
+  // extra object allocated/discarded per raycast call, no redundant
+  // shape math duplicating what Rapier already computes internally).
 
   // --- Shortcut aliases (read/write live Transform data) ---
 
@@ -637,6 +622,49 @@ export class ScriptAPI {
     return entities.map((entity) => this.createEntityContext(entity));
   }
 
+  // --- Explicit find-by-name / find-by-tag pair ---
+  //
+  // find()/findWithTag() above are unchanged and keep working exactly as
+  // before. These four give the SAME lookups explicit, unambiguous names,
+  // in matched first/all pairs, so a script never has to guess whether
+  // find("Enemy") returns one object or many, or reach for a byTag flag
+  // to search by tag instead of name:
+  //   findFirst("Enemy")      -> first entity named "Enemy", or null
+  //   findAll("Enemy")        -> every entity named "Enemy" (array)
+  //   findFirstWithTag("Foe") -> first entity tagged "Foe", or null
+  //   findAllWithTag("Foe")   -> every entity tagged "Foe" (array)
+
+  /** Find the first entity with the given NAME. Same as find(), with an
+   *  explicit name so it reads as "first-of-possibly-many" at the call
+   *  site. Returns an EntityContext, or null if none match. */
+  findFirst(name) {
+    var entity = this.world.findFirst ? this.world.findFirst(name) : this.world.findFirstByName(name);
+    if (!entity) return null;
+    return this.createEntityContext(entity);
+  }
+
+  /** Find every entity with the given NAME. Returns an array of live
+   *  EntityContexts (empty array if none match — never null, so a
+   *  script can always safely .forEach()/.length it). */
+  findAll(name) {
+    var entities = this.world && this.world.findAll ? this.world.findAll(name) : [];
+    return entities.map((entity) => this.createEntityContext(entity));
+  }
+
+  /** Find the first entity with the given TAG. Returns an EntityContext,
+   *  or null if none match. */
+  findFirstWithTag(tag) {
+    var entity = this.world && this.world.findFirstWithTag ? this.world.findFirstWithTag(tag) : null;
+    if (!entity) return null;
+    return this.createEntityContext(entity);
+  }
+
+  /** Find every entity with the given TAG. Same lookup as findWithTag()
+   *  — this is just the name that matches findFirstWithTag() above. */
+  findAllWithTag(tag) {
+    return this.findWithTag(tag);
+  }
+
   /**
    * Spawns a runtime copy of an existing entity — Unity's
    * Object.Instantiate(original). Looks up the SOURCE entity by name
@@ -816,6 +844,54 @@ export class ScriptAPI {
   }
 
   /**
+   * Real shape-accurate raycast against the live Rapier physics world.
+   * Thin wrapper over _physicsRaycastFn (wired to PhysicsWorld.castRay
+   * by createGame — see runtime/index.js), same pairing as
+   * _entitiesAtPoint/_physicsHitTestFn just above. Exposed to scripts as
+   * physics.raycast(x1,y1,x2,y2,opts) — see the doc comment on that
+   * global in getGlobals() for the full opts.layerMask/opts.debug
+   * behavior from a script author's point of view.
+   *
+   * @param {number} x1 @param {number} y1 ray start (world space)
+   * @param {number} x2 @param {number} y2 ray end (world space)
+   * @param {{ layerMask?: number, debug?: boolean }} [opts]
+   * @returns {{ entity:object, point:{x,y}, normal:{x,y}|null, distance:number }|null}
+   */
+  _raycast(x1, y1, x2, y2, opts) {
+    opts = opts || {};
+    var hit = null;
+    if (this._physicsRaycastFn) {
+      hit = this._physicsRaycastFn(x1, y1, x2, y2, { layerMask: opts.layerMask });
+    }
+
+    if (opts.debug) {
+      // Recorded regardless of hit/miss so a script can see WHERE a ray
+      // that missed actually went, not just the ones that connected —
+      // that's the whole point of a debug ray. NOT cleared here: scripts
+      // run inside world.update(), before the host's per-frame render
+      // tick (game.loop.onTick) ever sees this frame's lines, so
+      // clearing on a script-side timer would wipe them before they're
+      // drawn. The debug-line RENDERER (play-popup.js / player/main.js)
+      // clears this array itself, once, right after it finishes drawing
+      // each frame's lines — see renderDebugLines() in both files.
+      this.debugState.debugLines.push({
+        x1: x1, y1: y1, x2: x2, y2: y2,
+        color: hit ? 0x00ff00 : 0xff3333, // green = hit, red = miss
+        hitPoint: hit ? { x: hit.point.x, y: hit.point.y } : null,
+      });
+    }
+
+    if (!hit) return null;
+    var entity = this.world.getEntity(hit.entityId);
+    return {
+      entity: entity ? this.createEntityContext(entity) : null,
+      point: hit.point,
+      normal: hit.normal,
+      distance: hit.distance,
+    };
+  }
+
+  /**
    * Returns the global API object passed as function parameters to
    * each compiled script. Called once per script at compile time.
    */
@@ -824,9 +900,20 @@ export class ScriptAPI {
     return {
       find: function (name) { return self.find(name); },
       findWithTag: function (tag) { return self.findWithTag(tag); },
+      // Explicit first/all pair for both name and tag lookups — see the
+      // doc comments on ScriptAPI.findFirst/findAll/findFirstWithTag/
+      // findAllWithTag above for what each returns.
+      findFirst: function (name) { return self.findFirst(name); },
+      findAll: function (name) { return self.findAll(name); },
+      findFirstWithTag: function (tag) { return self.findFirstWithTag(tag); },
+      findAllWithTag: function (tag) { return self.findAllWithTag(tag); },
       scene: {
         find: function (name) { return self.find(name); },
         findWithTag: function (tag) { return self.findWithTag(tag); },
+        findFirst: function (name) { return self.findFirst(name); },
+        findAll: function (name) { return self.findAll(name); },
+        findFirstWithTag: function (tag) { return self.findFirstWithTag(tag); },
+        findAllWithTag: function (tag) { return self.findAllWithTag(tag); },
         load: function (sceneName) {
           if (self._loadSceneFn) {
             self._loadSceneFn(sceneName);
@@ -843,8 +930,43 @@ export class ScriptAPI {
         },
       },
       physics: {
-        raycast: function (x1, y1, x2, y2) {
-          return self._raycast(x1, y1, x2, y2);
+        /**
+         * Casts a ray from (x1,y1) to (x2,y2) against real Rapier
+         * collider shapes (not a bounding-box guess) and returns the
+         * CLOSEST hit, or null if nothing was hit.
+         *   raycast(x1, y1, x2, y2)
+         *   raycast(x1, y1, x2, y2, { layerMask: LAYER_ENEMY })
+         *   raycast(x1, y1, x2, y2, { debug: true })
+         * opts.layerMask — bitmask of which physics layers this ray can
+         *   hit (same 16-bit layer bits used by Collider2D.layer/mask —
+         *   see physics.layer(n) below to build one). Omit it (or pass
+         *   nothing) to hit every layer, exactly like before.
+         * opts.debug — when true, draws the ray in the Play window/game
+         *   view for one frame: green if it hit something, red if it
+         *   didn't, with a small marker at the hit point. Call debug.show()
+         *   once (e.g. in onStart) to make the overlay/canvas visible at
+         *   all — debug:true rays draw regardless, but debug.show() is
+         *   what turns on the stats HUD alongside them.
+         * Returns { entity, point:{x,y}, normal:{x,y}|null, distance } or null.
+         *   entity is an EntityContext (same shape as `this`/find()'s
+         *   result) for whatever the ray hit.
+         */
+        raycast: function (x1, y1, x2, y2, opts) {
+          return self._raycast(x1, y1, x2, y2, opts);
+        },
+        /**
+         * Builds a layerMask bitmask from one or more layer indices
+         * (0-15), for use as physics.raycast(...)'s opts.layerMask —
+         *   physics.raycast(x1, y1, x2, y2, { layerMask: physics.layer(2, 3) })
+         * hits ONLY colliders on layers 2 and 3, ignoring everything else.
+         */
+        layer: function () {
+          var mask = 0;
+          for (var i = 0; i < arguments.length; i++) {
+            var n = arguments[i] | 0;
+            if (n >= 0 && n <= 15) mask |= (1 << n);
+          }
+          return mask;
         },
       },
       /**
@@ -1086,35 +1208,4 @@ export class ScriptAPI {
   setGlobal(key, value) { this._globals.set(key, value); }
 
   getGlobal(key) { return this._globals.has(key) ? this._globals.get(key) : undefined; }
-}
-
-/**
- * Liang-Barsky line-clipping algorithm: returns the parametric t (0–1)
- * at which the segment (x1,y1)→(x2,y2) enters the AABB, or null if
- * there's no intersection.
- */
-function _segmentAABB(x1, y1, x2, y2, minX, minY, maxX, maxY) {
-  var dx = x2 - x1;
-  var dy = y2 - y1;
-  var t0 = 0, t1 = 1;
-  for (var edge = 0; edge < 4; edge++) {
-    var p, q;
-    if (edge === 0) { p = -dx; q = x1 - minX; }
-    else if (edge === 1) { p = dx; q = maxX - x1; }
-    else if (edge === 2) { p = -dy; q = y1 - minY; }
-    else { p = dy; q = maxY - y1; }
-    if (p === 0) {
-      if (q < 0) return null;
-    } else {
-      var r = q / p;
-      if (p < 0) {
-        if (r > t1) return null;
-        if (r > t0) t0 = r;
-      } else {
-        if (r < t0) return null;
-        if (r < t1) t1 = r;
-      }
-    }
-  }
-  return t0;
 }

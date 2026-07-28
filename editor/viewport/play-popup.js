@@ -179,6 +179,39 @@ function updateDebugOverlay(el, scriptApi, fps) {
   el.textContent = lines.join("\n") || "(debug on — no stats yet)";
 }
 
+/**
+ * Draws every debug ray a script cast this frame via
+ * physics.raycast(x1,y1,x2,y2,{debug:true}) — see ScriptAPI._raycast()
+ * and player/main.js's identical renderDebugLines() (kept as a small
+ * duplicate here rather than a shared import, same reasoning as
+ * updateDebugOverlay above: this file lives under /editor and must not
+ * become something player/main.js — which imports ONLY from /runtime —
+ * ends up depending on).
+ *
+ * `graphics` is parented under gameContentContainer (via
+ * game.getDebugLayer()), so it inherits the live camera transform
+ * automatically — a line drawn in world coordinates lines up with the
+ * colliders it's testing with zero manual transform math here.
+ */
+function renderDebugLines(graphics, scriptApi) {
+  const state = scriptApi.debugState;
+  graphics.clear();
+  if (!state || !state.debugLines || state.debugLines.length === 0) return;
+
+  for (const line of state.debugLines) {
+    graphics.lineStyle(1, line.color, 0.9);
+    graphics.moveTo(line.x1, line.y1);
+    graphics.lineTo(line.x2, line.y2);
+    if (line.hitPoint) {
+      graphics.lineStyle(0);
+      graphics.beginFill(line.color, 1);
+      graphics.drawCircle(line.hitPoint.x, line.hitPoint.y, 4);
+      graphics.endFill();
+    }
+  }
+  state.debugLines.length = 0;
+}
+
 async function boot() {
   // Forward this popup's own console.log/warn/error to the editor's
   // Console panel FIRST, before anything else in boot() has a chance
@@ -334,9 +367,11 @@ async function boot() {
   // exposes for host-side per-frame work.
   const debugOverlayEl = createDebugOverlay();
   const fpsTick = createFpsTracker();
+  const debugLayer = game.getDebugLayer();
   game.loop.onTick = function (dt) {
     const fps = fpsTick(dt);
     updateDebugOverlay(debugOverlayEl, game.scriptApi, fps);
+    renderDebugLines(debugLayer, game.scriptApi);
   };
 
   // When a script calls scene.load() / scene.restart() and the new

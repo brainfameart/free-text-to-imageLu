@@ -556,10 +556,8 @@ export class LightingSystem extends System {
   }
 
   /**
-   * Fills Phase 1's per-light uniform arrays. Identical semantics to
-   * the previous version — only the shader consuming this data moved
-   * files (LightTextureShaderSource.js instead of
-   * LightingShaderSource.js).
+   * Fills Phase 1's per-light uniform arrays — consumed by the shader
+   * in LightTextureShaderSource.js.
    */
   _fillLightUniforms(lightEntities, occluders, stageScale) {
     const u = this._lightTextureFilter.uniforms;
@@ -626,11 +624,10 @@ export class LightingSystem extends System {
   }
 
   /**
-   * Fills Phase 1's per-occluder uniform arrays. Identical semantics
-   * to the previous version (LightTextureShaderSource.js consumes
-   * this data now instead of the old LightingShaderSource.js), EXCEPT
-   * `softness` is now divided by the current editor/game viewport
-   * scale (stageScale) before upload.
+   * Fills Phase 1's per-occluder uniform arrays — consumed by the
+   * shader in LightTextureShaderSource.js, EXCEPT `softness` is
+   * divided by the current editor/game viewport scale (stageScale)
+   * before upload.
    *
    * WHY: every occluder/shadow test in LightTextureShaderSource.js
    * runs in WORLD space (vWorldCoord), which is scale-INDEPENDENT by
