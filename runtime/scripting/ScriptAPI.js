@@ -61,6 +61,7 @@ import { createAnimatorAPI } from "./components/AnimatorAPI.js";
 import { createCameraAPI } from "./components/CameraAPI.js";
 import { createAudioAPI } from "./components/AudioAPI.js";
 import { createControllerAPI } from "./components/ControllerAPI.js";
+import { createColliderAPI } from "./components/ColliderAPI.js";
 
 /**
  * The `this` context inside a user script. All property access reads
@@ -347,6 +348,7 @@ class EntityContext {
     // Movement-type-aware — ControllerAPI.js exposes isGrounded/simulateJump
     // ONLY for Character Controller/Platformer, car tunables ONLY for Car, etc.
     this.controller  = entity.hasComponent(CHARACTER_CONTROLLER)? createControllerAPI(entity)  : undefined;
+    this.collider    = entity.hasComponent(COLLIDER_2D)          ? createColliderAPI(entity)    : undefined;
   }
 }
 
@@ -421,6 +423,11 @@ export class ScriptAPI {
       enabled: false,
       showFps: true,
       stats: new Map(), // custom key -> value pairs from debug.log()
+      /** Debug line segments drawn this frame (cleared each frame).
+       *  Each entry: { x1,y1,x2,y2, color, hitPoint:{x,y}|null }
+       *  Populated by physics.raycast(…,{debug:true}) and rendered by
+       *  the player/popup's onTick using PIXI.Graphics in world space. */
+      debugLines: [],
     };
 
     /** Set by createGame to enable scene.restart() */
@@ -448,6 +455,9 @@ export class ScriptAPI {
      *  practice this is always set before any script runs — kept
      *  nullable defensively, same as every other _*Fn hook here). */
     this._physicsHitTestFn = null;
+    /** Set by createGame to enable physics.raycast() with real Rapier
+     *  shape queries. (x1,y1,x2,y2,opts) -> { entityId, point, normal, distance } | null */
+    this._physicsRaycastFn = null;
 
     this._setupInput();
   }

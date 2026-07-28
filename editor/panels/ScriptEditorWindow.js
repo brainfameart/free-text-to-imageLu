@@ -543,10 +543,8 @@ function _renderApiPanel() {
   // one script never bleed into another.
   var forced = (se.activeTab && se.forcedApis && se.forcedApis[se.activeTab]) || [];
 
-  // Modules that expose a scripting sub-object (this.sprite, this.rigidbody, etc.).
-  // Collider2D and Light affect physics/rendering but have no script sub-object,
-  // so they're listed for information only (always shown as "on entity" if present,
-  // cannot be force-enabled to unlock a sub-object that doesn't exist).
+   // Modules that expose a scripting sub-object (this.sprite, this.rigidbody,
+   // this.collider, etc.). Light still affects rendering only.
   var modules = [
     { name: "Transform",  key: "Transform",           hasApi: true },
     { name: "Sprite",     key: "SpriteRenderer",      hasApi: true },
@@ -555,7 +553,7 @@ function _renderApiPanel() {
     { name: "Camera",     key: "Camera",               hasApi: true },
     { name: "Audio",      key: "AudioSource",          hasApi: true },
     { name: "Animator",   key: "SpriteAnimation",      hasApi: true },
-    { name: "Collider",   key: "Collider2D",           hasApi: false },
+    { name: "Collider",   key: "Collider2D",           hasApi: true },
     { name: "Light",      key: "Light",                hasApi: false },
   ];
 

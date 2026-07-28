@@ -31,6 +31,7 @@ import { createGame } from "../runtime/index.js";
 import { TRANSFORM, Transform } from "../runtime/components/Transform.js";
 import { RIGIDBODY_2D, Rigidbody2D, BodyType } from "../runtime/components/Rigidbody2D.js";
 import { COLLIDER_2D, Collider2D } from "../runtime/components/Collider2D.js";
+import { SCRIPT, Script } from "../runtime/components/Script.js";
 
 // Real-time cap per case (seconds) — generous enough for a 400px/s mover
 // to cross the gap and slam the wall many times over if nothing stops it
@@ -76,6 +77,14 @@ const CASES = [
     wallType: BodyType.STATIC,
     note: "Baseline sanity check — the pairing that always worked.",
   },
+    {
+      id: "kinematic-trigger-vs-static",
+      title: "Kinematic trigger → Static wall",
+      moverType: BodyType.KINEMATIC,
+      wallType: BodyType.STATIC,
+      moverTrigger: true,
+      note: "Trigger movers pass through solid geometry but still receive onTriggerEnter.",
+    },
 ];
 
 const els = {
@@ -143,7 +152,19 @@ function spawnCase(world, c) {
     gravityScale: 0,
   });
   mover.addComponent(RIGIDBODY_2D, rb);
-  mover.addComponent(COLLIDER_2D, new Collider2D({ width: MOVER_HALF * 2, height: MOVER_HALF * 2 }));
+  mover.addComponent(COLLIDER_2D, new Collider2D({
+    width: MOVER_HALF * 2,
+    height: MOVER_HALF * 2,
+    isTrigger: !!c.moverTrigger,
+  }));
+  if (c.moverTrigger) {
+    mover.addComponent(SCRIPT, new Script({
+      scriptName: "collision-trigger-regression",
+      source: "function onTriggerEnter(other) {\n" +
+        "  global.__collisionTestTriggerEnter = (global.__collisionTestTriggerEnter || 0) + 1;\n" +
+        "}\n",
+    }));
+  }
 
   return { wall, mover, rb };
 }
@@ -244,6 +265,7 @@ async function run() {
     // colliders behind if cleanup ever regressed. world.clear() also
     // resets the entity id counter, matching normal scene-load behavior.
     world.clear();
+    game.scriptApi.setGlobal("__collisionTestTriggerEnter", 0);
     const { mover, rb } = spawnCase(world, c);
 
     console.log(`[collision-test] starting "${c.id}" — mover@${START_X}, wall@${WALL_X}`);
@@ -251,9 +273,21 @@ async function run() {
     console.log(`[collision-test] "${c.id}" finished at x=${finalX.toFixed(1)}`);
 
     const passedThrough = finalX > WALL_X + WALL_HALF;
-    const blockedCorrectly = Math.abs(finalX - EXPECTED_REST_X) <= SLOP;
+     const blockedCorrectly = Math.abs(finalX - EXPECTED_REST_X) <= SLOP;
+     const triggerEntered = c.moverTrigger
+       ? (game.scriptApi.getGlobal("__collisionTestTriggerEnter") || 0) > 0
+       : true;
 
-    if (passedThrough) {
+     if (c.moverTrigger && !passedThrough) {
+       c.status = "fail";
+       c.detail = `Trigger mover stopped at x=${finalX.toFixed(1)} instead of passing through the wall.`;
+     } else if (c.moverTrigger && !triggerEntered) {
+       c.status = "fail";
+       c.detail = `Trigger mover passed through to x=${finalX.toFixed(1)}, but onTriggerEnter was not delivered.`;
+     } else if (c.moverTrigger) {
+       c.status = "pass";
+       c.detail = `Trigger passed through to x=${finalX.toFixed(1)} and onTriggerEnter fired.`;
+     } else if (passedThrough) {
       c.status = "fail";
       c.detail = `Mover ended at x=${finalX.toFixed(1)} — it passed straight through the wall (wall near face is at x=${(WALL_X - WALL_HALF).toFixed(0)}).`;
     } else if (blockedCorrectly) {

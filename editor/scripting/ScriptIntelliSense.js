@@ -205,6 +205,41 @@ const AUDIO_API = [
   { label: "playing", detail: "True while the source is set to play (read-only)", insert: "playing", kind: "Property" },
 ];
 
+const COLLIDER_API = [
+  { label: "shape", detail: "'Box' | 'Circle' | 'Capsule' | 'Triangle' (read-only)", insert: "shape", kind: "Property" },
+  { label: "width", detail: "Box width in world units (read-only)", insert: "width", kind: "Property" },
+  { label: "height", detail: "Box height in world units (read-only)", insert: "height", kind: "Property" },
+  { label: "radius", detail: "Circle radius in world units (read-only)", insert: "radius", kind: "Property" },
+  { label: "capsuleHalfHeight", detail: "Capsule half-height (read-only)", insert: "capsuleHalfHeight", kind: "Property" },
+  { label: "capsuleRadius", detail: "Capsule radius (read-only)", insert: "capsuleRadius", kind: "Property" },
+  { label: "offset", detail: "{ x, y } local collider offset (read-only)", insert: "offset", kind: "Property" },
+  { label: "isTrigger", detail: "True when this Collider 2D is a sensor; use onTriggerEnter/Exit", insert: "isTrigger", kind: "Property" },
+  { label: "friction", detail: "Surface friction (read-only)", insert: "friction", kind: "Property" },
+  { label: "restitution", detail: "Bounciness (read-only)", insert: "restitution", kind: "Property" },
+  { label: "density", detail: "Collider density (read-only)", insert: "density", kind: "Property" },
+  { label: "layer", detail: "Physics layer index (read-only)", insert: "layer", kind: "Property" },
+  { label: "mask", detail: "Physics layer mask (read-only)", insert: "mask", kind: "Property" },
+];
+
+// Lifecycle callbacks are top-level script functions. Keep them in the
+// ordinary completion list as well as the body snippets below so a user can
+// type a partial callback name (especially onCollision/onTrigger) and still
+// discover every handler supported by ScriptSystem.
+const LIFECYCLE_API = [
+  { label: "onStart()", detail: "Called once before the first onUpdate", insert: "onStart()", kind: "Function" },
+  { label: "onClone()", detail: "Called once for entities created by spawn()", insert: "onClone()", kind: "Function" },
+  { label: "onUpdate(dt)", detail: "Called every frame", insert: "onUpdate(dt)", kind: "Function" },
+  { label: "onFixedUpdate(dt)", detail: "Called at a fixed physics rate", insert: "onFixedUpdate(dt)", kind: "Function" },
+  { label: "onMessage(message, sender, data)", detail: "Called when a script message is received", insert: "onMessage(message, sender, data)", kind: "Function" },
+  { label: "onClick()", detail: "Called when this collider is clicked/tapped", insert: "onClick()", kind: "Function" },
+  { label: "onCollision(other)", detail: "Called when a solid collider touches this collider", insert: "onCollision(other)", kind: "Function" },
+  { label: "onCollisionEnter(other)", detail: "Called when a solid collision begins", insert: "onCollisionEnter(other)", kind: "Function" },
+  { label: "onCollisionExit(other)", detail: "Called when a solid collision ends", insert: "onCollisionExit(other)", kind: "Function" },
+  { label: "onTriggerEnter(other)", detail: "Called when entering a trigger collider (Is Trigger = on)", insert: "onTriggerEnter(other)", kind: "Function" },
+  { label: "onTriggerExit(other)", detail: "Called when leaving a trigger collider", insert: "onTriggerExit(other)", kind: "Function" },
+  { label: "onDestroy()", detail: "Called when this entity is destroyed or the scene ends", insert: "onDestroy()", kind: "Function" },
+];
+
 const THIS_SHORTCUTS_BASE = [
   { label: "x", detail: "Position X (number)", insert: "x", kind: "Property" },
   { label: "y", detail: "Position Y (number)", insert: "y", kind: "Property" },
@@ -809,6 +844,7 @@ const COMPONENT_APIS = [
   { key: CAMERA, name: "camera", api: CAMERA_API },
   { key: AUDIO_SOURCE, name: "audio", api: AUDIO_API },
   { key: CHARACTER_CONTROLLER, name: "controller", api: CONTROLLER_API_ALL },
+  { key: COLLIDER_2D, name: "collider", api: COLLIDER_API },
 ];
 
 // ─── Completion item builder ──────────────────────────────────────────────────
@@ -912,6 +948,9 @@ function _allCompletions(monaco, range) {
     suggestions.push(_makeCompletion(monaco, { label: c.name, detail: c.name + " component", insert: c.name + ".", kind: "Module" }, range));
   }
   for (const item of GLOBAL_APIS) {
+    suggestions.push(_makeCompletion(monaco, item, range));
+  }
+  for (const item of LIFECYCLE_API) {
     suggestions.push(_makeCompletion(monaco, item, range));
   }
   return suggestions;
@@ -1132,6 +1171,9 @@ export function registerIntelliSense(monaco) {
         } else if (subObj === "controller") {
           isKnownSubObj = true;
           if (!keys || keys.has(CHARACTER_CONTROLLER)) items = _controllerApiForEntities(contextEntities);
+        } else if (subObj === "collider") {
+          isKnownSubObj = true;
+          if (!keys || keys.has(COLLIDER_2D)) items = COLLIDER_API;
         } else if (subObj === "scene") {
           isKnownSubObj = true;
           items = SCENE_API;
@@ -1205,6 +1247,9 @@ export function registerIntelliSense(monaco) {
 
       // ── Global / top-level ────────────────────────────────────────────────
       for (const item of GLOBAL_APIS) {
+        suggestions.push(_makeCompletion(monaco, item, range));
+      }
+      for (const item of LIFECYCLE_API) {
         suggestions.push(_makeCompletion(monaco, item, range));
       }
 

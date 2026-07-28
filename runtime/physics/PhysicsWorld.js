@@ -548,6 +548,9 @@ export class PhysicsWorld {
       if (handle.bodyType !== BodyType.KINEMATIC) continue;
       if (!handle.collider) continue;
       const selfCollider = handle.collider;
+      // Sensors still emit trigger events through Rapier's event queue, but
+      // they are never solid contacts for this manual kinematic fallback.
+      if (selfCollider.isSensor && selfCollider.isSensor()) continue;
 
       // Start from whatever the movement-sweep dispatch already recorded
       // this step, so movement-detected contacts are preserved (and not
@@ -557,6 +560,7 @@ export class PhysicsWorld {
 
       for (const { collider: otherCollider, entityId: otherId } of others) {
         if (otherId === entityId) continue;
+        if (otherCollider.isSensor && otherCollider.isSensor()) continue;
         let pair = null;
         try { pair = this.rapierWorld.contactPair(selfCollider, otherCollider); } catch (_) { continue; }
         if (!pair) continue;
@@ -882,13 +886,11 @@ export class PhysicsWorld {
     rb.pendingMoveX = null;
     rb.pendingMoveY = null;
 
-    if (!handle.collider) {
-      // No collider: a kinematic body with nothing to sweep against
-      // still moves — just without collision detection (it passes
-      // through everything). This is expected: the character-controller
-      // sweep needs a collider to test against obstacles, so without one
-      // the best we can do is apply the raw velocity. Add a Collider2D
-      // if you want the body to be stopped by walls/floors.
+    if (!handle.collider || (handle.collider.isSensor && handle.collider.isSensor())) {
+      // A kinematic body with no collider, or with a trigger/sensor collider,
+      // moves directly. Sensors must not be swept as solid character
+      // geometry: a trigger kinematic should pass through walls and other
+      // bodies while still producing Rapier intersection events.
       const desiredX = rb.velocityX * dt + extraMoveX;
       const desiredY = rb.velocityY * dt + extraMoveY;
       const current = handle.body.translation();
@@ -960,10 +962,15 @@ export class PhysicsWorld {
       ? Math.max(desiredY, GROUND_STICK_VY_PROBE * dt)
       : desiredY;
 
+    // Pass the moving collider's own collision groups as the filter so the
+    // character controller sweep also respects physics layers (e.g. a body
+    // on layer 2 with mask 0b0100 should only be stopped by layer 2
+    // obstacles, even during the character-controller sweep).
+    // EXCLUDE_SENSORS remains so trigger colliders don't block movement.
     this._characterController.computeColliderMovement(handle.collider, {
       x: desiredX,
       y: sweepY,
-    });
+    }, this.RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, handle.collider.collisionGroups());
 
     // Push every DYNAMIC body this kinematic mover ran into, along the
     // direction it is actually moving (a bulldozer shove that brings
@@ -1493,6 +1500,59 @@ export class PhysicsWorld {
     // (trigger) events are actually delivered — Rapier only emits events
     // for colliders that have explicitly requested them.
     handle.collider.setActiveEvents(this.RAPIER.ActiveEvents.COLLISION_EVENTS);
+  }
+
+  /**
+   * Casts a ray from (x1,y1) to (x2,y2) using Rapier's shape-accurate query.
+   * Respects physics layers via the `layerMask` option — only hits colliders
+   * whose layer bit is set in the mask. Returns the CLOSEST hit or null.
+   *
+   * @param {number} x1  @param {number} y1  start point (world space)
+   * @param {number} x2  @param {number} y2  end point (world space)
+   * @param {{ layerMask?: number }} [opts]
+   *   layerMask — 16-bit mask of layers to test (default 0xFFFF = all layers)
+   * @returns {{ entityId:string, point:{x,y}, normal:{x,y}|null, distance:number }|null}
+   */
+  castRay(x1, y1, x2, y2, opts) {
+    if (!this.ready || !this.rapierWorld) return null;
+    opts = opts || {};
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len < 1e-9) return null;
+
+    const RAPIER = this.RAPIER;
+    const ray = new RAPIER.Ray({ x: x1, y: y1 }, { x: dx / len, y: dy / len });
+    const maxToi = len;
+
+    // Encode the ray's collision filter groups:
+    //   membership  (lower 16 bits) = 0xFFFF  → the ray is "visible" from every layer
+    //   filter      (upper 16 bits) = layerMask → the ray only tests colliders on these layers
+    // Rapier allows interaction when both (A.membership & B.filter) != 0 AND
+    // (B.membership & A.filter) != 0. With membership = 0xFFFF the first condition
+    // always passes; the second passes only for colliders in layerMask.
+    const layerMask = (opts.layerMask !== undefined) ? (opts.layerMask & 0xFFFF) : 0xFFFF;
+    const filterGroups = 0xFFFF | (layerMask << 16);
+
+    let hit = null;
+    try {
+      // castRayAndGetNormal gives us the surface normal for free.
+      hit = this.rapierWorld.castRayAndGetNormal(ray, maxToi, true, undefined, filterGroups);
+    } catch (_) {
+      try {
+        hit = this.rapierWorld.castRay(ray, maxToi, true, undefined, filterGroups);
+      } catch (_2) { /* Rapier not ready */ }
+    }
+    if (!hit) return null;
+
+    const entityId = this._colliderHandleMap.get(hit.collider.handle);
+    const t = hit.timeOfImpact;
+    return {
+      entityId,
+      point:    { x: x1 + (dx / len) * t, y: y1 + (dy / len) * t },
+      normal:   hit.normal ? { x: hit.normal.x, y: hit.normal.y } : null,
+      distance: t,
+    };
   }
 
   /** Removes every tracked Rapier body (used when the World/scene is cleared). */

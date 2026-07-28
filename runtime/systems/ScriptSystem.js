@@ -263,7 +263,7 @@ export class ScriptSystem {
   _compile(scriptName, source) {
     try {
       const factory = new Function(
-        "find", "scene", "physics", "input", "time", "random", "global", "debug",
+     "find", "scene", "physics", "input", "mouse", "touch", "time", "random", "global", "debug",
         "sendMessage", "broadcastMessage", "spawn", "wait", "cancelWait", "repeat", "cancelRepeat",
         "console", "Math",
         '"use strict";\n' + source + '\n' +
@@ -315,7 +315,7 @@ export class ScriptSystem {
     try {
       const g = this.scriptApi.getGlobals();
       const handlers = factory(
-        g.find, g.scene, g.physics, g.input, g.time, g.random, g.global, g.debug,
+        g.find, g.scene, g.physics, g.input, g.mouse, g.touch, g.time, g.random, g.global, g.debug,
         g.sendMessage, g.broadcastMessage, g.spawn, g.wait, g.cancelWait, g.repeat, g.cancelRepeat,
         console, Math
       );

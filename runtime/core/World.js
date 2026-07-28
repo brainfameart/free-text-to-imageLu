@@ -160,6 +160,10 @@ export class World {
     return this.getAllEntities().find((e) => e.name === name) || null;
   }
 
+  findAllByName(name) {
+    return this.getAllEntities().filter((e) => e.name === name);
+  }
+
   addSystem(system) {
     this.systems.push(system);
     if (typeof system.onAdded === "function") system.onAdded(this);
