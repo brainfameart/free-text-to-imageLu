@@ -62,6 +62,8 @@ import { createCameraAPI } from "./components/CameraAPI.js";
 import { createAudioAPI } from "./components/AudioAPI.js";
 import { createControllerAPI } from "./components/ControllerAPI.js";
 import { createColliderAPI } from "./components/ColliderAPI.js";
+import { LIGHT } from "../components/Light.js";
+import { createLightAPI } from "./components/LightAPI.js";
 
 /**
  * The `this` context inside a user script. All property access reads
@@ -859,25 +861,41 @@ export class ScriptAPI {
    */
   _raycast(x1, y1, x2, y2, opts) {
     opts = opts || {};
+
+    // Build a Set of entity IDs to exclude. opts.exclude is an array of
+    // EntityContext objects (e.g. [this, find("Wall")]) — each carries
+    // ._entity.id, the internal string ID used by _colliderHandleMap.
+    var excludeEntityIds = null;
+    if (opts.exclude && opts.exclude.length > 0) {
+      excludeEntityIds = new Set();
+      for (var i = 0; i < opts.exclude.length; i++) {
+        var ex = opts.exclude[i];
+        if (ex && ex._entity && ex._entity.id != null) {
+          excludeEntityIds.add(ex._entity.id);
+        }
+      }
+    }
+
     var hit = null;
     if (this._physicsRaycastFn) {
-      hit = this._physicsRaycastFn(x1, y1, x2, y2, { layerMask: opts.layerMask });
+      hit = this._physicsRaycastFn(x1, y1, x2, y2, {
+        layerMask: opts.layerMask,
+        excludeEntityIds: excludeEntityIds,
+      });
     }
 
     if (opts.debug) {
-      // Recorded regardless of hit/miss so a script can see WHERE a ray
-      // that missed actually went, not just the ones that connected —
-      // that's the whole point of a debug ray. NOT cleared here: scripts
-      // run inside world.update(), before the host's per-frame render
-      // tick (game.loop.onTick) ever sees this frame's lines, so
-      // clearing on a script-side timer would wipe them before they're
-      // drawn. The debug-line RENDERER (play-popup.js / player/main.js)
-      // clears this array itself, once, right after it finishes drawing
-      // each frame's lines — see renderDebugLines() in both files.
+      // Drawn as a laser beam: the line ends at the hit point (if any),
+      // not at the original endpoint — so it looks like a beam that stops
+      // at the surface. No separate dot; the cut-off tip IS the indicator.
+      // Red = missed, green = hit. NOT cleared here — cleared by the
+      // renderer (renderDebugLines in play-popup.js / player/main.js)
+      // after drawing, once per frame.
       this.debugState.debugLines.push({
-        x1: x1, y1: y1, x2: x2, y2: y2,
-        color: hit ? 0x00ff00 : 0xff3333, // green = hit, red = miss
-        hitPoint: hit ? { x: hit.point.x, y: hit.point.y } : null,
+        x1: x1, y1: y1,
+        endX: hit ? hit.point.x : x2,
+        endY: hit ? hit.point.y : y2,
+        color: hit ? 0x00ff00 : 0xff3333,
       });
     }
 
@@ -932,24 +950,26 @@ export class ScriptAPI {
       physics: {
         /**
          * Casts a ray from (x1,y1) to (x2,y2) against real Rapier
-         * collider shapes (not a bounding-box guess) and returns the
-         * CLOSEST hit, or null if nothing was hit.
+         * collider shapes and returns the CLOSEST hit, or null.
+         *
          *   raycast(x1, y1, x2, y2)
-         *   raycast(x1, y1, x2, y2, { layerMask: LAYER_ENEMY })
+         *   raycast(x1, y1, x2, y2, { exclude: [this] })
+         *   raycast(x1, y1, x2, y2, { exclude: [this, find("Wall")] })
          *   raycast(x1, y1, x2, y2, { debug: true })
-         * opts.layerMask — bitmask of which physics layers this ray can
-         *   hit (same 16-bit layer bits used by Collider2D.layer/mask —
-         *   see physics.layer(n) below to build one). Omit it (or pass
-         *   nothing) to hit every layer, exactly like before.
-         * opts.debug — when true, draws the ray in the Play window/game
-         *   view for one frame: green if it hit something, red if it
-         *   didn't, with a small marker at the hit point. Call debug.show()
-         *   once (e.g. in onStart) to make the overlay/canvas visible at
-         *   all — debug:true rays draw regardless, but debug.show() is
-         *   what turns on the stats HUD alongside them.
-         * Returns { entity, point:{x,y}, normal:{x,y}|null, distance } or null.
-         *   entity is an EntityContext (same shape as `this`/find()'s
-         *   result) for whatever the ray hit.
+         *
+         * opts.exclude — array of entity objects to skip entirely.
+         *   Pass [this] to ignore the caster's own collider (the most
+         *   common use). Pass [this, find("Shield")] to skip multiple.
+         *   Triggers (isTrigger=true colliders) are always skipped
+         *   regardless of this option.
+         *
+         * opts.debug — draws the ray as a laser beam for one frame:
+         *   green and cut at the hit point if it hit, red full-length
+         *   if it missed. Call debug.show() once (e.g. in onStart) to
+         *   make the overlay visible.
+         *
+         * Returns { entity, point:{x,y}, normal:{x,y}|null, distance }
+         * or null. entity is the same shape as find() / this.
          */
         raycast: function (x1, y1, x2, y2, opts) {
           return self._raycast(x1, y1, x2, y2, opts);

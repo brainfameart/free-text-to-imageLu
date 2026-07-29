@@ -44,6 +44,7 @@ import { CAMERA } from "../../runtime/components/Camera.js";
 import { AUDIO_SOURCE } from "../../runtime/components/AudioSource.js";
 import { SPRITE_ANIMATION } from "../../runtime/components/SpriteAnimation.js";
 import { CHARACTER_CONTROLLER, ControllerType } from "../../runtime/components/CharacterController.js";
+import { LIGHT } from "../../runtime/components/Light.js";
 import { getAllSpriteAssets, getAllAudioAssets } from "../../runtime/assets/AssetRegistry.js";
 import { getSceneList } from "../../runtime/scene/SceneManager.js";
 import { getAllScripts, getScriptSource } from "./ScriptStorage.js";
@@ -209,6 +210,21 @@ const AUDIO_API = [
   { label: "playing", detail: "True while the source is set to play (read-only)", insert: "playing", kind: "Property" },
 ];
 
+// Only shown for entities that actually have a Light component.
+const LIGHT_API = [
+  { label: "type",           detail: "Light shape: 'Point' | 'Directional' | 'Spot' | 'Area' | 'GodRays' | 'Freeform' (read/write)", insert: "type",           kind: "Property" },
+  { label: "color",          detail: 'Tint color as a hex string, e.g. "#ffdd88" for warm orange-yellow (read/write)', insert: 'color = "#',    kind: "Property" },
+  { label: "intensity",      detail: "Brightness: 0 = off, 1 = normal, >1 = overbright/HDR. Clamped to >= 0 (read/write)", insert: "intensity = ", kind: "Property" },
+  { label: "radius",         detail: "Falloff radius in world-space px (Point / Spot / Area / GodRays). Beyond this distance the scene receives no illumination. Clamped to >= 0 (read/write)", insert: "radius = ",    kind: "Property" },
+  { label: "angle",          detail: "Cone angle in degrees for Spot / GodRays lights (full cone width, centered on transform.rotation). Clamped to [0, 360] (read/write)", insert: "angle = ",     kind: "Property" },
+  { label: "width",          detail: "Flat-lit rectangle width in px — Area lights only. Clamped to >= 0 (read/write)", insert: "width = ",     kind: "Property" },
+  { label: "height",         detail: "Flat-lit rectangle height in px — Area lights only. Clamped to >= 0 (read/write)", insert: "height = ",    kind: "Property" },
+  { label: "castsOnWorld",   detail: "When true (default) the light visually illuminates the scene. Set false to keep it in the scene graph without any rendering cost (read/write)", insert: "castsOnWorld = ", kind: "Property" },
+  { label: "castShadows",    detail: "Enable real-time shadow casting — every ShadowCaster entity blocks this light. Has a rendering cost; leave false until needed (read/write)", insert: "castShadows = ", kind: "Property" },
+  { label: "shadowColor",    detail: 'Shadow tint as a hex string, e.g. "#000000" (black) or "#1a1a3a" (blue-tinted) (read/write)', insert: 'shadowColor = "#', kind: "Property" },
+  { label: "shadowStrength", detail: "Shadow opacity: 0 = no visible shadow, 1 = full-strength. Multiplied with each ShadowCaster's own opacity. Clamped to [0, 1] (read/write)", insert: "shadowStrength = ", kind: "Property" },
+];
+
 const COLLIDER_API = [
   { label: "shape", detail: "'Box' | 'Circle' | 'Capsule' | 'Triangle' (read-only)", insert: "shape", kind: "Property" },
   { label: "width", detail: "Box width in world units (read-only)", insert: "width", kind: "Property" },
@@ -314,9 +330,18 @@ const SCENE_API = [
   { label: "restart()", detail: "Restart the current scene from the beginning", insert: "restart()", kind: "Method" },
 ];
 const PHYSICS_API = [
-  { label: "raycast(x1, y1, x2, y2)", detail: "Cast a ray from (x1,y1) to (x2,y2) against real physics shapes. Returns { entity, point, normal, distance } or null.", insert: "raycast(${1:x1}, ${2:y1}, ${3:x2}, ${4:y2})", kind: "Method", snippet: true },
-  { label: "raycast(x1, y1, x2, y2, opts)", detail: 'Cast a ray with options: { layerMask: physics.layer(2,3), debug: true }. layerMask restricts which physics layers the ray can hit; debug:true draws the ray in the Play window (green=hit, red=miss).', insert: "raycast(${1:x1}, ${2:y1}, ${3:x2}, ${4:y2}, { layerMask: ${5:physics.layer(0)}, debug: ${6:true} })", kind: "Method", snippet: true },
+  { label: "raycast(x1, y1, x2, y2)", detail: "Cast a ray from (x1,y1) to (x2,y2). Returns { entity, point, normal, distance } on hit, or null if nothing was struck. entity is the hit object's script context (has .x .y .name .tag etc). point = {x,y} world position of the hit. normal = {x,y} surface direction (or null). distance = px from start to hit.", insert: "raycast(${1:x1}, ${2:y1}, ${3:x2}, ${4:y2})", kind: "Method", snippet: true },
+  { label: "raycast(x1, y1, x2, y2, opts)", detail: "Raycast with options. opts = { exclude: [this], layerMask: physics.layer(2,3), debug: true }. exclude: array of entity contexts to skip (e.g. [this] to ignore the shooter). layerMask: restrict which physics layers the ray can hit. debug:true draws the ray in Play view (green=hit, red=miss).", insert: "raycast(${1:x1}, ${2:y1}, ${3:x2}, ${4:y2}, { exclude: [${5:this}] })", kind: "Method", snippet: true },
   { label: "layer(...indices)", detail: "Build a layerMask from one or more layer indices (0-15) for raycast's opts.layerMask. E.g. physics.layer(2, 3) hits only layers 2 and 3.", insert: "layer(${1:0})", kind: "Method", snippet: true },
+];
+
+// Properties of a raycast() return value: physics.raycast(…) → { entity, point, normal, distance }
+// These are offered when the user types `<hitVar>.` on a variable we can detect was assigned from raycast().
+const RAYCAST_RESULT_API = [
+  { label: "entity",   detail: "The entity that was hit — same script context as find(). Has .x .y .name .tag .sprite .rigidbody etc.", insert: "entity",   kind: "Property" },
+  { label: "point",    detail: "{ x, y } world-space position of the hit on the collider surface.", insert: "point",    kind: "Property" },
+  { label: "normal",   detail: "{ x, y } surface normal at the hit — pointing away from the surface. null if the physics engine didn't compute one (e.g. castRay fallback path).", insert: "normal",   kind: "Property" },
+  { label: "distance", detail: "Distance in pixels from the ray start (x1, y1) to the hit point.", insert: "distance", kind: "Property" },
 ];
 const INPUT_API = [
   { label: "keyDown(key)", detail: 'Is the key currently held? Use key codes like "ArrowLeft", "Space", "KeyA"', insert: 'keyDown("', kind: "Method" },
@@ -718,6 +743,22 @@ export function clearScriptDiagnostics(monaco, model) {
 
 
 
+/**
+ * Scans the script for variables assigned from physics.raycast(…) so that
+ * typing `hit.` offers { entity, point, normal, distance } completions.
+ * Returns a Set of variable names assigned from raycast calls.
+ */
+function _parseRaycastVariables(text) {
+  const names = new Set();
+  // const hit = physics.raycast(…)  /  let hit = physics.raycast(…)  / hit = physics.raycast(…)
+  const rx = /(?:\b(?:var|let|const)\s+)?(\w+)\s*=\s*physics\s*\.\s*raycast\s*\(/g;
+  let m;
+  while ((m = rx.exec(text)) !== null) {
+    names.add(m[1]);
+  }
+  return names;
+}
+
 function _parseFindVariables(text) {
   const map = {};
   // find("Name") and findFirst("Name") both return a single EntityContext
@@ -878,6 +919,7 @@ const COMPONENT_APIS = [
   { key: AUDIO_SOURCE, name: "audio", api: AUDIO_API },
   { key: CHARACTER_CONTROLLER, name: "controller", api: CONTROLLER_API_ALL },
   { key: COLLIDER_2D, name: "collider", api: COLLIDER_API },
+  { key: LIGHT, name: "light", api: LIGHT_API },
 ];
 
 // ─── Completion item builder ──────────────────────────────────────────────────
@@ -1207,6 +1249,9 @@ export function registerIntelliSense(monaco) {
         } else if (subObj === "collider") {
           isKnownSubObj = true;
           if (!keys || keys.has(COLLIDER_2D)) items = COLLIDER_API;
+        } else if (subObj === "light") {
+          isKnownSubObj = true;
+          if (!keys || keys.has(LIGHT)) items = LIGHT_API;
         } else if (subObj === "scene") {
           isKnownSubObj = true;
           items = SCENE_API;
@@ -1249,6 +1294,16 @@ export function registerIntelliSense(monaco) {
           return { suggestions };
         }
         if (isKnownSubObj) return { suggestions: [] };
+
+        // Unknown sub-object — check if it's a tracked raycast() result variable.
+        // E.g. const hit = physics.raycast(…); hit.entity / hit.point / etc.
+        const raycastVars = _parseRaycastVariables(textUntilPosition);
+        if (raycastVars.has(subObj)) {
+          for (const item of RAYCAST_RESULT_API) {
+            suggestions.push(_makeCompletion(monaco, item, range));
+          }
+          return { suggestions };
+        }
 
         // Unknown sub-object — check if it's a tracked find() variable.
         const findVars = _parseFindVariables(textUntilPosition);

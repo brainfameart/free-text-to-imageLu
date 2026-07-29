@@ -91,6 +91,10 @@ const GAME_KEY_CODES = new Set([
 class InputState {
   constructor() {
     this.keys = new Set();
+    /** Keys that went down THIS frame only — cleared at the start of each
+     *  ControllerSystem.update() tick via tick(). Used for jump so holding
+     *  Space only triggers one jump per press, not one per frame. */
+    this._justPressed = new Set();
     this._onKeyDown = (e) => {
       // BUG FIX: without this, holding an arrow key or Space scrolled
       // the whole page (taking the game canvas out of view), and
@@ -116,6 +120,12 @@ class InputState {
       // text input/textarea or the Monaco editor currently has focus.
       if (InputState._isTypingTarget(e.target)) return;
       if (GAME_KEY_CODES.has(e.code)) e.preventDefault();
+      // Track just-pressed: only fires once per physical key-down, not
+      // repeatedly while held (browser fires repeated keydown events
+      // while a key is held; skip those by checking keys first).
+      if (!this.keys.has(e.code)) {
+        this._justPressed.add(e.code);
+      }
       this.keys.add(e.code);
     };
     this._onKeyUp = (e) => {
@@ -124,6 +134,11 @@ class InputState {
     };
     window.addEventListener("keydown", this._onKeyDown);
     window.addEventListener("keyup", this._onKeyUp);
+  }
+
+  /** Clear the just-pressed set at the start of each frame. */
+  tick() {
+    this._justPressed.clear();
   }
 
   /**
@@ -150,10 +165,16 @@ class InputState {
     return codes.some((c) => this.keys.has(c));
   }
 
+  /** True if ANY of the given codes was pressed THIS frame (not held). */
+  isJustPressed(...codes) {
+    return codes.some((c) => this._justPressed.has(c));
+  }
+
   destroy() {
     window.removeEventListener("keydown", this._onKeyDown);
     window.removeEventListener("keyup", this._onKeyUp);
     this.keys.clear();
+    this._justPressed.clear();
   }
 }
 
@@ -167,7 +188,25 @@ export class ControllerSystem extends System {
     this._jumpsUsed = new Map();
     /** @type {Map<string, number>} entityId -> current forward speed (Car controller) */
     this._carSpeed = new Map();
+    /**
+     * POST-JUMP LOCKOUT (Dynamic path only): seconds remaining during which
+     * _jumpsUsed will NOT be reset to 0 even if the velocity-based grounded
+     * check fires true. Set to `jumpForce / GRAVITY_Y * POST_JUMP_LOCKOUT_SAFETY`
+     * when a jump is applied; decremented by dt each frame. This physically
+     * derived duration is always ≥ the time to reach the jump apex
+     * (ascent time = jumpForce / gravity), so the apex (vy ≈ 0 on the way up)
+     * can never falsely satisfy the grounded condition and clear the counter
+     * before the character actually lands. Uses the jump's own force so the
+     * lockout automatically scales with high/low jumpForce settings.
+     * @type {Map<string, number>}
+     */
+    this._postJumpTime = new Map();
   }
+
+  // Safety multiplier on top of the physical ascent time (jumpForce / GRAVITY_Y).
+  // 1.2 = 20% past the theoretical apex, giving margin for frame-rate variance
+  // and the brief plateau near the top of a real jump arc.
+  static POST_JUMP_LOCKOUT_SAFETY = 1.2;
 
   update(world, dt) {
     const entities = world.query(TRANSFORM, CHARACTER_CONTROLLER, RIGIDBODY_2D);
@@ -202,6 +241,14 @@ export class ControllerSystem extends System {
         this._applyKinematic(entity.id, controller, rigidbody, dt);
       }
     }
+
+    // Clear just-pressed state at the END of the frame (after all controllers
+    // have read it) so every isJustPressed() call this tick sees the press,
+    // and it is cleared before the NEXT frame's keydown events arrive.
+    // Placing tick() at the START of update() was the original bug: a keydown
+    // event queued between frames would be added to _justPressed and then
+    // immediately cleared before any controller could read it.
+    this.input.tick();
   }
 
   /**
@@ -218,9 +265,23 @@ export class ControllerSystem extends System {
     const down = useKeys && this.input.isDown("ArrowDown", "KeyS");
     // A script can request a jump via this.controller.simulateJump()
     // (scripting/components/ControllerAPI.js sets requestJump=true on
-    // the component); consumed here alongside the keyboard Space key
-    // so both trigger the exact same jump logic/limits.
-    const jumpPressed = (useKeys && this.input.isDown("Space")) || controller.requestJump;
+    // the component); consumed here alongside the keyboard Space/ArrowUp
+    // keys so all trigger the exact same jump logic/limits.
+    //
+    // JUMP-KEY FIX: use isJustPressed (went down THIS frame) rather than
+    // isDown (held), so holding Space doesn't fire a jump every frame.
+    // With isDown and maxJumps=2, holding Space would consume both jumps
+    // in consecutive frames before the body had time to leave the ground,
+    // making double-jump impossible and allowing infinite jumping when
+    // combined with the apex grounded false-positive (see grounded fix
+    // below). isJustPressed fires exactly once per physical key-down.
+    // ArrowUp is added as an alternative jump key — the standard
+    // Platformer convention alongside Space.
+    const jumpJustPressed = useKeys && (
+      this.input.isJustPressed("Space") ||
+      (controller.controllerType === ControllerType.PLATFORMER && this.input.isJustPressed("ArrowUp", "KeyW"))
+    );
+    const jumpPressed = jumpJustPressed || controller.requestJump;
     controller.requestJump = false;
 
     // A script can request movement via this.controller.simulateMove(x, y)
@@ -242,15 +303,23 @@ export class ControllerSystem extends System {
     // (0-1 multiplier on acceleration while airborne) was previously
     // never read here, so a Dynamic Character Controller/Platformer
     // always accelerated at full ground acceleration in mid-air. Uses
-    // the "near-zero vertical speed" grounded epsilon (defined below,
-    // moved up here so both the lerp and the later grounded/jump logic
-    // can share the same value) rather than rigidbody.grounded's
+    // the grounded epsilon (defined below) rather than rigidbody.grounded's
     // previous-frame value, so this reacts the same frame gravity
     // starts pulling the body down. Top-Down has no gravity/air concept
     // at all, so it always uses full acceleration.
+    //
+    // GROUNDED FIX: the previous check was Math.abs(velocityY) < 20, which
+    // fires TRUE at the apex of a jump (velocityY passes through ≈0 on the
+    // way up), causing _jumpsUsed to reset mid-air and allowing extra jumps.
+    // Fix: require velocityY >= -10 (NOT going upward) in addition to the
+    // near-zero magnitude check. Any negative velocityY means the body is
+    // still ascending — definitely not grounded. The -10 px/s threshold
+    // absorbs floating-point near-zero without falsely triggering while
+    // the body is clearly on the rising half of a jump arc.
+    const vy = rigidbody.velocityY;
     const grounded = controller.controllerType === ControllerType.TOP_DOWN
       ? true
-      : Math.abs(rigidbody.velocityY) < 20; // small epsilon: resting/near-zero vertical speed
+      : vy >= -10 && vy < 40; // not going upward AND not in serious freefall
     const airborneMultiplier = grounded ? 1 : controller.airControl;
 
     // Smoothly approach the target horizontal speed rather than snapping.
@@ -283,13 +352,35 @@ export class ControllerSystem extends System {
     // approximation this system already used internally, just now
     // exposed instead of staying a local-only const.
     rigidbody.grounded = grounded;
-    if (grounded) this._jumpsUsed.set(entityId, 0);
+
+    // Decrement time-based post-jump lockout.
+    // Duration is physically derived: jumpForce / GRAVITY_Y gives the
+    // theoretical ascent time; the safety multiplier adds headroom past
+    // apex so the velocity-based grounded condition cannot fire while the
+    // body is still on the rising half of the arc.
+    const lockoutRemaining = this._postJumpTime.get(entityId) || 0;
+    if (lockoutRemaining > 0) {
+      this._postJumpTime.set(entityId, lockoutRemaining - dt);
+    }
+
+    // Only reset _jumpsUsed when grounded AND the lockout has expired.
+    // lockoutRemaining > 0 means we are still within the protected window
+    // after a jump; even if vy ≈ 0 at the apex the counter stays intact.
+    if (grounded && lockoutRemaining <= 0) this._jumpsUsed.set(entityId, 0);
 
     if (controller.canJump && jumpPressed) {
       const jumpsUsed = this._jumpsUsed.get(entityId) || 0;
       if (jumpsUsed < controller.maxJumps) {
         rigidbody.driveVelocityY = -controller.jumpForce; // negative = up (this engine is Y-down)
         this._jumpsUsed.set(entityId, jumpsUsed + 1);
+        // Arm a physically derived lockout: covers the full ascent
+        // (jumpForce / GRAVITY_Y seconds) plus a safety margin, so the apex
+        // never satisfies the grounded check and resets _jumpsUsed early.
+        const ascentTime = controller.jumpForce / GRAVITY_Y;
+        this._postJumpTime.set(
+          entityId,
+          ascentTime * ControllerSystem.POST_JUMP_LOCKOUT_SAFETY
+        );
       }
     }
   }
@@ -306,7 +397,14 @@ export class ControllerSystem extends System {
     const right = useKeys && this.input.isDown("ArrowRight", "KeyD");
     const up = useKeys && this.input.isDown("ArrowUp", "KeyW");
     const down = useKeys && this.input.isDown("ArrowDown", "KeyS");
-    const jumpPressed = (useKeys && this.input.isDown("Space")) || controller.requestJump;
+    // JUMP-KEY FIX: use isJustPressed so holding Space only triggers one
+    // jump per press, matching the Dynamic path fix above. ArrowUp is also
+    // accepted as an alternative jump key for Platformer (common convention).
+    const jumpJustPressed = useKeys && (
+      this.input.isJustPressed("Space") ||
+      (controller.controllerType === ControllerType.PLATFORMER && this.input.isJustPressed("ArrowUp", "KeyW"))
+    );
+    const jumpPressed = jumpJustPressed || controller.requestJump;
     controller.requestJump = false;
 
     // A script can request movement via this.controller.simulateMove(x, y)
@@ -550,5 +648,6 @@ export class ControllerSystem extends System {
     this._verticalVelocity.clear();
     this._jumpsUsed.clear();
     this._carSpeed.clear();
+    this._postJumpTime.clear();
   }
 }

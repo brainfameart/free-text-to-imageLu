@@ -60,6 +60,7 @@ let lightingSystem = null;
 let animationSystem = null;
 let tilemapSystem = null;
 let _markViewportDirty = null;
+let _pixiInitFailed = false; // set true when no renderer is available; stops retrying
 
 export function getGame() {
   return game;
@@ -142,14 +143,35 @@ function createViewport(mount, render) {
   const w = Math.max(1, mount.clientWidth);
   const h = Math.max(1, mount.clientHeight);
 
-  pixiApp = new PIXI.Application({
-    width: w,
-    height: h,
-    backgroundColor: 0x282828,
-    antialias: true,
-    autoDensity: true,
-    resolution: window.devicePixelRatio || 1,
-  });
+  // Renderer init with three-stage fallback so the editor never crashes
+  // regardless of GPU/WebGL availability (headless CI, sandboxed iframes,
+  // software-only Chromium all reach the Canvas 2D path without throwing):
+  //   1. Try WebGL (preferred: GPU-accelerated, PixiJS default).
+  //   2. Try forceCanvas: true — bypasses WebGL detection entirely.
+  //   3. Null-app stub — editor UI stays alive, viewport stays dark.
+  // Each attempt is wrapped independently so a throw in the fallback
+  // never escapes createViewport and crashes the whole editor module.
+  (function _initPixiApp() {
+    const _base = {
+      width: w, height: h,
+      backgroundColor: 0x282828,
+      autoDensity: true,
+      resolution: window.devicePixelRatio || 1,
+    };
+    // Stage 1: WebGL
+    if (PIXI.utils.isWebGLSupported()) {
+      try { pixiApp = new PIXI.Application(Object.assign({}, _base, { antialias: true })); return; }
+      catch (_) { /* fall through to Canvas */ }
+    }
+    // Stage 2: Canvas 2D
+    try { pixiApp = new PIXI.Application(Object.assign({}, _base, { forceCanvas: true })); return; }
+    catch (_) { /* fall through to null stub */ }
+    // Stage 3: No renderer available — log and leave pixiApp null.
+    _pixiInitFailed = true;
+    console.warn("[ZenEngine] No PIXI renderer available (no WebGL or Canvas 2D). Scene viewport will be disabled.");
+  })();
+
+  if (!pixiApp) return; // bail out gracefully — editor UI still works
   mount.appendChild(pixiApp.view);
   attachPixiDiagnostics(pixiApp);
 
@@ -847,7 +869,10 @@ export function mountOrUpdateSceneViewport(render) {
   if (!mount) return;
 
   if (!pixiApp) {
-    createViewport(mount, render);
+    if (!_pixiInitFailed) createViewport(mount, render);
+    // If init already failed (no renderer available), skip silently —
+    // the editor UI still works, only the scene canvas stays dark.
+    if (!pixiApp) return;
   } else {
     renderFn = render || renderFn;
     mount.appendChild(pixiApp.view);

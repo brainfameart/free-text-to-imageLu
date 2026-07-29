@@ -199,15 +199,12 @@ function renderDebugLines(graphics, scriptApi) {
   if (!state || !state.debugLines || state.debugLines.length === 0) return;
 
   for (const line of state.debugLines) {
-    graphics.lineStyle(1, line.color, 0.9);
+    // Laser-beam style: line runs from origin to hit point (endX/endY),
+    // so it visually cuts off at the surface instead of passing through it.
+    // No separate dot — the tip of the beam is the hit indicator.
+    graphics.lineStyle(2, line.color, 1);
     graphics.moveTo(line.x1, line.y1);
-    graphics.lineTo(line.x2, line.y2);
-    if (line.hitPoint) {
-      graphics.lineStyle(0);
-      graphics.beginFill(line.color, 1);
-      graphics.drawCircle(line.hitPoint.x, line.hitPoint.y, 4);
-      graphics.endFill();
-    }
+    graphics.lineTo(line.endX, line.endY);
   }
   state.debugLines.length = 0;
 }

@@ -20,7 +20,7 @@ import { renderTilesetEditor } from "./panels/TilesetPanel.js";
 import { renderScriptEditor, mountScriptEditor } from "./panels/ScriptEditorWindow.js";
 import { renderPhysicsLayersWindow } from "./panels/PhysicsLayersWindow.js";
 import { renderStatusBar, startLiveStats } from "./panels/StatusBar.js";
-import { mountOrUpdateSceneViewport, getGame, detachViewportCanvas } from "./viewport/SceneViewport.js";
+import { mountOrUpdateSceneViewport, getGame, detachViewportCanvas } from "./viewport/SceneViewport.js?v=2";
 import { openPlayWindow, closePlayWindow, isPlayWindowOpen } from "./viewport/PlayWindow.js";
 import { attachEditorEvents } from "./state/EditorEvents.js";
 import { editorState, pushLog } from "./state/EditorState.js";

@@ -28,6 +28,7 @@ import { COLLIDER_2D, ColliderShape, makeCollisionGroups } from "../components/C
 import { TILEMAP } from "../components/Tilemap.js";
 import { TILESET } from "../components/Tileset.js";
 import { getColliderWorldGeometry } from "./ColliderGeometry.js";
+import { CHARACTER_CONTROLLER } from "../components/CharacterController.js";
 import { loadRapier } from "./RapierLoader.js";
 
 const GRAVITY_Y = 980; // px/s^2 downward — same constant the old stub integrator used
@@ -857,6 +858,20 @@ export class PhysicsWorld {
 
     this._syncCollider(handle, collider, transform);
 
+    // WALL-STICKING FIX for Dynamic + CharacterController bodies:
+    // Rapier's friction model creates an upward friction force when a
+    // Dynamic body is driven horizontally into a wall (driveVelocityX
+    // keeps applying a normal force, friction opposes gravity → the body
+    // appears to "stick" to the wall instead of sliding down). The standard
+    // fix for all physics-engine character controllers is to zero the
+    // character collider's friction so no lateral friction force can
+    // develop against any surface. Floor grip is still simulated via the
+    // CharacterController's own velocity seeding, not collider friction.
+    if (rb && effectiveBodyType === BodyType.DYNAMIC &&
+        entity.hasComponent(CHARACTER_CONTROLLER) && handle.collider) {
+      handle.collider.setFriction(0);
+    }
+
     if (rb && effectiveBodyType === BodyType.KINEMATIC) {
       this._syncKinematicMovement(handle, rb, dt);
     }
@@ -1567,13 +1582,28 @@ export class PhysicsWorld {
     const layerMask = (opts.layerMask !== undefined) ? (opts.layerMask & 0xFFFF) : 0xFFFF;
     const filterGroups = 0xFFFF | (layerMask << 16);
 
+    // Build a Rapier predicate that excludes specific entities by ID.
+    // Rapier 0.14 passes the Collider object to the predicate; we look up
+    // its entity ID via _colliderHandleMap and reject it when it's in the
+    // exclude set. undefined = no predicate = hit everything.
+    const excludeIds = opts.excludeEntityIds;
+    const predicate = (excludeIds && excludeIds.size > 0)
+      ? (collider) => !excludeIds.has(this._colliderHandleMap.get(collider.handle))
+      : undefined;
+
     let hit = null;
     try {
       // castRayAndGetNormal gives us the surface normal for free.
-      hit = this.rapierWorld.castRayAndGetNormal(ray, maxToi, true, undefined, filterGroups);
+      // Rapier 0.14 signature: (ray, maxToi, solid, filterFlags, filterGroups,
+      //   filterExcludeCollider, filterExcludeRigidBody, filterPredicate)
+      hit = this.rapierWorld.castRayAndGetNormal(
+        ray, maxToi, true, undefined, filterGroups, null, null, predicate
+      );
     } catch (_) {
       try {
-        hit = this.rapierWorld.castRay(ray, maxToi, true, undefined, filterGroups);
+        hit = this.rapierWorld.castRay(
+          ray, maxToi, true, undefined, filterGroups, null, null, predicate
+        );
       } catch (_2) { /* Rapier not ready */ }
     }
     if (!hit) return null;

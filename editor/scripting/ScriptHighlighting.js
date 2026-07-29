@@ -47,7 +47,8 @@
 //                                identifier color, i.e. left alone entirely.
 
 const ENGINE_GLOBALS = [
-  "find", "scene", "physics", "input", "mouse", "touch", "time", "random",
+  "find", "findWithTag", "findFirst", "findAll", "findFirstWithTag", "findAllWithTag",
+  "scene", "physics", "input", "mouse", "touch", "time", "random",
   "global", "debug", "sendMessage", "broadcastMessage", "spawn", "wait",
   "cancelWait", "repeat", "cancelRepeat",
 ];
@@ -59,7 +60,7 @@ const ENGINE_LIFECYCLE = [
 ];
 
 const ENGINE_OBJECTS = [
-  "transform", "sprite", "rigidbody", "animator", "camera", "audio", "controller",
+  "transform", "sprite", "rigidbody", "animator", "camera", "audio", "controller", "light",
 ];
 
 // Members accessed off an engine global/object, e.g. input.keyDown(...),
@@ -93,6 +94,8 @@ const ENGINE_MEMBERS = [
   "load", "restart",
   // Physics
   "raycast",
+  // Light
+  "intensity", "radius", "angle", "castsOnWorld", "castShadows", "shadowColor", "shadowStrength",
   // Input
   "keyDown", "keyPressed",
   // Mouse / Touch (short generic names like x/y/count are deliberately
