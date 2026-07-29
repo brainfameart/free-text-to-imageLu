@@ -93,7 +93,11 @@ const ENGINE_MEMBERS = [
   // Scene
   "load", "restart",
   // Physics
-  "raycast",
+  "raycast", "layer",
+  // Raycast result: physics.raycast(...) → { entity, point, normal, distance }
+  "entity", "point", "normal", "distance",
+  // Raycast opts: physics.raycast(x1,y1,x2,y2, { exclude, layerMask, debug })
+  "exclude", "layerMask",
   // Light
   "intensity", "radius", "angle", "castsOnWorld", "castShadows", "shadowColor", "shadowStrength",
   // Input

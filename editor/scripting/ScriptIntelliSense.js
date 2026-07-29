@@ -343,6 +343,21 @@ const RAYCAST_RESULT_API = [
   { label: "normal",   detail: "{ x, y } surface normal at the hit — pointing away from the surface. null if the physics engine didn't compute one (e.g. castRay fallback path).", insert: "normal",   kind: "Property" },
   { label: "distance", detail: "Distance in pixels from the ray start (x1, y1) to the hit point.", insert: "distance", kind: "Property" },
 ];
+
+// Keys of the raycast() options object literal: physics.raycast(x1,y1,x2,y2, { … })
+// Offered when the cursor is inside that literal, e.g. right after
+// "physics.raycast(x1, y1, x2, y2, { " or after a comma inside it.
+const RAYCAST_OPTS_API = [
+  { label: "exclude",   detail: "Array of entity contexts to skip entirely, e.g. exclude: [this] to ignore the shooter's own collider, or [this, find(\"Shield\")] to skip several. Triggers are always skipped regardless of this option.", insert: "exclude: [${1:this}]", kind: "Property", snippet: true },
+  { label: "layerMask", detail: "Bitmask restricting which physics layers the ray can hit — build it with physics.layer(2, 3). Colliders outside the mask are ignored entirely.", insert: "layerMask: ${1:physics.layer(0)}", kind: "Property", snippet: true },
+  { label: "debug",     detail: "true draws the ray as a laser beam for one frame in Play view — green and cut off at the hit point if it hit, red full-length if it missed. Call debug.show() once (e.g. onStart) to make the overlay visible.", insert: "debug: ${1:true}", kind: "Property", snippet: true },
+];
+
+// Properties of the `other` parameter passed to onCollision/onCollisionEnter/
+// onCollisionExit/onTriggerEnter/onTriggerExit — the same script-context
+// shape as `this`/find() results, so the full THIS_SHORTCUTS_BASE list is
+// reused for it rather than a separate hand-maintained duplicate.
+const OTHER_PARAM_API = THIS_SHORTCUTS_BASE;
 const INPUT_API = [
   { label: "keyDown(key)", detail: 'Is the key currently held? Use key codes like "ArrowLeft", "Space", "KeyA"', insert: 'keyDown("', kind: "Method" },
   { label: "keyPressed(key)", detail: 'Was the key pressed this frame only (not held)? Same key codes as keyDown.', insert: 'keyPressed("', kind: "Method" },
@@ -759,6 +774,60 @@ function _parseRaycastVariables(text) {
   return names;
 }
 
+/**
+ * True when `text` (everything in the document up to the cursor) leaves the
+ * cursor sitting inside the options object literal of the LAST still-open
+ * physics.raycast(…) call — i.e. after its 5th-argument "{" and before the
+ * matching "}"/")". Works across multiple lines by scanning back from the
+ * last "physics.raycast(" and doing simple paren/brace depth counting on
+ * everything after it, ignoring characters inside string literals.
+ */
+function _isInsideRaycastOpts(text) {
+  const callRx = /physics\s*\.\s*raycast\s*\(/g;
+  let lastIdx = -1;
+  let m;
+  while ((m = callRx.exec(text)) !== null) lastIdx = m.index + m[0].length;
+  if (lastIdx === -1) return false;
+
+  const tail = text.slice(lastIdx);
+  let parenDepth = 1; // the "(" already consumed by the regex match
+  let braceDepth = 0;
+  let inString = null;
+  for (let i = 0; i < tail.length; i++) {
+    const ch = tail[i];
+    if (inString) {
+      if (ch === "\\") { i++; continue; }
+      if (ch === inString) inString = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") { inString = ch; continue; }
+    if (ch === "(") parenDepth++;
+    else if (ch === ")") { parenDepth--; if (parenDepth <= 0) return false; }
+    else if (ch === "{") braceDepth++;
+    else if (ch === "}") braceDepth--;
+  }
+  // Still inside the raycast(...) call overall, AND inside an opened,
+  // unclosed "{" within it — that "{" is the opts object literal (raycast
+  // takes no other object-literal argument).
+  return parenDepth > 0 && braceDepth > 0;
+}
+
+/**
+ * Given text up to the cursor that _isInsideRaycastOpts already confirmed is
+ * inside a raycast opts literal, returns the Set of key names already typed
+ * in that literal (e.g. {"exclude"} after "exclude: [this], ") so they're
+ * not suggested a second time.
+ */
+function _usedObjectKeys(text) {
+  const lastBrace = text.lastIndexOf("{");
+  const slice = lastBrace === -1 ? "" : text.slice(lastBrace + 1);
+  const keys = new Set();
+  const rx = /(\w+)\s*:/g;
+  let m;
+  while ((m = rx.exec(slice)) !== null) keys.add(m[1]);
+  return keys;
+}
+
 function _parseFindVariables(text) {
   const map = {};
   // find("Name") and findFirst("Name") both return a single EntityContext
@@ -1061,7 +1130,7 @@ export function registerIntelliSense(monaco) {
   _registered = true;
 
   monaco.languages.registerCompletionItemProvider("javascript", {
-    triggerCharacters: [".", "(", '"', "'"],
+    triggerCharacters: [".", "(", '"', "'", "{", ","],
 
     provideCompletionItems: function (model, position) {
       const textUntilPosition = model.getValueInRange({
@@ -1190,6 +1259,30 @@ export function registerIntelliSense(monaco) {
         }
 
         return { suggestions: [] };
+      }
+
+      // ── physics.raycast(x1,y1,x2,y2, { <partial> → opts object keys ──────
+      // Detects the cursor sitting inside the raycast options literal —
+      // scanning back from the LAST unmatched "physics.raycast(" call so it
+      // still works if the opts object spans multiple lines.
+      if (_isInsideRaycastOpts(textUntilPosition)) {
+        const usedKeys = _usedObjectKeys(textUntilPosition);
+        for (const item of RAYCAST_OPTS_API) {
+          if (usedKeys.has(item.label)) continue;
+          suggestions.push(_makeCompletion(monaco, item, range));
+        }
+        return { suggestions };
+      }
+
+      // ── other.<partial> → collision/trigger callback parameter ───────────
+      // `other` is only meaningful as the parameter name of onCollision*/
+      // onTrigger* — matched literally rather than tracking real parameter
+      // bindings, since ZenEngine's callback signatures are fixed.
+      if (lineUntil.match(/\bother\.\w*$/)) {
+        for (const item of OTHER_PARAM_API) {
+          suggestions.push(_makeCompletion(monaco, item, range));
+        }
+        return { suggestions };
       }
 
       // ── this.<partial> → entity-aware completions ────────────────────────
@@ -1394,4 +1487,107 @@ export function registerIntelliSense(monaco) {
       return { suggestions };
     },
   });
+
+  registerHoverProvider(monaco);
+}
+
+// ─── Hover documentation ──────────────────────────────────────────────────────
+// Autocomplete only shows docs for identifiers the user is actively typing
+// after a trigger character. A hover provider surfaces the SAME docs for any
+// recognized engine identifier anywhere in the file — while reading code,
+// skimming a script someone else wrote, or just moving the mouse — which is
+// the main way to discover a built-in you didn't know existed rather than one
+// you're already halfway through typing. Built once from a flattened index of
+// every API table already defined above, so it can never drift out of sync
+// with what autocomplete itself offers.
+let _hoverIndex = null;
+
+function _buildHoverIndex() {
+  if (_hoverIndex) return _hoverIndex;
+  const index = new Map(); // identifier -> array of { detail, group }
+  function add(label, detail, group) {
+    // Strip a trailing "(args)" signature down to the bare name so both
+    // "raycast(x1, y1, x2, y2)" and a bare "raycast" typed/hovered word match
+    // the same entry — Monaco's hover word-detection only ever gives a bare
+    // identifier, never the full call signature.
+    const name = String(label).replace(/\(.*$/, "").replace(/^function\s+/, "").trim();
+    if (!name) return;
+    if (!index.has(name)) index.set(name, []);
+    index.get(name).push({ detail, group });
+  }
+  const allTables = [
+    ["this / entity", THIS_SHORTCUTS_BASE],
+    ["this / entity (collider)", THIS_SHORTCUTS_COLLIDER],
+    ["transform", TRANSFORM_API],
+    ["sprite", SPRITE_API],
+    ["rigidbody", RIGIDBODY_API_ALL],
+    ["controller", CONTROLLER_API_ALL],
+    ["animator", ANIMATOR_API],
+    ["camera", CAMERA_API],
+    ["audio", AUDIO_API],
+    ["light", LIGHT_API],
+    ["collider", COLLIDER_API],
+    ["global", GLOBAL_APIS],
+    ["scene", SCENE_API],
+    ["physics", PHYSICS_API],
+    ["raycast() result", RAYCAST_RESULT_API],
+    ["raycast() options", RAYCAST_OPTS_API],
+    ["input", INPUT_API],
+    ["mouse", MOUSE_API],
+    ["touch", TOUCH_API],
+    ["touch item", TOUCH_ITEM_API],
+    ["time", TIME_API],
+    ["random", RANDOM_API],
+    ["debug", DEBUG_API],
+    ["lifecycle", LIFECYCLE_API],
+  ];
+  for (const [group, table] of allTables) {
+    for (const item of table) add(item.label, item.detail, group);
+  }
+  _hoverIndex = index;
+  return index;
+}
+
+function registerHoverProvider(monaco) {
+  monaco.languages.registerHoverProvider("javascript", {
+    provideHover: function (model, position) {
+      const word = model.getWordAtPosition(position);
+      if (!word) return null;
+      const index = _buildHoverIndex();
+      const entries = index.get(word.word);
+      if (!entries || entries.length === 0) return null;
+
+      const contents = entries.map((e) => ({
+        value: "**" + word.word + "** _(" + e.group + ")_\n\n" + e.detail,
+      }));
+      return {
+        range: new monaco.Range(
+          position.lineNumber, word.startColumn,
+          position.lineNumber, word.endColumn
+        ),
+        contents,
+      };
+    },
+  });
+}
+
+/**
+ * Returns every built-in identifier ZenEngine scripts can use, grouped by
+ * category, for a "show me everything" reference view (e.g. a help panel or
+ * command-palette action) — NOT used by the completion/hover providers
+ * themselves, which read the API tables directly. Exists so an editor UI can
+ * offer one authoritative, always-in-sync list of every keyword autocomplete
+ * knows about, without hand-maintaining a second copy anywhere.
+ */
+export function getAllEngineIdentifiers() {
+  const index = _buildHoverIndex();
+  const byGroup = new Map();
+  for (const [name, entries] of index) {
+    for (const e of entries) {
+      if (!byGroup.has(e.group)) byGroup.set(e.group, []);
+      byGroup.get(e.group).push({ name, detail: e.detail });
+    }
+  }
+  for (const list of byGroup.values()) list.sort((a, b) => a.name.localeCompare(b.name));
+  return byGroup;
 }

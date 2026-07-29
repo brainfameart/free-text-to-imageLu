@@ -127,6 +127,52 @@ function _sizedColliderDefaults(entity) {
  */
 export function attachEditorEvents(render, onTogglePlay) {
 let _lastSceneClick = { id: null, time: 0 };
+
+  // Generic touchpad-safe double-click tracker for every [data-dblclick-action]
+  // element (script rename, scene rename label, and any future one). The
+  // native "dblclick" event this used to rely on is unreliable on laptop
+  // trackpads (the OS double-click distance/timing threshold can differ
+  // from the browser's, so dblclick sometimes just never fires) and
+  // doesn't survive a DOM rebuild between the two clicks (render()
+  // replaces app.innerHTML, so the second click lands on a brand-new
+  // element even though it looks like the same one). Tracking timestamp +
+  // the identifying data-* value ourselves on the regular "click" event
+  // sidesteps both problems — same approach already proven for scene-file
+  // switching (_lastSceneClick above) and freeform light vertex insertion
+  // (SceneViewport.js's _lastFreeformClick).
+  let _lastDblClickTarget = { key: null, time: 0 };
+  const DBLCLICK_MS = 500;
+  /**
+   * Call from inside the delegated click handler once you have `t`, the
+   * element matched by closest("[data-action]"). Returns true (and fires
+   * the dblclick action) if this click is the second half of a double
+   * click on the same [data-dblclick-action] element; false otherwise
+   * (including: element has no data-dblclick-action at all).
+   */
+  function _checkDblClick(t) {
+    const dblTarget = t.closest("[data-dblclick-action]");
+    if (!dblTarget) return false;
+    const action = dblTarget.dataset.dblclickAction;
+    // Key on the action plus every data-* attribute the element carries
+    // besides dblclickAction/action itself (sceneId, script, etc.) so two
+    // different rows with the same action never get confused for one
+    // double click across a re-render.
+    const key = action + "|" + JSON.stringify(dblTarget.dataset);
+    const now = Date.now();
+    if (_lastDblClickTarget.key === key && now - _lastDblClickTarget.time < DBLCLICK_MS) {
+      _lastDblClickTarget = { key: null, time: 0 };
+      if (action === "rename-scene-start") {
+        editorState.renamingSceneId = dblTarget.dataset.sceneId;
+        render();
+      } else if (action === "script-rename") {
+        handleScriptEditorAction("script-rename", dblTarget);
+      }
+      return true;
+    }
+    _lastDblClickTarget = { key, time: now };
+    return false;
+  }
+
   document.addEventListener("click", (e) => {
     const t = e.target.closest("[data-action]");
     if (!t) {
@@ -140,6 +186,12 @@ let _lastSceneClick = { id: null, time: 0 };
       }
       return;
     }
+    // Second half of a double click on a [data-dblclick-action] element
+    // (script rename / scene rename label) — handled and consumed here,
+    // BEFORE the single-click data-action below runs, so double-clicking
+    // never also triggers whatever the single click on that same element
+    // would otherwise do (e.g. script-folder-open).
+    if (_checkDblClick(t)) return;
     const action = t.dataset.action;
 
     // Any click on a real action target OTHER than the menu/submenu
@@ -685,18 +737,6 @@ case "select-scene-file": {
         render();
         break;
       }
-    }
-  });
-
-  document.addEventListener("dblclick", (e) => {
-    const t = e.target.closest("[data-dblclick-action]");
-    if (!t) return;
-    const action = t.dataset.dblclickAction;
-    if (action === "rename-scene-start") {
-      editorState.renamingSceneId = t.dataset.sceneId;
-      render();
-    } else if (action === "script-rename") {
-      handleScriptEditorAction("script-rename", t);
     }
   });
 
