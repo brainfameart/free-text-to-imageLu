@@ -44,7 +44,7 @@ import { CAMERA } from "../../runtime/components/Camera.js";
 import { AUDIO_SOURCE } from "../../runtime/components/AudioSource.js";
 import { SPRITE_ANIMATION } from "../../runtime/components/SpriteAnimation.js";
 import { CHARACTER_CONTROLLER, ControllerType } from "../../runtime/components/CharacterController.js";
-import { LIGHT } from "../../runtime/components/Light.js";
+import { LIGHT, LightType } from "../../runtime/components/Light.js";
 import { getAllSpriteAssets, getAllAudioAssets } from "../../runtime/assets/AssetRegistry.js";
 import { getSceneList } from "../../runtime/scene/SceneManager.js";
 import { getAllScripts, getScriptSource } from "./ScriptStorage.js";
@@ -199,8 +199,29 @@ const ANIMATOR_API = [
 
 const CAMERA_API = [
   { label: "zoom", detail: "Camera size/zoom. Default 5 = no zoom. Smaller = zoomed in, larger = zoomed out.", insert: "zoom = ", kind: "Property" },
-  { label: "shake(intensity, duration)", detail: "Shake the camera. intensity=pixels of shake, duration=seconds.", insert: "shake(${1:intensity}, ${2:duration})", kind: "Method", snippet: true },
-  { label: "renderToSprite(spriteEntity)", detail: "Render this camera's view onto a sprite's texture every frame (minimap / security feed).", insert: "renderToSprite(${1:spriteEntity})", kind: "Method", snippet: true },
+  { label: "backgroundColor", detail: 'Background/clear color as a hex string, e.g. "#1a1a2e". Changes take effect immediately.', insert: 'backgroundColor = "#', kind: "Property" },
+  { label: "shake(intensity, duration)", detail: "Shake the camera. intensity = peak radius in px (default 10), duration = seconds (default 0.3).\n  this.camera.shake(8, 0.5);", insert: "shake(${1:10}, ${2:0.3})", kind: "Method", snippet: true },
+  { label: "follow(target, opts)", detail: "Smoothly follow a target entity every frame. target = entity from find(). opts = { smoothing: 0.1, offsetX: 0, offsetY: 0, snap: false }.\n  this.camera.follow(find('Player'), { smoothing: 0.08 });", insert: "follow(${1:find(\"Player\")}, { smoothing: ${2:0.1} })", kind: "Method", snippet: true },
+  { label: "stopFollow()", detail: "Stop a follow() already in progress. Safe to call when not following.", insert: "stopFollow()", kind: "Method" },
+  { label: "offsetX", detail: "Horizontal offset from the followed target (px). Change while following to shift look-ahead direction.", insert: "offsetX = ", kind: "Property" },
+  { label: "offsetY", detail: "Vertical offset from the followed target (px). Change while following to shift look-ahead direction.", insert: "offsetY = ", kind: "Property" },
+  { label: "renderToSprite(spriteEntity)", detail: "Render this camera's view onto a sprite's texture every frame (minimap / security feed). Pass null to stop.", insert: "renderToSprite(${1:find(\"Minimap\")})", kind: "Method", snippet: true },
+];
+
+// Keys of the camera.follow() options object literal.
+const CAMERA_FOLLOW_OPTS_API = [
+  { label: "smoothing", detail: "0–1 lerp factor per frame (default 0.1). Higher = snappier, 1 = instant snap.", insert: "smoothing: ${1:0.1}", kind: "Field", snippet: true },
+  { label: "offsetX",   detail: "Horizontal offset from the target center in world px (default 0).", insert: "offsetX: ${1:0}", kind: "Field", snippet: true },
+  { label: "offsetY",   detail: "Vertical offset from the target center in world px (default 0).", insert: "offsetY: ${1:0}", kind: "Field", snippet: true },
+  { label: "snap",      detail: "If true, camera teleports to the target each frame (no lerp/smoothing).", insert: "snap: ${1:true}", kind: "Field", snippet: true },
+];
+
+// Keys of the spawn() options object literal.
+const SPAWN_OPTS_API = [
+  { label: "x",     detail: "Spawn position X in world space. Defaults to the source entity's own X.", insert: "x: ${1:this.x}", kind: "Field", snippet: true },
+  { label: "y",     detail: "Spawn position Y in world space. Defaults to the source entity's own Y.", insert: "y: ${1:this.y}", kind: "Field", snippet: true },
+  { label: "name",  detail: "Rename the clone to this string. Defaults to the source entity's name.", insert: 'name: "${1:Clone}"', kind: "Field", snippet: true },
+  { label: "byTag", detail: "If true, the first argument is treated as a TAG instead of a name.", insert: "byTag: ${1:true}", kind: "Field", snippet: true },
 ];
 
 const AUDIO_API = [
@@ -210,20 +231,45 @@ const AUDIO_API = [
   { label: "playing", detail: "True while the source is set to play (read-only)", insert: "playing", kind: "Property" },
 ];
 
-// Only shown for entities that actually have a Light component.
-const LIGHT_API = [
-  { label: "type",           detail: "Light shape: 'Point' | 'Directional' | 'Spot' | 'Area' | 'GodRays' | 'Freeform' (read/write)", insert: "type",           kind: "Property" },
-  { label: "color",          detail: 'Tint color as a hex string, e.g. "#ffdd88" for warm orange-yellow (read/write)', insert: 'color = "#',    kind: "Property" },
-  { label: "intensity",      detail: "Brightness: 0 = off, 1 = normal, >1 = overbright/HDR. Clamped to >= 0 (read/write)", insert: "intensity = ", kind: "Property" },
-  { label: "radius",         detail: "Falloff radius in world-space px (Point / Spot / Area / GodRays). Beyond this distance the scene receives no illumination. Clamped to >= 0 (read/write)", insert: "radius = ",    kind: "Property" },
-  { label: "angle",          detail: "Cone angle in degrees for Spot / GodRays lights (full cone width, centered on transform.rotation). Clamped to [0, 360] (read/write)", insert: "angle = ",     kind: "Property" },
-  { label: "width",          detail: "Flat-lit rectangle width in px — Area lights only. Clamped to >= 0 (read/write)", insert: "width = ",     kind: "Property" },
-  { label: "height",         detail: "Flat-lit rectangle height in px — Area lights only. Clamped to >= 0 (read/write)", insert: "height = ",    kind: "Property" },
-  { label: "castsOnWorld",   detail: "When true (default) the light visually illuminates the scene. Set false to keep it in the scene graph without any rendering cost (read/write)", insert: "castsOnWorld = ", kind: "Property" },
-  { label: "castShadows",    detail: "Enable real-time shadow casting — every ShadowCaster entity blocks this light. Has a rendering cost; leave false until needed (read/write)", insert: "castShadows = ", kind: "Property" },
-  { label: "shadowColor",    detail: 'Shadow tint as a hex string, e.g. "#000000" (black) or "#1a1a3a" (blue-tinted) (read/write)', insert: 'shadowColor = "#', kind: "Property" },
+// ─── Light API — per-type definitions ────────────────────────────────────────
+// Properties shared by every light type.
+const LIGHT_API_COMMON = [
+  { label: "type",           detail: "Light shape: 'Point' | 'Directional' | 'Spot' | 'Area' | 'GodRays' | 'Freeform' (read/write)", insert: "type",              kind: "Property" },
+  { label: "color",          detail: 'Tint color as a hex string, e.g. "#ffdd88" for warm orange-yellow (read/write)', insert: 'color = "#',         kind: "Property" },
+  { label: "intensity",      detail: "Brightness: 0 = off, 1 = normal, >1 = overbright/HDR. Clamped to >= 0 (read/write)", insert: "intensity = ",    kind: "Property" },
+  { label: "castsOnWorld",   detail: "When true (default) the light visually illuminates the scene. Set false to keep it in the scene graph without any rendering cost (read/write)", insert: "castsOnWorld = ",  kind: "Property" },
+  { label: "castShadows",    detail: "Enable real-time shadow casting — every ShadowCaster entity blocks this light. Has a rendering cost; leave false until needed (read/write)", insert: "castShadows = ",   kind: "Property" },
+  { label: "shadowColor",    detail: 'Shadow tint as a hex string, e.g. "#000000" (black) or "#1a1a3a" (blue-tinted) (read/write)', insert: 'shadowColor = "#',  kind: "Property" },
   { label: "shadowStrength", detail: "Shadow opacity: 0 = no visible shadow, 1 = full-strength. Multiplied with each ShadowCaster's own opacity. Clamped to [0, 1] (read/write)", insert: "shadowStrength = ", kind: "Property" },
 ];
+// Per-type: only properties actually available for that type are offered so
+// the user never sees radius on a Directional or angle on a Point.
+const LIGHT_API_POINT       = LIGHT_API_COMMON.concat([
+  { label: "radius", detail: "Falloff radius in world-space px — how far the light reaches. Clamped to >= 0 (read/write)", insert: "radius = ", kind: "Property" },
+]);
+const LIGHT_API_DIRECTIONAL = LIGHT_API_COMMON; // no positional falloff fields
+const LIGHT_API_SPOT        = LIGHT_API_COMMON.concat([
+  { label: "radius", detail: "Falloff radius in world-space px. Clamped to >= 0 (read/write)", insert: "radius = ", kind: "Property" },
+  { label: "angle",  detail: "Cone angle in degrees (full cone width, centered on transform.rotation). Clamped to [0, 360] (read/write)", insert: "angle = ",  kind: "Property" },
+]);
+const LIGHT_API_AREA        = LIGHT_API_COMMON.concat([
+  { label: "radius", detail: "Soft falloff radius at the rectangle's edge. Clamped to >= 0 (read/write)", insert: "radius = ", kind: "Property" },
+  { label: "width",  detail: "Flat-lit rectangle width in px. Clamped to >= 0 (read/write)",              insert: "width = ",  kind: "Property" },
+  { label: "height", detail: "Flat-lit rectangle height in px. Clamped to >= 0 (read/write)",             insert: "height = ", kind: "Property" },
+]);
+const LIGHT_API_GOD_RAYS    = LIGHT_API_COMMON.concat([
+  { label: "radius", detail: "How far the god-ray shafts reach. Clamped to >= 0 (read/write)", insert: "radius = ", kind: "Property" },
+  { label: "angle",  detail: "Cone angle in degrees for the shaft spread. Clamped to [0, 360] (read/write)", insert: "angle = ", kind: "Property" },
+]);
+const LIGHT_API_FREEFORM    = LIGHT_API_COMMON; // polygon points are editor-only
+
+// Full list used by hover docs (covers all types in one place).
+const LIGHT_API = LIGHT_API_COMMON.concat([
+  { label: "radius", detail: "Falloff radius in world-space px (Point / Spot / Area / GodRays). Beyond this distance the scene receives no illumination. Clamped to >= 0 (read/write)", insert: "radius = ",    kind: "Property" },
+  { label: "angle",  detail: "Cone angle in degrees for Spot / GodRays lights (full cone width, centered on transform.rotation). Clamped to [0, 360] (read/write)", insert: "angle = ",     kind: "Property" },
+  { label: "width",  detail: "Flat-lit rectangle width in px — Area lights only. Clamped to >= 0 (read/write)", insert: "width = ",     kind: "Property" },
+  { label: "height", detail: "Flat-lit rectangle height in px — Area lights only. Clamped to >= 0 (read/write)", insert: "height = ",    kind: "Property" },
+]);
 
 const COLLIDER_API = [
   { label: "shape", detail: "'Box' | 'Circle' | 'Capsule' | 'Triangle' (read-only)", insert: "shape", kind: "Property" },
@@ -305,7 +351,7 @@ const GLOBAL_APIS = [
   { label: "physics", detail: "Physics utilities: physics.raycast(x1,y1,x2,y2,opts), physics.layer(n)", insert: "physics.", kind: "Module" },
   { label: "input", detail: "Input queries: input.keyDown(key), input.keyPressed(key)", insert: "input.", kind: "Module" },
   { label: "mouse", detail: "Mouse position + buttons: mouse.x, mouse.y, mouse.down(button), mouse.isOver(name), mouse.clickedOn(name)", insert: "mouse.", kind: "Module" },
-  { label: "touch", detail: "Active touches for mobile: touch.count, touch.first.x/.y, or loop over touch for multi-finger", insert: "touch", kind: "Module" },
+  { label: "touch", detail: "Active touches for mobile: touch.count, touch.first.x/.y, touch.swipe, touch.pinch, or loop over touch for multi-finger", insert: "touch.", kind: "Module" },
   { label: "time", detail: "Frame timing: time.deltaTime, time.elapsed", insert: "time.", kind: "Module" },
   { label: "random", detail: "Random numbers: random.int(min,max), random.float(min,max)", insert: "random.", kind: "Module" },
   { label: "global", detail: "Cross-script shared state: global.score = 0, global.lives, etc.", insert: "global.", kind: "Module" },
@@ -375,18 +421,43 @@ const MOUSE_API = [
   { label: "clickedOn(nameOrTag, options)", detail: 'Was this entity clicked THIS frame? Combines isOver() + pressed() into one check. E.g. if (mouse.clickedOn("PlayButton")) { scene.load("Level1"); }', insert: 'clickedOn("', kind: "Method" },
 ];
 const TOUCH_API = [
-  { label: "count", detail: "How many fingers are currently touching the screen", insert: "count", kind: "Property" },
-  { label: "first", detail: "The first active finger (same shape as any touch entry), or null if none — handy for simple one-finger controls", insert: "first", kind: "Property" },
+  // Core
+  { label: "count",          detail: "How many fingers are currently touching the screen (excludes justEnded entries)", insert: "count", kind: "Property" },
+  { label: "first",          detail: "The first active finger (id/x/y/startX/startY/dx/dy/distance/justStarted), or null if none", insert: "first", kind: "Property" },
+  { label: "anyJustStarted", detail: "True if any finger touched down this frame (pulse, like justStarted on a single touch)", insert: "anyJustStarted", kind: "Property" },
+  { label: "anyJustEnded",   detail: "True if any finger lifted this frame (pulse, like justEnded on a single touch)", insert: "anyJustEnded", kind: "Property" },
+  // Gesture helpers — insert with trailing "." so Monaco immediately re-opens suggestions for the sub-properties
+  { label: "swipe",  detail: "Swipe gesture: touch.swipe.active (true while one finger has moved > 40 px from start), .direction ('left'|'right'|'up'|'down'), .dx, .dy, .distance.", insert: "swipe.", kind: "Module" },
+  { label: "pinch",  detail: "Pinch gesture (two fingers): touch.pinch.active, .scale (cur/start distance ratio), .delta (px change), .distance (current px between fingers).", insert: "pinch.", kind: "Module" },
 ];
 const TOUCH_ITEM_API = [
-  { label: "id", detail: "Stable id for this specific finger — use to tell fingers apart across frames (e.g. a pinch gesture)", insert: "id", kind: "Property" },
-  { label: "x", detail: "This finger's world-space x position", insert: "x", kind: "Property" },
-  { label: "y", detail: "This finger's world-space y position", insert: "y", kind: "Property" },
-  { label: "screenX", detail: "This finger's x in raw canvas pixels", insert: "screenX", kind: "Property" },
-  { label: "screenY", detail: "This finger's y in raw canvas pixels", insert: "screenY", kind: "Property" },
-  { label: "startX", detail: "World-space x where this finger FIRST touched down — subtract from x for swipe distance", insert: "startX", kind: "Property" },
-  { label: "startY", detail: "World-space y where this finger FIRST touched down — subtract from y for swipe distance", insert: "startY", kind: "Property" },
+  { label: "id",          detail: "Stable id for this specific finger — use to tell fingers apart across frames", insert: "id", kind: "Property" },
+  { label: "x",           detail: "This finger's current world-space x position", insert: "x", kind: "Property" },
+  { label: "y",           detail: "This finger's current world-space y position", insert: "y", kind: "Property" },
+  { label: "screenX",     detail: "This finger's x in raw canvas pixels", insert: "screenX", kind: "Property" },
+  { label: "screenY",     detail: "This finger's y in raw canvas pixels", insert: "screenY", kind: "Property" },
+  { label: "startX",      detail: "World-space x where this finger first touched down", insert: "startX", kind: "Property" },
+  { label: "startY",      detail: "World-space y where this finger first touched down", insert: "startY", kind: "Property" },
+  { label: "dx",          detail: "How far this finger has moved horizontally from its start (x - startX)", insert: "dx", kind: "Property" },
+  { label: "dy",          detail: "How far this finger has moved vertically from its start (y - startY)", insert: "dy", kind: "Property" },
+  { label: "distance",    detail: "Total distance this finger has moved from its start (Math.hypot(dx, dy))", insert: "distance", kind: "Property" },
   { label: "justStarted", detail: "True for exactly the one frame this finger touched down", insert: "justStarted", kind: "Property" },
+  { label: "justEnded",   detail: "True for exactly the one frame this finger lifted/cancelled", insert: "justEnded", kind: "Property" },
+];
+// Completions for touch.swipe.* properties.
+const TOUCH_SWIPE_API = [
+  { label: "active",    detail: "True while one finger has moved more than 40 px from its touch-down point", insert: "active", kind: "Property" },
+  { label: "direction", detail: "'left' | 'right' | 'up' | 'down' — dominant axis of the swipe", insert: "direction", kind: "Property" },
+  { label: "dx",        detail: "Horizontal displacement from the swipe's start (px, positive = right)", insert: "dx", kind: "Property" },
+  { label: "dy",        detail: "Vertical displacement from the swipe's start (px, positive = down)", insert: "dy", kind: "Property" },
+  { label: "distance",  detail: "Total distance from the swipe's start (px)", insert: "distance", kind: "Property" },
+];
+// Completions for touch.pinch.* properties.
+const TOUCH_PINCH_API = [
+  { label: "active",   detail: "True while two or more fingers are on screen", insert: "active", kind: "Property" },
+  { label: "scale",    detail: "Current / start distance ratio — 1 at first touch, > 1 spreading (zoom in), < 1 pinching (zoom out)", insert: "scale", kind: "Property" },
+  { label: "delta",    detail: "Current distance minus start distance in px — positive = spreading, negative = pinching", insert: "delta", kind: "Property" },
+  { label: "distance", detail: "Current pixel distance between the two fingers", insert: "distance", kind: "Property" },
 ];
 const TIME_API = [
   { label: "deltaTime", detail: "Seconds since the last frame (use to keep movement frame-rate independent)", insert: "deltaTime", kind: "Property" },
@@ -828,6 +899,40 @@ function _usedObjectKeys(text) {
   return keys;
 }
 
+/**
+ * Generic version of _isInsideRaycastOpts: returns true when the cursor is
+ * inside an open `{` that is itself inside a call matching `funcPattern`.
+ * Used for camera.follow(target, { opts }) and spawn("name", { opts }).
+ * funcPattern is a RegExp that matches the function call up to and including
+ * its opening `(`, e.g. /camera\s*\.\s*follow\s*\(/.
+ */
+function _isInsideFunctionOptArg(text, funcPattern) {
+  const callRx = new RegExp(funcPattern.source, "g");
+  let lastIdx = -1;
+  let m;
+  while ((m = callRx.exec(text)) !== null) lastIdx = m.index + m[0].length;
+  if (lastIdx === -1) return false;
+
+  const tail = text.slice(lastIdx);
+  let parenDepth = 1;
+  let braceDepth = 0;
+  let inString = null;
+  for (let i = 0; i < tail.length; i++) {
+    const ch = tail[i];
+    if (inString) {
+      if (ch === "\\") { i++; continue; }
+      if (ch === inString) inString = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") { inString = ch; continue; }
+    if (ch === "(") parenDepth++;
+    else if (ch === ")") { parenDepth--; if (parenDepth <= 0) return false; }
+    else if (ch === "{") braceDepth++;
+    else if (ch === "}") braceDepth--;
+  }
+  return parenDepth > 0 && braceDepth > 0;
+}
+
 function _parseFindVariables(text) {
   const map = {};
   // find("Name") and findFirst("Name") both return a single EntityContext
@@ -925,6 +1030,44 @@ function _controllerApiForEntities(entities) {
   return merged;
 }
 
+function _lightApiForType(lightType) {
+  switch (lightType) {
+    case LightType.POINT:       return LIGHT_API_POINT;
+    case LightType.DIRECTIONAL: return LIGHT_API_DIRECTIONAL;
+    case LightType.SPOT:        return LIGHT_API_SPOT;
+    case LightType.AREA:        return LIGHT_API_AREA;
+    case LightType.GOD_RAYS:    return LIGHT_API_GOD_RAYS;
+    case LightType.FREEFORM:    return LIGHT_API_FREEFORM;
+    default:                    return LIGHT_API; // unknown type: show full list
+  }
+}
+
+function _lightApiForEntities(entities) {
+  const seen = new Set();
+  const lists = [];
+  for (const e of entities) {
+    if (!e.hasComponent(LIGHT)) continue;
+    const light = e.getComponent(LIGHT);
+    const lightType = light ? light.type : LightType.POINT;
+    if (seen.has(lightType)) continue;
+    seen.add(lightType);
+    lists.push(_lightApiForType(lightType));
+  }
+  if (lists.length === 0) return LIGHT_API; // no context: full list
+  if (lists.length === 1) return lists[0];
+  // Multiple light types on the context entities: merge their APIs.
+  const merged = [];
+  const labelsSeen = new Set();
+  for (const list of lists) {
+    for (const item of list) {
+      if (labelsSeen.has(item.label)) continue;
+      labelsSeen.add(item.label);
+      merged.push(item);
+    }
+  }
+  return merged;
+}
+
 function _getContextEntities() {
   const se = editorState.scriptEditor;
   const ctx = se.contextByScript ? se.contextByScript[se.activeTab] : null;
@@ -990,6 +1133,73 @@ const COMPONENT_APIS = [
   { key: COLLIDER_2D, name: "collider", api: COLLIDER_API },
   { key: LIGHT, name: "light", api: LIGHT_API },
 ];
+
+// ─── Object-literal { } field completions ────────────────────────────────────
+// When the user types `= {` after a known object-valued API property we suggest
+// only the valid field names for that property instead of the full API list.
+// Properties that accept { x, y } — position, velocity, scale, resolvedVelocity.
+const XY_FIELDS = [
+  { label: "x", detail: "x coordinate / component", insert: "x: ${1:0}", kind: "Field", snippet: true },
+  { label: "y", detail: "y coordinate / component", insert: "y: ${1:0}", kind: "Field", snippet: true },
+];
+
+// Map from property name → its field definitions. Only properties that are
+// genuinely assigned an object literal in normal usage are listed here.
+const OBJECT_LITERAL_FIELDS = {
+  position:         XY_FIELDS,
+  velocity:         XY_FIELDS,
+  scale:            XY_FIELDS,
+  resolvedVelocity: XY_FIELDS,
+};
+
+/**
+ * Detects whether the cursor is inside an unclosed `{` that was opened as
+ * an object-literal ASSIGNMENT (i.e. `propName = {`), and returns:
+ *   - An array of field items  when the property is known (may be empty when
+ *     all fields are already present)
+ *   - An empty array []        when inside a `= {` for an UNKNOWN property
+ *     (suppresses the full API list without offering false completions)
+ *   - null                     when NOT inside a `= {` at all (normal completion
+ *     should proceed — the `{` belongs to a function body, array, etc.)
+ */
+function _detectObjectAssignContext(textUntil) {
+  // Walk the text maintaining a stack of unclosed `{` indices so we can
+  // find the innermost one accurately even across nested structures.
+  const braceStack = [];
+  let inString = null;
+  for (let i = 0; i < textUntil.length; i++) {
+    const ch = textUntil[i];
+    if (inString) {
+      if (ch === "\\") { i++; continue; }
+      if (ch === inString) inString = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") { inString = ch; continue; }
+    if (ch === "{") braceStack.push(i);
+    else if (ch === "}" && braceStack.length > 0) braceStack.pop();
+  }
+  if (braceStack.length === 0) return null; // not inside any unclosed {
+
+  // Innermost unclosed {
+  const lastBrace = braceStack[braceStack.length - 1];
+  const before = textUntil.slice(0, lastBrace).trimEnd();
+
+  // Was this { opened immediately after `=`?
+  if (!/=\s*$/.test(before)) return null; // function body, array element, etc.
+
+  // Extract the property name sitting directly before the `=`.
+  const propBefore = before.replace(/\s*=\s*$/, "").trimEnd();
+  const propMatch = propBefore.match(/\.(\w+)$/) || propBefore.match(/\b(\w+)$/);
+  if (!propMatch) return []; // unrecognised left-hand side — suppress full list
+
+  const propName = propMatch[1];
+  if (propName in OBJECT_LITERAL_FIELDS) {
+    // Known property: return its fields (caller filters already-used ones).
+    return OBJECT_LITERAL_FIELDS[propName];
+  }
+  // `= {` after an unknown property — suppress the full API list.
+  return [];
+}
 
 // ─── Completion item builder ──────────────────────────────────────────────────
 
@@ -1094,9 +1304,11 @@ function _allCompletions(monaco, range) {
   for (const item of GLOBAL_APIS) {
     suggestions.push(_makeCompletion(monaco, item, range));
   }
-  for (const item of LIFECYCLE_API) {
-    suggestions.push(_makeCompletion(monaco, item, range));
-  }
+  // LIFECYCLE_API items are intentionally omitted here: the snippets
+  // (function onStart() { }, etc.) already cover them with full bodies.
+  // Showing bare onStart() / onUpdate() alongside the snippets causes the
+  // user to accidentally pick the no-body version (see the top-level
+  // provideCompletionItems path for the same decision).
   return suggestions;
 }
 
@@ -1274,6 +1486,43 @@ export function registerIntelliSense(monaco) {
         return { suggestions };
       }
 
+      // ── camera.follow(target, { <partial> → opts object keys ─────────────
+      if (_isInsideFunctionOptArg(textUntilPosition, /(?:this\s*\.\s*)?camera\s*\.\s*follow\s*\(/)) {
+        const usedKeys = _usedObjectKeys(textUntilPosition);
+        for (const item of CAMERA_FOLLOW_OPTS_API) {
+          if (usedKeys.has(item.label)) continue;
+          suggestions.push(_makeCompletion(monaco, item, range));
+        }
+        return { suggestions };
+      }
+
+      // ── spawn("name", { <partial>  /  this.spawn("name", { <partial> ─────
+      if (_isInsideFunctionOptArg(textUntilPosition, /\bspawn\s*\(/)) {
+        const usedKeys = _usedObjectKeys(textUntilPosition);
+        for (const item of SPAWN_OPTS_API) {
+          if (usedKeys.has(item.label)) continue;
+          suggestions.push(_makeCompletion(monaco, item, range));
+        }
+        return { suggestions };
+      }
+
+      // ── Object-literal { } field completions ─────────────────────────────
+      // When the cursor is inside an unclosed `{` opened by `propName = {`,
+      // offer only the valid field names for that property (e.g. x, y for
+      // position/velocity). Returns an empty array for unknown `= {` patterns
+      // — so the full API list is NOT dumped into every `{}` the user types.
+      // Returns null when the `{` is not an assignment (function body etc.),
+      // in which case we fall through to the normal completions below.
+      const objFields = _detectObjectAssignContext(textUntilPosition);
+      if (objFields !== null) {
+        const usedKeys = _usedObjectKeys(textUntilPosition);
+        for (const item of objFields) {
+          if (usedKeys.has(item.label)) continue;
+          suggestions.push(_makeCompletion(monaco, item, range));
+        }
+        return { suggestions };
+      }
+
       // ── other.<partial> → collision/trigger callback parameter ───────────
       // `other` is only meaningful as the parameter name of onCollision*/
       // onTrigger* — matched literally rather than tracking real parameter
@@ -1292,9 +1541,10 @@ export function registerIntelliSense(monaco) {
         _pushShortcutCompletions(monaco, range, suggestions, keys, contextEntities);
         for (const c of COMPONENT_APIS) {
           if (keys.has(c.key)) {
-            const api = c.key === RIGIDBODY_2D ? _rigidbodyApiForEntities(contextEntities)
-              : c.key === CHARACTER_CONTROLLER ? _controllerApiForEntities(contextEntities)
-              : c.api;
+            const api = c.key === RIGIDBODY_2D        ? _rigidbodyApiForEntities(contextEntities)
+                      : c.key === CHARACTER_CONTROLLER ? _controllerApiForEntities(contextEntities)
+                      : c.key === LIGHT               ? _lightApiForEntities(contextEntities)
+                      : c.api;
             for (const item of api) {
               suggestions.push(Object.assign(
                 _makeCompletion(monaco, item, range),
@@ -1344,7 +1594,8 @@ export function registerIntelliSense(monaco) {
           if (!keys || keys.has(COLLIDER_2D)) items = COLLIDER_API;
         } else if (subObj === "light") {
           isKnownSubObj = true;
-          if (!keys || keys.has(LIGHT)) items = LIGHT_API;
+          // Use type-aware API: only show properties valid for this light type.
+          if (!keys || keys.has(LIGHT)) items = _lightApiForEntities(contextEntities);
         } else if (subObj === "scene") {
           isKnownSubObj = true;
           items = SCENE_API;
@@ -1360,13 +1611,17 @@ export function registerIntelliSense(monaco) {
         } else if (subObj === "touch") {
           isKnownSubObj = true;
           items = TOUCH_API;
+        } else if (subObj === "swipe") {
+          // touch.swipe.<partial> — properties of the swipe gesture object.
+          isKnownSubObj = true;
+          items = TOUCH_SWIPE_API;
+        } else if (subObj === "pinch") {
+          // touch.pinch.<partial> — properties of the pinch gesture object.
+          isKnownSubObj = true;
+          items = TOUCH_PINCH_API;
         } else if (subObj === "first") {
           // touch.first.<partial> — same shape as one entry in the
-          // touch array itself (id/x/y/screenX/screenY/startX/startY/
-          // justStarted), not the touch array's own count/first. Best-
-          // effort match on the property name alone (same trade-off
-          // "other" already makes elsewhere in this file for
-          // onCollision(other) — no full expression-type tracking).
+          // touch array itself.
           isKnownSubObj = true;
           items = TOUCH_ITEM_API;
         } else if (subObj === "time") {
@@ -1408,11 +1663,10 @@ export function registerIntelliSense(monaco) {
             _pushShortcutCompletions(monaco, range, suggestions, entityKeys, foundEntities);
             for (const c of COMPONENT_APIS) {
               if (entityKeys.has(c.key)) {
-                const api = c.key === RIGIDBODY_2D
-                  ? _rigidbodyApiForEntities(foundEntities)
-                  : c.key === CHARACTER_CONTROLLER
-                  ? _controllerApiForEntities(foundEntities)
-                  : c.api;
+                const api = c.key === RIGIDBODY_2D        ? _rigidbodyApiForEntities(foundEntities)
+                          : c.key === CHARACTER_CONTROLLER ? _controllerApiForEntities(foundEntities)
+                          : c.key === LIGHT               ? _lightApiForEntities(foundEntities)
+                          : c.api;
                 for (const item of api) {
                   suggestions.push(Object.assign(_makeCompletion(monaco, item, range), { label: c.name + "." + item.label }));
                 }
@@ -1430,9 +1684,11 @@ export function registerIntelliSense(monaco) {
       for (const item of GLOBAL_APIS) {
         suggestions.push(_makeCompletion(monaco, item, range));
       }
-      for (const item of LIFECYCLE_API) {
-        suggestions.push(_makeCompletion(monaco, item, range));
-      }
+      // Note: LIFECYCLE_API bare items (onStart(), onUpdate(), …) are
+      // intentionally NOT added here. The snippets below cover every lifecycle
+      // hook with the complete `function name() { }` body. Showing the bare
+      // items alongside the snippets causes users to pick `onStart()` (no body)
+      // instead of `function onStart() { }` when typing after `function `.
 
       // Lifecycle method snippets. Split into always-available (every
       // entity can use these — they don't depend on any component) and
@@ -1536,6 +1792,10 @@ function _buildHoverIndex() {
     ["mouse", MOUSE_API],
     ["touch", TOUCH_API],
     ["touch item", TOUCH_ITEM_API],
+    ["touch.swipe", TOUCH_SWIPE_API],
+    ["touch.pinch", TOUCH_PINCH_API],
+    ["camera.follow options", CAMERA_FOLLOW_OPTS_API],
+    ["spawn options", SPAWN_OPTS_API],
     ["time", TIME_API],
     ["random", RANDOM_API],
     ["debug", DEBUG_API],

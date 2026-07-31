@@ -87,7 +87,7 @@ const ENGINE_MEMBERS = [
   // Animator
   "play", "stop", "playing", "currentClip",
   // Camera
-  "zoom", "shake", "renderToSprite",
+  "zoom", "shake", "renderToSprite", "follow", "stopFollow", "backgroundColor", "offsetX", "offsetY",
   // Audio
   "volume",
   // Scene
@@ -102,11 +102,13 @@ const ENGINE_MEMBERS = [
   "intensity", "radius", "angle", "castsOnWorld", "castShadows", "shadowColor", "shadowStrength",
   // Input
   "keyDown", "keyPressed",
-  // Mouse / Touch (short generic names like x/y/count are deliberately
-  // NOT listed here, same restraint already applied to Transform's own
-  // x/y above — too likely to false-positive-highlight unrelated user
-  // variables of the same name)
-  "isOver", "clickedOn",
+  // Mouse
+  "isOver", "clickedOn", "screenX", "screenY",
+  // Touch — unique enough names are safe to highlight; single-letter/common
+  // names (x, y, id, count, first, active) are intentionally left uncolored
+  // to avoid false-positives on user variables of the same name.
+  "swipe", "pinch", "anyJustStarted", "anyJustEnded",
+  "justStarted", "justEnded", "startX", "startY",
   // Time
   "deltaTime", "elapsed",
   // Random

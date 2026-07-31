@@ -9,10 +9,14 @@
  * this.light on an entity without one throws a clear "missing component"
  * error with an Inspector hint, same pattern as this.audio / this.camera.
  *
+ * Properties are also validated against the light's current type — e.g.
+ * accessing `this.light.radius` on a Directional light throws a clear
+ * error explaining which type the light is and what's actually available.
+ *
  * RUNTIME-ONLY FILE.
  */
 
-import { LIGHT } from "../../components/Light.js";
+import { LIGHT, LightType } from "../../components/Light.js";
 
 function _tag(err, kind) {
   err.kind = kind;
@@ -30,11 +34,50 @@ function _requireLight(entity) {
   return l;
 }
 
+// All valid property names across all light types.
 const LIGHT_MEMBERS = new Set([
   "type", "color", "intensity", "radius", "angle",
   "width", "height", "castsOnWorld", "castShadows",
   "shadowColor", "shadowStrength",
 ]);
+
+// Properties valid per light type. Shared across all: type, color, intensity,
+// castsOnWorld, castShadows, shadowColor, shadowStrength.
+const LIGHT_TYPE_MEMBERS = {
+  [LightType.DIRECTIONAL]: new Set([
+    "type", "color", "intensity",
+    "castsOnWorld", "castShadows", "shadowColor", "shadowStrength",
+  ]),
+  [LightType.POINT]: new Set([
+    "type", "color", "intensity", "radius",
+    "castsOnWorld", "castShadows", "shadowColor", "shadowStrength",
+  ]),
+  [LightType.SPOT]: new Set([
+    "type", "color", "intensity", "radius", "angle",
+    "castsOnWorld", "castShadows", "shadowColor", "shadowStrength",
+  ]),
+  [LightType.AREA]: new Set([
+    "type", "color", "intensity", "radius", "width", "height",
+    "castsOnWorld", "castShadows", "shadowColor", "shadowStrength",
+  ]),
+  [LightType.GOD_RAYS]: new Set([
+    "type", "color", "intensity", "radius", "angle",
+    "castsOnWorld", "castShadows", "shadowColor", "shadowStrength",
+  ]),
+  [LightType.FREEFORM]: new Set([
+    "type", "color", "intensity",
+    "castsOnWorld", "castShadows", "shadowColor", "shadowStrength",
+  ]),
+};
+
+/**
+ * Returns the type-specific member set for a light, falling back to the
+ * full LIGHT_MEMBERS set for any unrecognised type so we're never more
+ * restrictive than the base list.
+ */
+function _membersForType(lightType) {
+  return LIGHT_TYPE_MEMBERS[lightType] || LIGHT_MEMBERS;
+}
 
 /**
  * Builds the `this.light` object for a given entity. All reads and writes
@@ -118,13 +161,27 @@ export function createLightAPI(entity) {
   return new Proxy(target, {
     get: function (t, prop) {
       if (typeof prop === "symbol" || prop === "then") return t[prop];
-      if (!(prop in t) && !LIGHT_MEMBERS.has(String(prop))) {
+      var key = String(prop);
+      // First check: is this even a known light property at all?
+      if (!(key in t) && !LIGHT_MEMBERS.has(key)) {
         throw _tag(new Error(
-          "this.light." + String(prop) + " does not exist. " +
+          "this.light." + key + " does not exist. " +
           "Valid members: " + Array.from(LIGHT_MEMBERS).join(", ") + "."
         ), "unknown-api");
       }
-      var v = t[prop];
+      // Second check: is it valid for the current light type?
+      var light = entity.getComponent(LIGHT);
+      if (light && LIGHT_MEMBERS.has(key)) {
+        var typeMembers = _membersForType(light.type);
+        if (!typeMembers.has(key)) {
+          throw _tag(new Error(
+            "this.light." + key + " is not available on a " + light.type + " light. " +
+            "Available properties for " + light.type + ": " +
+            Array.from(typeMembers).join(", ") + "."
+          ), "wrong-light-type");
+        }
+      }
+      var v = t[key];
       return typeof v === "function" ? v.bind(t) : v;
     },
     set: function (t, prop, value) {
@@ -134,6 +191,18 @@ export function createLightAPI(entity) {
           "this.light." + key + " does not exist. " +
           "Valid members: " + Array.from(LIGHT_MEMBERS).join(", ") + "."
         ), "unknown-api");
+      }
+      // Type check on write too.
+      var light = entity.getComponent(LIGHT);
+      if (light && LIGHT_MEMBERS.has(key)) {
+        var typeMembers = _membersForType(light.type);
+        if (!typeMembers.has(key)) {
+          throw _tag(new Error(
+            "this.light." + key + " cannot be set on a " + light.type + " light. " +
+            "Available properties for " + light.type + ": " +
+            Array.from(typeMembers).join(", ") + "."
+          ), "wrong-light-type");
+        }
       }
       t[key] = value;
       return true;

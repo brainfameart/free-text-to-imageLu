@@ -336,6 +336,7 @@ class EntityContext {
     // ONLY for Character Controller/Platformer, car tunables ONLY for Car, etc.
     this.controller  = entity.hasComponent(CHARACTER_CONTROLLER)? createControllerAPI(entity)  : undefined;
     this.collider    = entity.hasComponent(COLLIDER_2D)          ? createColliderAPI(entity)    : undefined;
+    this.light       = entity.hasComponent(LIGHT)                ? createLightAPI(entity)       : undefined;
   }
 }
 
@@ -395,6 +396,10 @@ export class ScriptAPI {
      *  touch.justEnded during onUpdate still sees it — cleared at the
      *  same point buttonsPressed/keysPressed are. */
     this._touchesEnded = new Set();
+    /** Snapshot of each ended touch's last-known data (position, startX/Y,
+     *  etc.) so touch.justEnded entries still have valid coords the frame
+     *  they end — they've already been removed from _touches by then. */
+    this._touchesEndedData = new Map();
 
     /** Updated by ScriptSystem each frame */
     this.time = { deltaTime: 0, elapsed: 0 };
@@ -499,96 +504,155 @@ export class ScriptAPI {
     var self = this;
 
     /**
-     * Converts a browser pointer event's page coordinates into both
-     * screen-pixel (canvas-local) and world-space coordinates, and
-     * writes them onto this._mouse. Shared by mouse AND touch handling
-     * below — a "finger" and "the mouse" are the same underlying
-     * screen→world conversion, just sourced from different browser
-     * event types.
-     * @param {number} clientX
-     * @param {number} clientY
-     * @returns {{screenX:number, screenY:number, worldX:number, worldY:number}}
+     * Converts clientX/clientY into screen-pixel and world-space coords.
+     * Used by both mouse and touch paths.
      */
     function toCoords(clientX, clientY) {
       var rect = canvas.getBoundingClientRect();
-      // canvas.width/height are the REAL backing-buffer resolution;
-      // rect.width/height are the CSS-displayed size, which can differ
-      // (responsive scaling, devicePixelRatio) — dividing by rect and
-      // multiplying by the backing size corrects for that, so
-      // screenX/screenY always land in actual game-pixel space
-      // regardless of how the canvas is stretched on the page.
       var scaleX = canvas.width / rect.width;
       var scaleY = canvas.height / rect.height;
       var screenX = (clientX - rect.left) * scaleX;
       var screenY = (clientY - rect.top) * scaleY;
       var world = { x: screenX, y: screenY };
       if (renderSystem && renderSystem.worldContainer && renderSystem.worldContainer.toLocal) {
-        // toLocal inverts worldContainer's CURRENT scale/rotation/position
-        // in one call — the exact inverse of however _applyMainCameraOffset
-        // (RenderSystem.js) positioned it this frame, so this stays correct
-        // through camera pan/zoom/rotation without reimplementing that math.
         var local = renderSystem.worldContainer.toLocal({ x: screenX, y: screenY });
         world = { x: local.x, y: local.y };
       }
       return { screenX: screenX, screenY: screenY, worldX: world.x, worldY: world.y };
     }
 
+    // ── Mouse input (pointer events, non-touch only) ──────────────────
     canvas.addEventListener("pointermove", function (e) {
+      if (e.pointerType === "touch") return; // touch handled by Hammer below
       var c = toCoords(e.clientX, e.clientY);
       self._mouse.x = c.worldX;
       self._mouse.y = c.worldY;
       self._mouse.screenX = c.screenX;
       self._mouse.screenY = c.screenY;
       self._mouse.over = true;
-
-      // Mobile browsers fire pointermove for touch drags too — mirror
-      // that finger's position into _touches so a script reading
-      // touch.x mid-drag sees the live position, not just where it
-      // started. pointerType distinguishes an actual finger from a
-      // mouse move so we don't create a phantom touch entry from mouse
-      // movement on a touch-capable laptop.
-      if (e.pointerType === "touch" && self._touches.has(e.pointerId)) {
-        var t = self._touches.get(e.pointerId);
-        t.x = c.worldX; t.y = c.worldY;
-        t.screenX = c.screenX; t.screenY = c.screenY;
-      }
     });
-    canvas.addEventListener("pointerleave", function () {
-      self._mouse.over = false;
+    canvas.addEventListener("pointerleave", function (e) {
+      if (e.pointerType !== "touch") self._mouse.over = false;
     });
     canvas.addEventListener("pointerdown", function (e) {
-      var c = toCoords(e.clientX, e.clientY);
-      if (e.pointerType === "touch") {
-        self._touches.set(e.pointerId, {
-          id: e.pointerId,
-          x: c.worldX, y: c.worldY,
-          screenX: c.screenX, screenY: c.screenY,
-          startX: c.worldX, startY: c.worldY,
-        });
-        self._touchesStarted.add(e.pointerId);
-      } else {
-        self._mouse.buttonsDown.add(e.button);
-        self._mouse.buttonsPressed.add(e.button);
+      if (e.pointerType === "touch") return;
+      self._mouse.buttonsDown.add(e.button);
+      self._mouse.buttonsPressed.add(e.button);
+    });
+    canvas.addEventListener("pointerup", function (e) {
+      if (e.pointerType === "touch") return;
+      self._mouse.buttonsDown.delete(e.button);
+      self._mouse.buttonsReleased.add(e.button);
+    });
+    canvas.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+
+    // Prevent the browser (and OS touchpad) from pinch-zooming the page
+    // while the game is running. On laptops, a two-finger pinch on the
+    // touchpad arrives as a wheel event with ctrlKey=true — stopping it
+    // here keeps the viewport locked at 100% regardless of what the
+    // player's hands do on the trackpad.
+    canvas.addEventListener("wheel", function (e) {
+      if (e.ctrlKey) e.preventDefault();
+    }, { passive: false });
+
+    // ── Hammer.js — all touch/gesture input ──────────────────────────
+    // Hammer automatically sets touch-action:none on the canvas (the
+    // missing piece that prevented pointer events from ever firing on
+    // mobile — the browser was swallowing them for scroll/zoom).
+    if (typeof Hammer === "undefined") {
+      // Fallback: Hammer CDN not loaded yet. Warn once and wire raw
+      // touch events so at least basic finger positions still work.
+      console.warn("[ZenEngine] Hammer.js not loaded — touch gestures unavailable. Add hammer.min.js before the game script.");
+      canvas.style.touchAction = "none";
+      canvas.addEventListener("touchstart", function (e) {
+        e.preventDefault();
+        for (var i = 0; i < e.changedTouches.length; i++) {
+          var t = e.changedTouches[i];
+          var c = toCoords(t.clientX, t.clientY);
+          self._touches.set(t.identifier, { id: t.identifier, x: c.worldX, y: c.worldY, screenX: c.screenX, screenY: c.screenY, startX: c.worldX, startY: c.worldY });
+          self._touchesStarted.add(t.identifier);
+        }
+      }, { passive: false });
+      canvas.addEventListener("touchmove", function (e) {
+        e.preventDefault();
+        for (var i = 0; i < e.changedTouches.length; i++) {
+          var t = e.changedTouches[i];
+          if (!self._touches.has(t.identifier)) continue;
+          var c = toCoords(t.clientX, t.clientY);
+          var entry = self._touches.get(t.identifier);
+          entry.x = c.worldX; entry.y = c.worldY;
+          entry.screenX = c.screenX; entry.screenY = c.screenY;
+        }
+      }, { passive: false });
+      function rawTouchEnd(e) {
+        e.preventDefault();
+        for (var i = 0; i < e.changedTouches.length; i++) {
+          var t = e.changedTouches[i];
+          if (self._touches.has(t.identifier)) {
+            self._touchesEndedData.set(t.identifier, Object.assign({}, self._touches.get(t.identifier)));
+            self._touches.delete(t.identifier);
+            self._touchesEnded.add(t.identifier);
+          }
+        }
+      }
+      canvas.addEventListener("touchend", rawTouchEnd, { passive: false });
+      canvas.addEventListener("touchcancel", rawTouchEnd, { passive: false });
+      return;
+    }
+
+    // Hammer Manager — enables Pan (all directions, no threshold so
+    // every move fires), Swipe, and Pinch simultaneously.
+    var hammer = new Hammer.Manager(canvas, {
+      touchAction: "none",
+      recognizers: [
+        [Hammer.Pan,   { direction: Hammer.DIRECTION_ALL, threshold: 0, pointers: 0 }],
+        [Hammer.Swipe, { direction: Hammer.DIRECTION_ALL, threshold: 10, velocity: 0.3, pointers: 1 }],
+        [Hammer.Pinch, { enable: true }],
+      ],
+    });
+    self._hammerInstance = hammer;
+
+    // hammer.input fires on EVERY raw pointer/touch event (start, move,
+    // end, cancel). Use it to keep self._touches in sync — same Maps
+    // the `touch` getter already reads, so the getter is unchanged.
+    hammer.on("hammer.input", function (ev) {
+      var INPUT_START  = 1; // Hammer.INPUT_START
+      var INPUT_MOVE   = 2; // Hammer.INPUT_MOVE
+      var INPUT_END    = 4; // Hammer.INPUT_END
+      var INPUT_CANCEL = 8; // Hammer.INPUT_CANCEL
+
+      if (ev.eventType === INPUT_START) {
+        for (var i = 0; i < ev.changedPointers.length; i++) {
+          var p = ev.changedPointers[i];
+          var c = toCoords(p.clientX, p.clientY);
+          self._touches.set(p.identifier, {
+            id: p.identifier,
+            x: c.worldX, y: c.worldY,
+            screenX: c.screenX, screenY: c.screenY,
+            startX: c.worldX, startY: c.worldY,
+          });
+          self._touchesStarted.add(p.identifier);
+        }
+      } else if (ev.eventType === INPUT_MOVE) {
+        for (var i = 0; i < ev.pointers.length; i++) {
+          var p = ev.pointers[i];
+          if (!self._touches.has(p.identifier)) continue;
+          var c = toCoords(p.clientX, p.clientY);
+          var entry = self._touches.get(p.identifier);
+          entry.x = c.worldX; entry.y = c.worldY;
+          entry.screenX = c.screenX; entry.screenY = c.screenY;
+        }
+      } else if (ev.eventType === INPUT_END || ev.eventType === INPUT_CANCEL) {
+        for (var i = 0; i < ev.changedPointers.length; i++) {
+          var p = ev.changedPointers[i];
+          if (self._touches.has(p.identifier)) {
+            self._touchesEndedData.set(p.identifier, Object.assign({}, self._touches.get(p.identifier)));
+            self._touches.delete(p.identifier);
+            self._touchesEnded.add(p.identifier);
+          }
+        }
       }
     });
-    function endPointer(e) {
-      if (e.pointerType === "touch") {
-        if (self._touches.has(e.pointerId)) {
-          self._touches.delete(e.pointerId);
-          self._touchesEnded.add(e.pointerId);
-        }
-      } else {
-        self._mouse.buttonsDown.delete(e.button);
-        self._mouse.buttonsReleased.add(e.button);
-      }
-    }
-    canvas.addEventListener("pointerup", endPointer);
-    canvas.addEventListener("pointercancel", endPointer);
-
-    // Right-click normally opens the browser's context menu — suppress
-    // it on the game canvas so mouse.pressed(2) (right click) actually
-    // reaches scripts instead of the menu eating the event.
-    canvas.addEventListener("contextmenu", function (e) { e.preventDefault(); });
   }
 
   /** Called by ScriptSystem at the end of each frame — clears every
@@ -601,6 +665,7 @@ export class ScriptAPI {
     this._mouse.buttonsReleased.clear();
     this._touchesStarted.clear();
     this._touchesEnded.clear();
+    this._touchesEndedData.clear();
   }
 
   /**
@@ -1144,34 +1209,131 @@ export class ScriptAPI {
       },
       /**
        * Active touches for mobile/touchscreen games — one entry per
-       * finger currently on the screen, keyed by array position (NOT a
-       * stable per-finger index — use touch.id if you need to tell two
-       * fingers apart across frames, e.g. a two-finger pinch gesture).
-       * Each touch has the same shape as mouse: x/y (world), screenX/
-       * screenY (canvas pixels), PLUS startX/startY (world position
-       * where that finger first touched down — handy for measuring a
-       * swipe: touch.x - touch.startX) and justStarted/justEnded
-       * (true for exactly the one frame that finger went down/up).
-       *   function onUpdate() {
-       *     if (touch.count > 0) {
-       *       this.x = touch.first.x; // drag this entity with one finger
-       *     }
-       *   }
+       * finger currently on the screen (plus any that just lifted this
+       * frame, which appear as justEnded: true).
+       *
+       * PER-TOUCH SHAPE  (same for every entry in the array):
+       *   id           — stable finger id, use to tell fingers apart across frames
+       *   x, y         — current world-space position
+       *   screenX/Y    — current canvas-pixel position
+       *   startX/Y     — world-space position where this finger first touched down
+       *   dx, dy       — how far it has moved from startX/Y (x - startX, y - startY)
+       *   distance     — total distance from startX/Y (Math.hypot(dx, dy))
+       *   justStarted  — true for exactly the one frame this finger touched down
+       *   justEnded    — true for exactly the one frame this finger lifted
+       *
+       * ARRAY EXTRAS:
+       *   touch.count          — how many fingers are touching right now
+       *   touch.first          — first active touch, or null
+       *   touch.anyJustStarted — true if any finger touched down this frame
+       *   touch.anyJustEnded   — true if any finger lifted this frame
+       *
+       * GESTURE HELPERS  (recomputed fresh every frame, no setup needed):
+       *   touch.swipe.active    — true when one finger has moved > 40 px from start
+       *   touch.swipe.direction — 'left'|'right'|'up'|'down' (dominant axis)
+       *   touch.swipe.dx/dy     — raw displacement from touch start
+       *   touch.swipe.distance  — distance from touch start
+       *
+       *   touch.pinch.active   — true while two fingers are on screen
+       *   touch.pinch.scale    — current / start distance ratio (>1 = spreading)
+       *   touch.pinch.delta    — current distance minus start distance (px)
+       *   touch.pinch.distance — current distance between the two fingers (px)
+       *
+       * EXAMPLE — drag with one finger:
+       *   if (touch.count > 0) { this.x = touch.first.x; }
+       * EXAMPLE — swipe to jump:
+       *   if (touch.swipe.active && touch.swipe.direction === 'up') { simulateJump(); }
+       * EXAMPLE — pinch to zoom:
+       *   if (touch.pinch.active) { this.camera.zoom = 5 / touch.pinch.scale; }
        */
       get touch() {
         var list = [];
+
+        // Active (currently down) touches.
         for (var t of self._touches.values()) {
+          var dx = t.x - t.startX;
+          var dy = t.y - t.startY;
           list.push({
             id: t.id,
             x: t.x, y: t.y,
             screenX: t.screenX, screenY: t.screenY,
             startX: t.startX, startY: t.startY,
+            dx: dx, dy: dy,
+            distance: Math.sqrt(dx * dx + dy * dy),
             justStarted: self._touchesStarted.has(t.id),
             justEnded: false,
           });
         }
-        list.count = list.length;
+
+        // Just-ended touches (one frame only, so scripts can read final pos).
+        for (var endedId of self._touchesEnded) {
+          var te = self._touchesEndedData.get(endedId);
+          if (!te) continue;
+          var edx = te.x - te.startX;
+          var edy = te.y - te.startY;
+          list.push({
+            id: te.id,
+            x: te.x, y: te.y,
+            screenX: te.screenX, screenY: te.screenY,
+            startX: te.startX, startY: te.startY,
+            dx: edx, dy: edy,
+            distance: Math.sqrt(edx * edx + edy * edy),
+            justStarted: false,
+            justEnded: true,
+          });
+        }
+
+        // Array-level convenience properties.
+        list.count = self._touches.size; // only currently-down fingers
         list.first = list.length > 0 ? list[0] : null;
+        list.anyJustStarted = self._touchesStarted.size > 0;
+        list.anyJustEnded = self._touchesEnded.size > 0;
+
+        // ── Swipe gesture ──────────────────────────────────────────────
+        // Detected when a SINGLE active finger has moved more than
+        // SWIPE_THRESHOLD world-space pixels from its touch-down point.
+        // Direction is the dominant (larger) axis: left/right/up/down.
+        var SWIPE_THRESHOLD = 40;
+        var swipe = { active: false, direction: null, dx: 0, dy: 0, distance: 0 };
+        if (self._touches.size === 1) {
+          var ft = list[0];
+          if (ft && !ft.justEnded && ft.distance >= SWIPE_THRESHOLD) {
+            swipe.active = true;
+            swipe.dx = ft.dx;
+            swipe.dy = ft.dy;
+            swipe.distance = ft.distance;
+            if (Math.abs(ft.dx) >= Math.abs(ft.dy)) {
+              swipe.direction = ft.dx > 0 ? "right" : "left";
+            } else {
+              swipe.direction = ft.dy > 0 ? "down" : "up";
+            }
+          }
+        }
+        list.swipe = swipe;
+
+        // ── Pinch gesture ──────────────────────────────────────────────
+        // Detected while EXACTLY two fingers are on screen. scale is the
+        // ratio of the current distance between the two fingers vs the
+        // distance at the time they both touched down; delta is the raw
+        // pixel change (positive = spreading/zooming out).
+        var pinch = { active: false, scale: 1, delta: 0, distance: 0 };
+        if (self._touches.size >= 2) {
+          var touches = Array.from(self._touches.values());
+          var p1 = touches[0], p2 = touches[1];
+          var curDist = Math.sqrt(
+            (p1.x - p2.x) * (p1.x - p2.x) + (p1.y - p2.y) * (p1.y - p2.y)
+          );
+          var startDist = Math.sqrt(
+            (p1.startX - p2.startX) * (p1.startX - p2.startX) +
+            (p1.startY - p2.startY) * (p1.startY - p2.startY)
+          );
+          pinch.active = true;
+          pinch.distance = curDist;
+          pinch.delta = curDist - startDist;
+          pinch.scale = startDist > 0.5 ? curDist / startDist : 1;
+        }
+        list.pinch = pinch;
+
         return list;
       },
       time: self.time,

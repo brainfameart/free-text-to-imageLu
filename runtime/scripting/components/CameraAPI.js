@@ -27,7 +27,13 @@ function _requireCamera(entity) {
   return c;
 }
 
-const CAMERA_MEMBERS = new Set(["zoom", "shake", "renderToSprite"]);
+const CAMERA_MEMBERS = new Set([
+  "zoom", "shake", "renderToSprite",
+  "backgroundColor",
+  "x", "y",
+  "follow", "stopFollow",
+  "offsetX", "offsetY",
+]);
 
 /**
  * Builds the `this.camera` object for a given entity.
@@ -39,10 +45,27 @@ const CAMERA_MEMBERS = new Set(["zoom", "shake", "renderToSprite"]);
  * @returns {object}
  */
 export function createCameraAPI(entity) {
+  // Per-instance follow state — lives here so stopFollow() can cancel the
+  // exact rAF loop follow() started without needing any external registry.
+  var _followState = null;
+
   const target = {
     /** Camera size (zoom level). Default 5 = no zoom. Smaller = zoomed in, larger = zoomed out. */
     get zoom() { return _requireCamera(entity).size; },
     set zoom(v) { _requireCamera(entity).size = Math.max(0.001, v); },
+
+    /** Background/clear color as a hex string, e.g. "#1a1a2e". */
+    get backgroundColor() { return _requireCamera(entity).backgroundColor; },
+    set backgroundColor(v) { _requireCamera(entity).backgroundColor = v; },
+
+    /** Camera world-space X position (same as this.x on the camera entity). */
+    get x() { var t = entity.getComponent(TRANSFORM); return t ? t.x : 0; },
+    set x(v) { var t = entity.getComponent(TRANSFORM); if (t) t.x = v; },
+
+    /** Camera world-space Y position (same as this.y on the camera entity). */
+    get y() { var t = entity.getComponent(TRANSFORM); return t ? t.y : 0; },
+    set y(v) { var t = entity.getComponent(TRANSFORM); if (t) t.y = v; },
+
     /**
      * Renders this camera's view onto the given sprite entity's texture
      * every frame (a minimap / security-camera feed). Pass an entity
@@ -63,13 +86,15 @@ export function createCameraAPI(entity) {
       }
       c.renderToSpriteEntityId = id;
     },
+
+    /**
+     * Shake the camera with a random positional offset that decays over time.
+     * intensity — peak shake radius in px (default 10).
+     * duration  — how long the shake lasts in seconds (default 0.3).
+     *   this.camera.shake(8, 0.5);
+     */
     shake: function (intensity, duration) {
-      // Guard: throw if the entity has no Camera component, consistent
-      // with every other camera API method.
       _requireCamera(entity);
-      // Simple camera shake: apply a transient random offset to the
-      // camera entity's Transform for a short time. A dedicated shake
-      // system could be added later for smoother results.
       var t = entity.getComponent(TRANSFORM);
       if (!t) return;
       var origX = t.x, origY = t.y;
@@ -85,7 +110,94 @@ export function createCameraAPI(entity) {
       }
       step();
     },
+
+    /**
+     * Smoothly follow a target entity every frame — keeps this camera
+     * centered on `target` (offset by offsetX/offsetY if given) with
+     * optional lerp smoothing.
+     *
+     *   this.camera.follow(find("Player"));
+     *   this.camera.follow(find("Player"), { smoothing: 0.1, offsetX: 0, offsetY: -40 });
+     *   this.camera.follow(find("Player"), { snap: true }); // instant, no lerp
+     *
+     * opts.smoothing — 0–1 lerp factor per 60 fps frame (default 0.1).
+     *                  Higher = snappier; 1 or snap:true = instant.
+     * opts.offsetX   — horizontal offset from target center in world px (default 0).
+     * opts.offsetY   — vertical offset from target center in world px (default 0).
+     * opts.snap      — if true, camera teleports to target each frame (no lerp).
+     *
+     * Call this.camera.stopFollow() to stop, or pass null as target.
+     */
+    follow: function (entityTarget, opts) {
+      _requireCamera(entity);
+      // Passing null is a shorthand for stopFollow().
+      if (entityTarget == null) {
+        if (_followState) { _followState.active = false; _followState = null; }
+        return;
+      }
+      opts = opts || {};
+      // Cancel any existing follow loop before starting a new one.
+      if (_followState) _followState.active = false;
+      var state = {
+        active: true,
+        target: entityTarget,
+        smoothing: opts.smoothing != null ? opts.smoothing : 0.1,
+        offsetX: opts.offsetX || 0,
+        offsetY: opts.offsetY || 0,
+        snap: !!opts.snap,
+      };
+      _followState = state;
+      function tick() {
+        if (!state.active) return;
+        var t = entity.getComponent(TRANSFORM);
+        if (!t) { state.active = false; return; }
+        var tx, ty;
+        try {
+          tx = state.target.x + state.offsetX;
+          ty = state.target.y + state.offsetY;
+        } catch (_) {
+          // Target entity was destroyed / no longer readable — stop following.
+          state.active = false;
+          return;
+        }
+        if (state.snap || state.smoothing >= 1) {
+          t.x = tx;
+          t.y = ty;
+        } else {
+          // Lerp per browser frame. Multiply by 60 so smoothing=0.1 means
+          // "10% per 60-fps frame" — the conventional Unity-style smoothing
+          // value most devs expect.
+          var lerp = Math.min(1, state.smoothing * 60 * (1 / 60));
+          t.x += (tx - t.x) * lerp;
+          t.y += (ty - t.y) * lerp;
+        }
+        requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    },
+
+    /**
+     * Stop a camera.follow() already in progress. Safe to call even when
+     * not currently following anything (does nothing in that case).
+     *   this.camera.stopFollow();
+     */
+    stopFollow: function () {
+      _requireCamera(entity);
+      if (_followState) { _followState.active = false; _followState = null; }
+    },
+
+    /**
+     * Get/set the X offset of an active camera.follow(). Lets you shift the
+     * look-ahead direction without restarting the follow loop:
+     *   this.camera.offsetX = this.rigidbody.velocityX > 0 ? 80 : -80;
+     */
+    get offsetX() { return _followState ? _followState.offsetX : 0; },
+    set offsetX(v) { if (_followState) _followState.offsetX = v; },
+
+    get offsetY() { return _followState ? _followState.offsetY : 0; },
+    set offsetY(v) { if (_followState) _followState.offsetY = v; },
   };
+
   return new Proxy(target, {
     get: function (t, prop) {
       if (typeof prop === "symbol" || prop === "then") return t[prop];
@@ -106,13 +218,8 @@ export function createCameraAPI(entity) {
           "valid members are: " + Array.from(CAMERA_MEMBERS).join(", ") + "."
         ), "unknown-api");
       }
-      // Without this file having had a set trap at all before, writing
-      // to this.camera.shake (a method, not a property — get-only by
-      // nature of being a function) would fall through to JS's own
-      // raw, untagged "Cannot assign to read only property" TypeError.
-      // See AnimatorAPI.js's set trap for the same pattern.
       var descriptor = Object.getOwnPropertyDescriptor(t, key);
-      if (descriptor && typeof t[key] === "function") {
+      if (descriptor && !descriptor.set && typeof t[key] === "function") {
         throw _tag(new Error(
           "this.camera." + key + " is a method, not a settable property — call it as this.camera." + key + "(...) instead of assigning to it."
         ), "unknown-api");

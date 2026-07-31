@@ -547,8 +547,14 @@ void main(void) {
         // are present — either one alone is enough to justify full
         // white, so they saturate together rather than stacking past 1.
         float hotAmount = max(hotness * (1.0 - shadowAmount), overbrightHot);
-        vec3 litColor = mix(color, vec3(1.0), hotAmount);
-        float litMagnitude = min(litBrightness, 1.0) + overbrightHot * 0.6;
+        // Always use the user-authored color — the light's core stays the
+        // chosen hue instead of bleaching to white. HDR brightness is still
+        // carried by litMagnitude (which climbs past 1.0 for overbright
+        // lights), so the "hot filament" feel is preserved through BRIGHTNESS
+        // rather than hue-whitening. The hotAmount still drives extra magnitude
+        // so an overbright light gets visibly brighter at its core.
+        vec3 litColor = color;
+        float litMagnitude = min(litBrightness, 1.0) + overbrightHot * 0.6 + hotAmount * 0.3;
         accumulatedLight += litColor * litMagnitude;
 
         if (shadowAmount > 0.0015) {
